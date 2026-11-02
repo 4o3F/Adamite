@@ -1,0 +1,21 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+exclude = ["crates/adamite-ntfs/fuzz"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.99"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+snafu = { version = "0.9", default-features = false, features = ["rust_1_81"] }
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)'] }
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }

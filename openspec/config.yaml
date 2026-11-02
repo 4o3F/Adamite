@@ -1,0 +1,42 @@
+schema: spec-driven
+
+context: |
+  Rust workspace, edition 2024. Toolchain pinned to 1.99 via rust-toolchain.toml; rust-version = "1.99".
+  Errors: snafu in every crate (no thiserror/anyhow). no_std crates use snafu with
+    default-features = false, features = ["rust_1_81"].
+  Logging: tracing in every crate that logs; adamite-ntfs (pure parser) does not log.
+    Binaries install tracing-subscriber.
+  Scripts and task automation: Deno TypeScript only, run via `deno task` from root deno.json.
+    No bash, Python or just scripts. CI steps may only invoke cargo/deno one-liners.
+  Write all OpenSpec artifacts in English.
+
+# Project context (optional)
+# Add only constraints that should guide OpenSpec artifacts and workflows.
+# Include constraints an agent cannot infer by reading the code.
+# Keep general project documentation and discoverable codebase facts out.
+# Example:
+#   context: |
+#     Designs and tasks must cover Windows, macOS, and Linux
+#     Write all artifacts in Spanish
+
+# Per-artifact rules (optional)
+# Add custom rules for specific artifacts.
+# Example:
+#   rules:
+#     proposal:
+#       - Keep proposals under 500 words
+#       - Always state what is out of scope
+#     tasks:
+#       - Break tasks into chunks of max 2 hours
+
+# Per-operation guidance (optional)
+# Add advisory guidance for how apply and archive work should be conducted.
+# This is separate from artifact rules above.
+# Example:
+#   operations:
+#     apply:
+#       guidance:
+#         - Keep test summaries concise
+#     archive:
+#       guidance:
+#         - Summarize the archive outcome before finishing

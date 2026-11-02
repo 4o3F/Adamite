@@ -1,0 +1,49 @@
+[package]
+name = "adamite-ntfs-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+adamite-ntfs = { path = "..", features = ["alloc"] }
+
+[[bin]]
+name = "boot_sector"
+path = "fuzz_targets/boot_sector.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "file_record"
+path = "fuzz_targets/file_record.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "attributes"
+path = "fuzz_targets/attributes.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "runlist"
+path = "fuzz_targets/runlist.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "typed_values"
+path = "fuzz_targets/typed_values.rs"
+test = false
+doc = false
+bench = false
