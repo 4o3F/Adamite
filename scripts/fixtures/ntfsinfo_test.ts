@@ -201,3 +201,62 @@ Deno.test("complete Secure headers remain measurable after the captured SDS payl
   rejects(() => parseInode(output.replace("End of inode reached", "truncated"), stderr));
   rejects(() => parseInode(output, stderr + "unexpected warning\n"));
 });
+
+Deno.test("fragmented index payload diagnostics retain first-segment sizes and every run", async () => {
+  const output = await sample("fragmented-index");
+  const stderr = await sample("fragmented-index.stderr");
+  const inode = parseInode(output, stderr)!;
+  const index = inode.streams.find((stream) => stream.attribute_type === 0xa0)!;
+  assert(inode.record === "64", "index base identity");
+  assert(index.size === "14557184" && index.allocated_size === "14557184", "printed index sizes");
+  assert(index.compressed_size === null && index.run_count === 513, "index mapping pairs");
+  const segments = blocks(output, 0xa0);
+  assert(segments.length === 3, "index continuation headers");
+  assert(!segments[1].includes("Allocated size:"), "continuation unexpectedly has sizes");
+  const changedHeader = output.replace(
+    "Allocated size:\t\t 14557184",
+    "Allocated size:\t\t 14557696",
+  );
+  assert(
+    parseInode(changedHeader, stderr)!.streams.find((stream) => stream.attribute_type === 0xa0)!
+      .allocated_size === "14557696",
+    "measurement did not come from the printed header",
+  );
+  assert(
+    parseInode(
+      output,
+      stderr.replaceAll("Value too large for defined data type", "payload unavailable"),
+    )!.record === "64",
+    "reason was unnecessarily restricted",
+  );
+});
+
+Deno.test("payload diagnostics reject mismatched inode numbers and missing affected headers", async () => {
+  const output = await sample("fragmented-index");
+  const stderr = await sample("fragmented-index.stderr");
+  rejects(() => parseInode(output, stderr.replace("in inode 64", "in inode 65")));
+  rejects(() => parseInode(output, stderr.replaceAll("0xa0", "0xe0")));
+  rejects(() => parseInode(output, stderr, 1));
+});
+
+Deno.test("payload diagnostics reject truncated stdout and missing first-segment sizes or mapping pairs", async () => {
+  const output = await sample("fragmented-index");
+  const stderr = await sample("fragmented-index.stderr");
+  rejects(() => parseInode(output.replace("End of inode reached", "truncated"), stderr));
+  const first = blocks(output, 0xa0)[0];
+  for (const field of ["Data size", "Allocated size", "Initialized size"]) {
+    const incomplete = first.replace(new RegExp(`^.*${field}:.*\\n`, "m"), "");
+    rejects(() => parseInode(output.replace(first, incomplete), stderr));
+  }
+  const incomplete = first.replace(/^\s+0x0\s+0x2346\s+0x1002\s*$/m, "");
+  rejects(() => parseInode(output.replace(first, incomplete), stderr));
+  rejects(() => parseInode(output + first, stderr));
+});
+
+Deno.test("payload diagnostics reject unknown stderr and incomplete diagnostic pairs", async () => {
+  const output = await sample("fragmented-index");
+  const stderr = await sample("fragmented-index.stderr");
+  rejects(() => parseInode(output, "unexpected tool diagnostic\n"));
+  rejects(() => parseInode(output, stderr + "unexpected tool diagnostic\n"));
+  rejects(() => parseInode(output, "Corrupt attribute 0xa0 in inode 64\n"));
+});

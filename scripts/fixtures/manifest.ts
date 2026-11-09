@@ -244,12 +244,16 @@ export async function finalize(
   const inode = async (record: string) => {
     const result = await command("ntfsinfo", ["-v", "-i", record, imagePath], [0, 1]);
     const stdout = new TextDecoder().decode(result.stdout);
-    const parsed = parseInode(stdout, new TextDecoder().decode(result.stderr), result.code);
-    if (parsed && result.stderr.length) {
-      console.warn(new TextDecoder().decode(result.stderr).trim());
-    }
+    const stderr = new TextDecoder().decode(result.stderr);
+    const parsed = parseInode(stdout, stderr, result.code);
     if (parsed && parsed.record !== record) {
       throw new Error(`ntfsinfo returned wrong record for ${record}`);
+    }
+    if (parsed && stderr.trim()) {
+      const diagnostics = stderr.trim().split(/\r?\n/).length / 2;
+      console.warn(
+        `ntfsinfo inode ${parsed.record}: complete header measurements retained (payload decode diagnostics: ${diagnostics})`,
+      );
     }
     return { stdout, parsed };
   };

@@ -155,19 +155,76 @@ export type Inode = Omit<Entry, "path" | "names"> & {
   names: Omit<Name, "parent_seq">[];
 };
 
+function validatePayloadDiagnostics(output: string, stderr: string) {
+  const inode = integer(output, "Dumping Inode");
+  const end = output.search(/^End of inode reached\r?$/m);
+  if (end < 0 || /^Dumping attribute /m.test(output.slice(end))) {
+    throw new Error("ntfsinfo payload diagnostic has incomplete stdout");
+  }
+  const lines = stderr.trimEnd().split(/\r?\n/);
+  if (lines.length % 2 !== 0) throw new Error(`unrecognized ntfsinfo stderr: ${stderr}`);
+  const affected = new Set<number>();
+  for (let index = 0; index < lines.length; index += 2) {
+    const corrupt = lines[index].match(/^Corrupt attribute 0x([\da-fA-F]+) in inode (\d+)$/);
+    const failed = lines[index + 1].match(
+      /^Failed to read \$[A-Za-z_][\w]* attribute: (\S[^\r\n]*)$/,
+    );
+    if (!corrupt || !failed || BigInt(corrupt[2]).toString() !== inode) {
+      throw new Error(`unrecognized or mismatched ntfsinfo stderr: ${stderr}`);
+    }
+    affected.add(parseInt(corrupt[1], 16));
+  }
+  for (const type of affected) {
+    const attributes = blocks(output, type);
+    if (attributes.length === 0) {
+      throw new Error(`missing diagnostic attribute 0x${type.toString(16)}`);
+    }
+    for (const attribute of attributes) {
+      const resident = attribute.match(/^\s*Resident:\s*(Yes|No)\s*$/m)?.[1];
+      if (resident === "Yes") {
+        integer(attribute, "Data size");
+        continue;
+      }
+      if (resident !== "No") throw new Error("missing diagnostic attribute storage form");
+      const lowest = BigInt(integer(attribute, "Lowest VCN"));
+      const highest = attribute.match(/^\s*Highest VCN:\s*(-?\d+)\b/m)?.[1];
+      if (highest === undefined || !/^\s*Runlist:/m.test(attribute)) {
+        throw new Error("missing diagnostic attribute mapping pairs");
+      }
+      if (lowest === 0n) {
+        const data = BigInt(integer(attribute, "Data size"));
+        integer(attribute, "Allocated size");
+        if (BigInt(integer(attribute, "Initialized size")) > data) {
+          throw new Error("invalid diagnostic attribute initialized size");
+        }
+        const flags = attribute.match(/^\s*Attribute flags:\s*0x([\da-f]+)/im)?.[1];
+        if (flags === undefined) throw new Error("missing diagnostic attribute flags");
+        if ((parseInt(flags, 16) & 0x80ff) !== 0) integer(attribute, "Compressed size");
+      }
+      let next = lowest;
+      for (const run of extents(attribute)) {
+        if (BigInt(run.vcn) !== next || BigInt(run.len) === 0n) {
+          throw new Error("incomplete diagnostic attribute mapping pairs");
+        }
+        next += BigInt(run.len);
+      }
+      if (next !== BigInt(highest) + 1n) {
+        throw new Error("incomplete diagnostic attribute mapping pairs");
+      }
+    }
+  }
+}
+
 // ntfsinfo 2022.10.3 reports unavailable/free/extension inodes on stderr even with exit 0.
 export function parseInode(output: string, stderr = "", code = 0): Inode | null {
-  if (!output.trim() && /^Error loading node: No such file or directory\s*$/.test(stderr)) {
+  if (
+    (code === 0 || code === 1) && !output.trim() &&
+    /^Error loading node: No such file or directory\s*$/.test(stderr)
+  ) {
     return null;
   }
-  // The SDS payload decoder can fail after printing all headers and mapping pairs.
-  const completeSdsHeaders = output.startsWith("Dumping Inode 9 (0x9)\n") &&
-    output.includes("\nEnd of inode reached\n") &&
-    stderr === "Corrupt attribute 0x80 in inode 9\n" +
-        "Failed to read $SDS attribute: Value too large for defined data type\n";
-  if (code !== 0 || (stderr.trim() && !completeSdsHeaders)) {
-    throw new Error(`ntfsinfo failed (${code}): ${stderr}`);
-  }
+  if (code !== 0) throw new Error(`ntfsinfo failed (${code}): ${stderr}`);
+  if (stderr.trim()) validatePayloadDiagnostics(output, stderr);
   const flags = output.match(/^MFT Record Flags:\s*([^\n]*)/m)?.[1];
   if (flags === undefined) throw new Error("ntfsinfo is missing record flags");
   if (!/\bIN_USE\b/.test(flags)) return null;

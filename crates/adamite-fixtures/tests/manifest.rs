@@ -9,8 +9,26 @@ fn v3() -> Value {
 
 #[test]
 fn v2_defaults_keep_data_types_and_missing_measurements_absent() {
-    let manifest: Manifest =
-        serde_json::from_str(include_str!("../../../tests/fixtures/ntfs/frag-512.json")).unwrap();
+    let mut legacy = v3();
+    legacy["schema_version"] = json!(2);
+    legacy.as_object_mut().unwrap().remove("metafiles");
+    for entry in legacy["entries"].as_array_mut().unwrap() {
+        let streams = entry["streams"].as_array_mut().unwrap();
+        streams.retain(|stream| stream["attribute_type"] == 0x80);
+        for stream in streams {
+            let fields = stream.as_object_mut().unwrap();
+            for field in ["attribute_type", "allocated_size", "compressed_size"] {
+                fields.remove(field);
+            }
+        }
+    }
+    for fill in legacy["fill"].as_array_mut().unwrap() {
+        let fields = fill.as_object_mut().unwrap();
+        for field in ["total_size", "total_ads_size", "total_alloc"] {
+            fields.remove(field);
+        }
+    }
+    let manifest: Manifest = serde_json::from_value(legacy).unwrap();
     assert!(manifest.metafiles.is_empty());
     for entry in &manifest.entries {
         for stream in &entry.streams {

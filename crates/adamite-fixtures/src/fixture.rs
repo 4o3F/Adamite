@@ -540,10 +540,11 @@ mod tests {
     #[test]
     fn raw_image_loading_does_not_require_a_valid_mft() {
         let mut manifest: Manifest = serde_json::from_str(MANIFEST).unwrap();
+        let schema_version = manifest.schema_version;
         manifest.image_len = 512;
         let fixture = Fixture::from_image(vec![0; 512], manifest).unwrap();
         assert_eq!(fixture.image(), &[0; 512]);
-        assert_eq!(fixture.manifest().schema_version, 2);
+        assert_eq!(fixture.manifest().schema_version, schema_version);
 
         let error = ReferenceMft::from_fixture(&fixture).unwrap_err();
         assert!(matches!(error, FixtureError::Geometry { .. }));

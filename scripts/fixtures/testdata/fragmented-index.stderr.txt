@@ -1,0 +1,6 @@
+Corrupt attribute 0xa0 in inode 64
+Failed to read $INDEX_ALLOCATION attribute: Value too large for defined data type
+Corrupt attribute 0xa0 in inode 64
+Failed to read $INDEX_ALLOCATION attribute: Value too large for defined data type
+Corrupt attribute 0xa0 in inode 64
+Failed to read $INDEX_ALLOCATION attribute: Value too large for defined data type

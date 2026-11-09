@@ -107,8 +107,8 @@ Each automated milestone is one bounded Codex run targeting 15–30 minutes, inc
 
 ### M3 — USER STEP: regenerate and accept fixtures
 
-- [ ] M3.1 USER ACTION on Linux with ntfs-3g, zstd and attr: run `deno task fixtures` and complete its sudo prompts. This is the required external prerequisite for v3 end-to-end acceptance.
-- [ ] M3.2 After regeneration, inspect all three v3 manifests, metadata coverage, allocations, checksums and image budget. Verify: `cargo test -p adamite-ntfs -p adamite-fixtures --locked`; `deno test scripts/fixtures/`.
+- [x] M3.1 USER ACTION on Linux with ntfs-3g, zstd and attr: run `deno task fixtures` and complete its sudo prompts. This is the required external prerequisite for v3 end-to-end acceptance.
+- [x] M3.2 After regeneration, inspect all three v3 manifests, metadata coverage, allocations, checksums and image budget. Verify: `cargo test -p adamite-ntfs -p adamite-fixtures --locked`; `deno test scripts/fixtures/`.
 
 ### M4 — Core skeleton and request protocol
 
