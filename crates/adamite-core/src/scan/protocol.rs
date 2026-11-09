@@ -166,6 +166,12 @@ impl Requests {
         Ok(())
     }
 
+    pub(super) fn has_ready(&self) -> bool {
+        self.slots
+            .front()
+            .is_some_and(|slot| slot.response.is_some())
+    }
+
     pub(super) fn take_ready(&mut self) -> Option<(ReadRequest, Vec<u8>)> {
         self.slots.front()?.response.as_ref()?;
         let slot = self.slots.pop_front()?;

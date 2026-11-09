@@ -128,12 +128,7 @@ fn protocol_rejected_feeds_leave_boot_request_pending() -> Result<(), Box<dyn Er
         scanner.feed(request.id, &[1; 512]),
         Err(FeedError::DuplicateResponse { .. })
     ));
-    assert!(matches!(
-        scanner.step(),
-        Err(ScanError::PhaseNotImplemented {
-            phase: ScanPhase::Record0
-        })
-    ));
+    assert!(matches!(scanner.step(), Err(ScanError::Geometry { .. })));
     Ok(())
 }
 
@@ -142,12 +137,7 @@ fn protocol_boot_terminal_error_is_permanent() -> Result<(), Box<dyn Error>> {
     let mut scanner = Scanner::new(ScanConfig::default())?;
     let request = boot_request(&mut scanner)?;
     scanner.feed(request.id, &vec![0; request.len])?;
-    assert!(matches!(
-        scanner.step(),
-        Err(ScanError::PhaseNotImplemented {
-            phase: ScanPhase::Record0
-        })
-    ));
+    assert!(matches!(scanner.step(), Err(ScanError::Geometry { .. })));
     for _ in 0..3 {
         assert!(matches!(scanner.step(), Err(ScanError::Inactive)));
         assert!(matches!(

@@ -3,6 +3,7 @@
 mod bootstrap;
 mod config;
 mod ingest;
+mod mapping;
 mod merge;
 mod protocol;
 mod scanner;

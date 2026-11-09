@@ -117,8 +117,8 @@ Each automated milestone is one bounded Codex run targeting 15–30 minutes, inc
 
 ### M5 — Geometry, mapping and record 0
 
-- [ ] M5.1 Implement checked physical/virtual mapping, boot/record-0 requests, record assembly and owned first-segment runs/data size; test short geometry, invalid MFT, range overflow and no mirror fallback.
-- [ ] M5.2 Verify split record-0 reads and runlist termination. Verify: `cargo test -p adamite-core --locked bootstrap_record0`.
+- [x] M5.1 Implement checked physical/virtual mapping, boot/record-0 requests, record assembly and owned first-segment runs/data size; test short geometry, invalid MFT, range overflow and no mirror fallback.
+- [x] M5.2 Verify split record-0 reads and runlist termination. Verify: `cargo test -p adamite-core --locked bootstrap_record0`.
 
 ### M6 — Attribute-list and extension bootstrap
 
