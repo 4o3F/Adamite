@@ -403,3 +403,7 @@ Every crate uses snafu errors. The parser configures snafu with `default-feature
 Crates that log use tracing, beginning with `adamite-core`; binaries install tracing-subscriber. `adamite-ntfs` returns parsed values and errors without logging.
 
 Task automation and fixture generation use Deno TypeScript scripts, invoked through the root `deno.json` with `deno task`.
+
+Do not add bash, Python or just scripts; CI steps invoke only `cargo` or `deno` one-liners.
+
+Implementation plans live in `docs/plans/`, one file per piece of work.
