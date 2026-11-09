@@ -112,8 +112,8 @@ Each automated milestone is one bounded Codex run targeting 15–30 minutes, inc
 
 ### M4 — Core skeleton and request protocol
 
-- [ ] M4.1 Create modules, public types, config defaults, snafu errors, strict parser-equivalent Clippy denies and phase tracing. Implement identified request slots and transactional exact-length feeds, including cap > 1 and inactive-state behavior.
-- [ ] M4.2 Add protocol tests for bounds, waiting, invalid ids, duplicate feeds and reordered responses. Verify: `cargo test -p adamite-core --locked protocol`; `cargo clippy -p adamite-core --all-targets -- -D warnings`.
+- [x] M4.1 Create modules, public types, config defaults, snafu errors, strict parser-equivalent Clippy denies and phase tracing. Implement identified request slots and transactional exact-length feeds, including cap > 1 and inactive-state behavior.
+- [x] M4.2 Add protocol tests for bounds, waiting, invalid ids, duplicate feeds and reordered responses. Verify: `cargo test -p adamite-core --locked protocol`; `cargo clippy -p adamite-core --all-targets -- -D warnings`.
 
 ### M5 — Geometry, mapping and record 0
 
