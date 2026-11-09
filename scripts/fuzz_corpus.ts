@@ -143,9 +143,11 @@ async function main() {
   const images: Map<Target, Seed[]>[] = [];
   for (const name of ["basic-4k", "frag-512", "4kn-64k"]) {
     const root = "tests/fixtures/ntfs";
-    const manifest: Manifest = JSON.parse(await Deno.readTextFile(`${root}/${name}.json`));
-    if (manifest.schema_version !== 2) {
-      throw new Error("seed extraction requires manifest schema 2");
+    const manifest: Omit<Manifest, "schema_version"> & { schema_version: number } = JSON.parse(
+      await Deno.readTextFile(`${root}/${name}.json`),
+    );
+    if (manifest.schema_version !== 2 && manifest.schema_version !== 3) {
+      throw new Error("seed extraction requires manifest schema 2 or 3");
     }
     const decoded = await new Deno.Command("zstd", {
       args: ["-d", "--stdout", `${root}/${manifest.image}`],

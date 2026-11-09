@@ -43,7 +43,7 @@ function validate(manifest: Manifest, name: ImageName) {
   };
   const stream = (path: string, streamName = "") => {
     const value = entry(path).streams.find((item) =>
-      String.fromCharCode(...item.name) === streamName
+      item.attribute_type === 0x80 && String.fromCharCode(...item.name) === streamName
     );
     if (!value) throw new Error(`missing stream ${path}:${streamName}`);
     return value;

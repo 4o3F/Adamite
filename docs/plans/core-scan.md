@@ -102,8 +102,8 @@ Each automated milestone is one bounded Codex run targeting 15–30 minutes, inc
 
 ### M2 — Schema v3 generator and compatible readers
 
-- [ ] M2.1 Implement D17–D18 in Deno collection/compaction and the shared manifest reader; add tool-output samples for resident, sparse, compressed, continuation and index streams, metadata enumeration and filler totals.
-- [ ] M2.2 Keep v2 tests green while adding strict v3 schema tests and parser allocation assertions. Verify: `deno test scripts/fixtures/`; `deno check scripts/`; `cargo test -p adamite-ntfs -p adamite-fixtures --locked`.
+- [x] M2.1 Implement D17–D18 in Deno collection/compaction and the shared manifest reader; add tool-output samples for resident, sparse, compressed, continuation and index streams, metadata enumeration and filler totals.
+- [x] M2.2 Keep v2 tests green while adding strict v3 schema tests and parser allocation assertions. Verify: `deno test scripts/fixtures/`; `deno check scripts/`; `cargo test -p adamite-ntfs -p adamite-fixtures --locked`.
 
 ### M3 — USER STEP: regenerate and accept fixtures
 

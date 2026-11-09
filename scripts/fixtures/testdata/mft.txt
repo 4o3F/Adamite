@@ -1,0 +1,92 @@
+Dumping Inode 0 (0x0)
+Upd. Seq. Array Off.:	 48 (0x30)
+Upd. Seq. Array Count:	 3 (0x3)
+Upd. Seq. Number:	 261 (0x105)
+LogFile Seq. Number:	 0x0
+MFT Record Seq. Numb.:	 1 (0x1)
+Number of Hard Links:	 1 (0x1)
+Attribute Offset:	 56 (0x38)
+MFT Record Flags:	 IN_USE
+Bytes Used:		 408 (0x198) bytes
+Bytes Allocated:	 1024 (0x400) bytes
+Next Attribute Instance: 4 (0x4)
+MFT Padding:	00 00
+Dumping attribute $STANDARD_INFORMATION (0x10) from mft record 0 (0x0)
+	Attribute length:	 96 (0x60)
+	Resident: 		 Yes
+	Name length:		 0 (0x0)
+	Name offset:		 24 (0x18)
+	Attribute flags:	 0x0000
+	Attribute instance:	 0 (0x0)
+	Data size:		 72 (0x48)
+	Data offset:		 24 (0x18)
+	Resident flags:		 0x00
+	ReservedR:		 0 (0x0)
+	File Creation Time:	 Mon Jan  1 00:00:00 1601 UTC
+	File Altered Time:	 Mon Jan  1 00:00:00 1601 UTC
+	MFT Changed Time:	 Mon Jan  1 00:00:00 1601 UTC
+	Last Accessed Time:	 Mon Jan  1 00:00:00 1601 UTC
+	File attributes:	 HIDDEN SYSTEM (0x00000006)
+	Maximum versions:	 0
+	Version number:		 0
+	Class ID:		 0
+	User ID:		 0 (0x0)
+	Security ID:		 0 (0x0)
+	Quota charged:		 0 (0x0)
+	Update Sequence Number:	 0 (0x0)
+Dumping attribute $FILE_NAME (0x30) from mft record 0 (0x0)
+	Attribute length:	 104 (0x68)
+	Resident: 		 Yes
+	Name length:		 0 (0x0)
+	Name offset:		 24 (0x18)
+	Attribute flags:	 0x0000
+	Attribute instance:	 2 (0x2)
+	Data size:		 74 (0x4a)
+	Data offset:		 24 (0x18)
+	Resident flags:		 0x01
+	ReservedR:		 0 (0x0)
+	Parent directory:	 5 (0x5)
+	File Creation Time:	 Thu Jan  1 00:00:00 1970 UTC
+	File Altered Time:	 Thu Jan  1 00:00:00 1970 UTC
+	MFT Changed Time:	 Thu Jan  1 00:00:00 1970 UTC
+	Last Accessed Time:	 Thu Jan  1 00:00:00 1970 UTC
+	Allocated Size:		 28672 (0x7000)
+	Data Size:		 27648 (0x6c00)
+	Filename Length:	 4 (0x4)
+	File attributes:	 HIDDEN SYSTEM (0x00000006)
+	Namespace:		 Win32 & DOS
+	Filename:		 '$MFT'
+Dumping attribute $DATA (0x80) from mft record 0 (0x0)
+	Attribute length:	 72 (0x48)
+	Resident: 		 No
+	Name length:		 0 (0x0)
+	Name offset:		 64 (0x40)
+	Attribute flags:	 0x0000
+	Attribute instance:	 1 (0x1)
+	Lowest VCN		 0 (0x0)
+	Highest VCN:		 82 (0x52)
+	Mapping pairs offset:	 64 (0x40)
+	Compression unit:	 0 (0x0)
+	Data size:		 330752 (0x50c00)
+	Allocated size:		 339968 (0x53000)
+	Initialized size:	 330752 (0x50c00)
+	Runlist:	VCN		LCN		Length
+			0x0		0x4		0x53
+Dumping attribute $BITMAP (0xb0) from mft record 0 (0x0)
+	Attribute length:	 72 (0x48)
+	Resident: 		 No
+	Name length:		 0 (0x0)
+	Name offset:		 64 (0x40)
+	Attribute flags:	 0x0000
+	Attribute instance:	 3 (0x3)
+	Lowest VCN		 0 (0x0)
+	Highest VCN:		 0 (0x0)
+	Mapping pairs offset:	 64 (0x40)
+	Compression unit:	 0 (0x0)
+	Data size:		 48 (0x30)
+	Allocated size:		 4096 (0x1000)
+	Initialized size:	 48 (0x30)
+	Runlist:	VCN		LCN		Length
+			0x0		0x2		0x1
+End of inode reached
+Total runs: 2 (fragments: 2)

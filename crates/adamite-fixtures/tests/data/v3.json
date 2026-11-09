@@ -1,0 +1,171 @@
+{
+  "schema_version": 3,
+  "image": "basic-4k.img.zst",
+  "image_len": "16777216",
+  "generator": {
+    "mkntfs": "mkntfs v2022.10.3 (libntfs-3g)",
+    "ntfsinfo": "ntfsinfo v2022.10.3 (libntfs-3g) - Display information about an NTFS Volume.",
+    "getfattr": "getfattr 2.5.2",
+    "setfattr": "setfattr 2.5.2",
+    "zstd": "*** Zstandard CLI (64-bit) v1.5.5, by Yann Collet ***",
+    "mountpoint": "mountpoint from util-linux 2.39.3",
+    "sudo": "Sudo version 1.9.15p5",
+    "ntfs-3g": "ntfs-3g 2022.10.3 integrated FUSE 28"
+  },
+  "geometry": {
+    "bytes_per_sector": 512,
+    "cluster_size": 4096,
+    "file_record_size": 1024,
+    "index_record_size": 4096,
+    "total_clusters": "4095",
+    "mft_lcn": "4",
+    "mftmirr_lcn": "2047"
+  },
+  "mft": {
+    "extents": [
+      {
+        "vcn": "0",
+        "lcn": "4",
+        "len": "83"
+      }
+    ],
+    "data_size": "330752",
+    "has_attribute_list": false
+  },
+  "entries": [
+    {
+      "path": "/empty.txt",
+      "record": "64",
+      "seq": 1,
+      "kind": "file",
+      "nlink": 1,
+      "attributes": 32,
+      "mtime_filetime": "132223104000000000",
+      "names": [
+        {
+          "parent_record": "5",
+          "parent_seq": 5,
+          "name": [
+            101,
+            109,
+            112,
+            116,
+            121,
+            46,
+            116,
+            120,
+            116
+          ],
+          "namespace": 0
+        }
+      ],
+      "streams": [
+        {
+          "attribute_type": 128,
+          "name": [],
+          "size": "5",
+          "allocated_size": "0",
+          "compressed_size": null,
+          "resident": true,
+          "sparse": false,
+          "compressed": false,
+          "run_count": 0
+        },
+        {
+          "attribute_type": 128,
+          "name": [
+            109,
+            101,
+            116,
+            97
+          ],
+          "size": "1048576",
+          "allocated_size": "1048576",
+          "compressed_size": "8192",
+          "resident": false,
+          "sparse": true,
+          "compressed": false,
+          "run_count": 4
+        },
+        {
+          "attribute_type": 160,
+          "name": [
+            36,
+            73,
+            51,
+            48
+          ],
+          "size": "4096",
+          "allocated_size": "18446744073709551615",
+          "compressed_size": null,
+          "resident": false,
+          "sparse": false,
+          "compressed": false,
+          "run_count": 1
+        }
+      ],
+      "reparse_tag": null,
+      "has_attribute_list": false
+    }
+  ],
+  "fill": [
+    {
+      "dir": "/fill",
+      "count": 2,
+      "name_prefix": "f",
+      "name_len": 3,
+      "record_min": "67",
+      "record_max": "69",
+      "parent_record": "64",
+      "parent_seq": 1,
+      "total_size": "1024",
+      "total_ads_size": "32",
+      "total_alloc": "18446744073709551615"
+    }
+  ],
+  "deleted": [],
+  "metafiles": [
+    {
+      "path": "/$MFT",
+      "record": "0",
+      "seq": 1,
+      "kind": "file",
+      "nlink": 1,
+      "attributes": 32,
+      "mtime_filetime": "132223104000000000",
+      "names": [
+        {
+          "parent_record": "5",
+          "parent_seq": 5,
+          "name": [
+            101,
+            109,
+            112,
+            116,
+            121,
+            46,
+            116,
+            120,
+            116
+          ],
+          "namespace": 0
+        }
+      ],
+      "streams": [
+        {
+          "attribute_type": 128,
+          "name": [],
+          "size": "5",
+          "allocated_size": "0",
+          "compressed_size": null,
+          "resident": true,
+          "sparse": false,
+          "compressed": false,
+          "run_count": 0
+        }
+      ],
+      "reparse_tag": null,
+      "has_attribute_list": false
+    }
+  ]
+}

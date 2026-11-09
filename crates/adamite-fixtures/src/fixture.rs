@@ -1,5 +1,6 @@
-//! Image loading and independent MFT reconstruction for committed schema-v2 fixtures.
+//! Image loading and independent MFT reconstruction for committed NTFS fixtures.
 
+use crate::{Extent, Manifest};
 use adamite_ntfs::fixup::FixupError;
 use adamite_ntfs::{
     AttributeError, AttributeList, AttributeListError, AttributeType, FileRecord, FileRef,
@@ -7,7 +8,6 @@ use adamite_ntfs::{
     parse_boot_sector,
 };
 use ruzstd::decoding::{StreamingDecoder, errors::FrameDecoderError};
-use serde::{Deserialize, Deserializer};
 use snafu::{OptionExt, ResultExt, Snafu, ensure};
 use std::{
     collections::BTreeSet,
@@ -15,196 +15,6 @@ use std::{
     io::{self, Read},
     path::Path,
 };
-
-fn decimal<'de, D: Deserializer<'de>>(input: D) -> Result<u64, D::Error> {
-    String::deserialize(input)?
-        .parse()
-        .map_err(serde::de::Error::custom)
-}
-fn optional_decimal<'de, D: Deserializer<'de>>(input: D) -> Result<Option<u64>, D::Error> {
-    Option::<String>::deserialize(input)?
-        .map(|value| value.parse().map_err(serde::de::Error::custom))
-        .transpose()
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-/// Independent schema-v2 oracle for one compressed NTFS image.
-pub struct Manifest {
-    /// Manifest schema version; currently 2.
-    pub schema_version: u32,
-    /// Sibling zstd image filename.
-    pub image: String,
-    #[serde(deserialize_with = "decimal")]
-    /// Expected decompressed image length in bytes.
-    pub image_len: u64,
-    /// Tool names and versions recorded during generation.
-    pub generator: std::collections::BTreeMap<String, String>,
-    /// Expected boot-sector geometry.
-    pub geometry: Geometry,
-    /// Expected MFT stream size and mapping.
-    pub mft: Mft,
-    /// Explicit filesystem entries, including separate hard-link paths.
-    pub entries: Vec<Entry>,
-    /// Compact summaries of generated filler files.
-    pub fill: Vec<Fill>,
-    /// Deleted paths and their former record numbers.
-    pub deleted: Vec<Deleted>,
-}
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-/// Independent summary of filler files under one directory.
-pub struct Fill {
-    /// Directory path containing the filler files.
-    pub dir: String,
-    /// Number of distinct filler files.
-    pub count: usize,
-    /// Expected name prefix.
-    pub name_prefix: String,
-    /// Expected name length in UTF-16 code units.
-    pub name_len: usize,
-    #[serde(deserialize_with = "decimal")]
-    /// Smallest filler record number.
-    pub record_min: u64,
-    #[serde(deserialize_with = "decimal")]
-    /// Largest filler record number.
-    pub record_max: u64,
-    #[serde(deserialize_with = "decimal")]
-    /// Expected parent record number.
-    pub parent_record: u64,
-    /// Expected parent sequence number.
-    pub parent_seq: u16,
-}
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-/// Expected geometry measured by ntfsinfo.
-pub struct Geometry {
-    /// Logical sector size in bytes.
-    pub bytes_per_sector: u16,
-    /// Cluster size in bytes.
-    pub cluster_size: u32,
-    /// FILE record size in bytes.
-    pub file_record_size: u32,
-    /// Index record size in bytes.
-    pub index_record_size: u32,
-    #[serde(deserialize_with = "decimal")]
-    /// Number of complete volume clusters.
-    pub total_clusters: u64,
-    #[serde(deserialize_with = "decimal")]
-    /// Physical cluster containing MFT record zero.
-    pub mft_lcn: u64,
-    #[serde(deserialize_with = "decimal")]
-    /// Physical cluster containing the MFT mirror.
-    pub mftmirr_lcn: u64,
-}
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-/// Expected mapping and logical length of the MFT DATA stream.
-pub struct Mft {
-    /// Expected extents in virtual-cluster order.
-    pub extents: Vec<Extent>,
-    #[serde(deserialize_with = "decimal")]
-    /// Logical MFT data size in bytes.
-    pub data_size: u64,
-    /// Whether record zero contains an attribute list.
-    pub has_attribute_list: bool,
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-/// One virtual-cluster extent with an optional physical location.
-pub struct Extent {
-    #[serde(deserialize_with = "decimal")]
-    /// Starting virtual cluster number.
-    pub vcn: u64,
-    #[serde(deserialize_with = "optional_decimal")]
-    /// Starting physical cluster number, absent for a sparse run.
-    pub lcn: Option<u64>,
-    #[serde(deserialize_with = "decimal")]
-    /// Length in clusters.
-    pub len: u64,
-}
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-/// Independent file metadata shared by every path to the same base record.
-pub struct Entry {
-    /// Absolute volume-relative path.
-    pub path: String,
-    #[serde(deserialize_with = "decimal")]
-    /// Base MFT record number.
-    pub record: u64,
-    /// Base record sequence number.
-    pub seq: u16,
-    /// Entry kind measured independently.
-    pub kind: EntryKind,
-    /// Reported hard-link count.
-    pub nlink: u64,
-    /// Raw STANDARD_INFORMATION file attributes.
-    pub attributes: u32,
-    #[serde(deserialize_with = "decimal")]
-    /// Modified time as a raw FILETIME.
-    pub mtime_filetime: u64,
-    /// All FILE_NAME links for this record.
-    pub names: Vec<Name>,
-    /// DATA streams after joining continuation segments.
-    pub streams: Vec<Stream>,
-    /// Reparse tag when present.
-    pub reparse_tag: Option<u32>,
-    /// Whether the record has an attribute list.
-    pub has_attribute_list: bool,
-}
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "lowercase")]
-/// Filesystem entry kinds represented by the fixture manifests.
-pub enum EntryKind {
-    /// A directory.
-    Directory,
-    /// An ordinary file.
-    File,
-    /// A symbolic link.
-    Symlink,
-}
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-/// One FILE_NAME link retaining its original UTF-16 units.
-pub struct Name {
-    #[serde(deserialize_with = "decimal")]
-    /// Parent directory record number.
-    pub parent_record: u64,
-    /// Parent directory sequence number.
-    pub parent_seq: u16,
-    /// Original UTF-16 code units.
-    pub name: Vec<u16>,
-    /// Raw NTFS namespace value.
-    pub namespace: u8,
-}
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-/// One DATA stream measured independently across its segments.
-pub struct Stream {
-    /// Stream name as UTF-16 units; empty for the main stream.
-    pub name: Vec<u16>,
-    #[serde(deserialize_with = "decimal")]
-    /// Logical size in bytes.
-    pub size: u64,
-    /// Whether the stream is stored in the FILE record.
-    pub resident: bool,
-    /// Whether the sparse attribute flag is set.
-    pub sparse: bool,
-    /// Whether a compression format is set.
-    pub compressed: bool,
-    /// Total mapping-pair runs across every segment.
-    pub run_count: usize,
-}
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-/// A deleted path whose record must remain out of the live tree.
-pub struct Deleted {
-    /// Former volume-relative path.
-    pub path: String,
-    #[serde(deserialize_with = "decimal")]
-    /// Former MFT record number.
-    pub record: u64,
-}
 
 /// Image loading, manifest validation or reference MFT reconstruction failed.
 #[derive(Debug, Snafu)]
@@ -362,15 +172,17 @@ impl Fixture {
     ///
     /// # Errors
     ///
-    /// Returns an error unless the manifest uses schema v2 and its image length matches.
+    /// Returns an error for unsupported schemas, missing v3 measurements or a length mismatch.
     pub fn from_image(image: Vec<u8>, manifest: Manifest) -> Result<Self> {
         ensure!(
-            manifest.schema_version == 2
-                && u64::try_from(image.len()).ok() == Some(manifest.image_len),
+            u64::try_from(image.len()).ok() == Some(manifest.image_len),
             InvalidSnafu {
                 message: "schema version or image length mismatch"
             }
         );
+        manifest
+            .validate()
+            .map_err(|message| FixtureError::Invalid { message })?;
         Ok(Self { manifest, image })
     }
 

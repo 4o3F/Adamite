@@ -21,6 +21,8 @@ type NameKey = (u64, u16, Vec<u16>, u8);
 #[derive(Debug, Default)]
 struct Stream {
     size: Option<u64>,
+    allocated: Option<u64>,
+    compressed_size: Option<u64>,
     resident: bool,
     sparse: bool,
     compressed: bool,
@@ -31,7 +33,7 @@ struct Observed {
     header: Option<RecordHeader>,
     standard: Option<StandardInformation>,
     names: BTreeSet<NameKey>,
-    streams: BTreeMap<Vec<u16>, Stream>,
+    streams: BTreeMap<(u32, Vec<u16>), Stream>,
     reparse: Option<u32>,
     has_list: bool,
     has_index: bool,
@@ -44,6 +46,34 @@ fn observe(record: FileRecord<'_>, result: &mut Observed) {
     }
     for attribute in record.attributes() {
         let attribute = attribute.expect("fixture attribute must parse");
+        if attribute.attribute_type() == AttributeType::DATA || !attribute.is_resident() {
+            let stream = result
+                .streams
+                .entry((
+                    attribute.attribute_type().raw(),
+                    attribute.name().units().collect(),
+                ))
+                .or_default();
+            stream.resident = attribute.is_resident();
+            stream.sparse = attribute.flags().contains(AttributeFlags::SPARSE);
+            stream.compressed = attribute.flags().compression_format() != 0;
+            if let Some(value) = attribute.resident_value() {
+                assert!(stream.size.replace(value.len() as u64).is_none());
+                stream.allocated = Some(0);
+            } else {
+                let descriptor = attribute.non_resident().unwrap();
+                if let Some(sizes) = descriptor.sizes() {
+                    assert!(stream.size.replace(sizes.data()).is_none());
+                    assert!(stream.allocated.replace(sizes.allocated()).is_none());
+                    stream.compressed_size = sizes.compressed();
+                }
+                for run in descriptor.runs() {
+                    run.expect("fixture mapping pairs must parse");
+                    stream.runs += 1;
+                }
+            }
+        }
+
         match attribute.attribute_type() {
             AttributeType::STANDARD_INFORMATION => {
                 result.standard = Some(StandardInformation::from_attribute(attribute).unwrap());
@@ -56,27 +86,6 @@ fn observe(record: FileRecord<'_>, result: &mut Observed) {
                     name.name().units().collect(),
                     name.namespace(),
                 ));
-            }
-            AttributeType::DATA => {
-                let stream = result
-                    .streams
-                    .entry(attribute.name().units().collect())
-                    .or_default();
-                stream.resident = attribute.is_resident();
-                stream.sparse = attribute.flags().contains(AttributeFlags::SPARSE);
-                stream.compressed = attribute.flags().compression_format() != 0;
-                if let Some(value) = attribute.resident_value() {
-                    assert!(stream.size.replace(value.len() as u64).is_none());
-                } else {
-                    let descriptor = attribute.non_resident().unwrap();
-                    if let Some(sizes) = descriptor.sizes() {
-                        assert!(stream.size.replace(sizes.data()).is_none());
-                    }
-                    for run in descriptor.runs() {
-                        run.expect("fixture mapping pairs must parse");
-                        stream.runs += 1;
-                    }
-                }
             }
             AttributeType::REPARSE_POINT => {
                 result.reparse = Some(ReparsePoint::from_attribute(attribute).unwrap().tag())
@@ -91,6 +100,37 @@ fn observe(record: FileRecord<'_>, result: &mut Observed) {
             }
             _ => {}
         }
+    }
+}
+
+fn assert_stream(actual: &Stream, expected: &adamite_fixtures::Stream, schema: u32, path: &str) {
+    assert_eq!(
+        (
+            actual.size,
+            actual.resident,
+            actual.sparse,
+            actual.compressed,
+            actual.runs
+        ),
+        (
+            Some(expected.size),
+            expected.resident,
+            expected.sparse,
+            expected.compressed,
+            expected.run_count
+        ),
+        "{path} stream {:?}",
+        expected.name
+    );
+    if schema == 3 {
+        assert_eq!(
+            actual.allocated, expected.allocated_size,
+            "{path} allocated bytes"
+        );
+        assert_eq!(
+            actual.compressed_size, expected.compressed_size,
+            "{path} compressed bytes"
+        );
     }
 }
 
@@ -124,7 +164,12 @@ fn verify(name: &str) {
             base.sequence()
         );
     }
-    for entry in &fixture.manifest().entries {
+    for entry in fixture
+        .manifest()
+        .entries
+        .iter()
+        .chain(&fixture.manifest().metafiles)
+    {
         let actual = observed
             .get(&entry.record)
             .unwrap_or_else(|| panic!("missing {}", entry.path));
@@ -187,31 +232,22 @@ fn verify(name: &str) {
             entry.path
         );
         assert_eq!(
-            actual.streams.len(),
+            actual
+                .streams
+                .keys()
+                .filter(|(kind, _)| fixture.manifest().schema_version == 3 || *kind == 0x80)
+                .count(),
             entry.streams.len(),
             "{} stream count",
             entry.path
         );
         for expected in &entry.streams {
-            let stream = &actual.streams[&expected.name];
-            assert_eq!(
-                (
-                    stream.size,
-                    stream.resident,
-                    stream.sparse,
-                    stream.compressed,
-                    stream.runs
-                ),
-                (
-                    Some(expected.size),
-                    expected.resident,
-                    expected.sparse,
-                    expected.compressed,
-                    expected.run_count
-                ),
-                "{} stream {:?}",
-                entry.path,
-                expected.name
+            let stream = &actual.streams[&(expected.attribute_type, expected.name.clone())];
+            assert_stream(
+                stream,
+                expected,
+                fixture.manifest().schema_version,
+                &entry.path,
             );
         }
         if entry.path == "/bigdir" {
@@ -222,6 +258,7 @@ fn verify(name: &str) {
         let prefix: Vec<_> = fill.name_prefix.encode_utf16().collect();
         let parent = FileRef::new(fill.parent_record, fill.parent_seq).unwrap();
         let mut count = 0;
+        let mut totals = (0, 0, 0);
         for (&number, actual) in &observed {
             let belongs = actual
                 .names
@@ -248,8 +285,28 @@ fn verify(name: &str) {
                 assert!(name.2.starts_with(&prefix));
             }
             count += 1;
+            if fixture.manifest().schema_version == 3 {
+                for ((kind, name), stream) in &actual.streams {
+                    if *kind == 0x80 {
+                        if name.is_empty() {
+                            totals.0 += stream.size.unwrap();
+                        } else {
+                            totals.1 += stream.size.unwrap();
+                        }
+                    }
+                    totals.2 += stream.compressed_size.unwrap_or(stream.allocated.unwrap());
+                }
+            }
         }
         assert_eq!(count, fill.count, "{} filler count", fill.dir);
+        if fixture.manifest().schema_version == 3 {
+            assert_eq!(
+                (Some(totals.0), Some(totals.1), Some(totals.2)),
+                (fill.total_size, fill.total_ads_size, fill.total_alloc),
+                "{} filler totals",
+                fill.dir
+            );
+        }
     }
     let root = &observed[&5];
     assert!(root.names.iter().any(|name| name.0 == 5 && name.1 == 5));
@@ -278,4 +335,51 @@ fn fragmented_mft_streams_and_filler_sets_match_the_manifest() {
 #[test]
 fn native_4kn_geometry_and_records_match_the_manifest() {
     verify("4kn-64k");
+}
+
+#[test]
+fn v3_allocations_use_first_segment_values_for_all_stream_types() {
+    use adamite_fixtures::builders::{AttrBuilder, NonResidentModel, RecordBuilder};
+    for (kind, flags, resident, size, allocated, physical) in [
+        (0x80, 0, true, 5, 0, None),
+        (0x80, 0, false, 5000, 8192, None),
+        (0x80, 0x8000, false, 1048576, 1048576, Some(8192)),
+        (0x80, 1, false, 262144, 262144, Some(32768)),
+        (0xa0, 0, false, 4096, 8192, None),
+        (0xb0, 0, false, 12, 4096, None),
+    ] {
+        let mut attribute = if resident {
+            AttrBuilder::resident(kind, vec![0; size as usize])
+        } else {
+            AttrBuilder::non_resident(
+                kind,
+                NonResidentModel {
+                    sizes: [allocated, size, size, physical.unwrap_or(0)],
+                    ..Default::default()
+                },
+            )
+        };
+        attribute.flags = flags;
+        let mut bytes = RecordBuilder {
+            attributes: vec![attribute.build()],
+            ..Default::default()
+        }
+        .build();
+        let RecordClass::Base(record) = classify(&mut bytes) else {
+            panic!("synthetic record must be a base")
+        };
+        let mut actual = Observed::default();
+        observe(record, &mut actual);
+        let expected: adamite_fixtures::Stream=serde_json::from_value(serde_json::json!({
+            "attribute_type":kind,"name":[],"size":size.to_string(),"allocated_size":allocated.to_string(),
+            "compressed_size":physical.map(|v|v.to_string()),"resident":resident,"sparse":flags==0x8000,
+            "compressed":flags==1,"run_count":if resident {0} else {1}
+        })).unwrap();
+        assert_stream(
+            &actual.streams[&(kind, Vec::new())],
+            &expected,
+            3,
+            "synthetic",
+        );
+    }
 }

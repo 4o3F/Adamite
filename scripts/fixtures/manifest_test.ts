@@ -21,6 +21,7 @@ const data = `Dumping attribute $DATA (0x80) from mft record 0 (0x0)
  Resident: No
  Attribute flags: 0x0000
  Lowest VCN 0 (0x0)
+ Allocated size: 18446744073709551615 (0xffffffffffffffff)
  Data size: 18446744073709551615 (0xffffffffffffffff)
  Runlist: VCN LCN Length
  0x0 0x4 0x8
@@ -38,7 +39,7 @@ Deno.test("manifest schema and independent tool output", () => {
   const output =
     "Sector Size: 512\nCluster Size: 4096\nMFT Record Size: 1024\nIndex Block Size: 4096\nVolume Size in Clusters: 4095\nLCN of Data Attribute for FILE_MFT: 4\nLCN of Data Attribute for File_MFTMirr: 2047\n";
   const manifest: Manifest = {
-    schema_version: 2,
+    schema_version: 3,
     image: "sample.img.zst",
     image_len: "16777216",
     generator: { mkntfs: "test" },
@@ -57,13 +58,14 @@ Deno.test("manifest schema and independent tool output", () => {
       reparse_tag: null,
       has_attribute_list: false,
     }],
+    metafiles: [],
     deleted: [{ path: "/deleted.txt", record: "42" }],
     fill: [],
   };
   const parsed = JSON.parse(json(manifest));
   assert(
     Object.keys(parsed).sort().join() ===
-      "deleted,entries,fill,generator,geometry,image,image_len,mft,schema_version",
+      "deleted,entries,fill,generator,geometry,image,image_len,metafiles,mft,schema_version",
     "top-level schema changed",
   );
   assert(
@@ -107,7 +109,7 @@ Deno.test("filler summaries and compact serialization are deterministic and pres
     names: [{ parent_record: "64", parent_seq: 7, name: [102, 48 + index], namespace: 0 }],
   }));
   const input = {
-    schema_version: 1,
+    schema_version: 3,
     image: "sample.img.zst",
     image_len: "16777216",
     generator: {},
@@ -116,13 +118,17 @@ Deno.test("filler summaries and compact serialization are deterministic and pres
     ),
     mft: { extents: extents(data), data_size: "8192", has_attribute_list: false },
     entries: [parent, ...children],
+    metafiles: [],
     deleted: [],
   };
   const compact = compactManifest(input);
-  assert(compact.schema_version === 2 && compact.entries.length === 1, "filler entries remain");
+  assert(compact.schema_version === 3 && compact.entries.length === 1, "filler entries remain");
   assert(
     JSON.stringify(compact.fill) === JSON.stringify([{
       dir: "/fill",
+      total_size: "0",
+      total_ads_size: "0",
+      total_alloc: "0",
       count: 2,
       name_prefix: "f",
       name_len: 2,

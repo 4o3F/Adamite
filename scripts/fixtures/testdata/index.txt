@@ -1,0 +1,130 @@
+Dumping Inode 67 (0x43)
+Upd. Seq. Array Off.:	 48 (0x30)
+Upd. Seq. Array Count:	 3 (0x3)
+Upd. Seq. Number:	 228 (0xe4)
+LogFile Seq. Number:	 0x0
+MFT Record Seq. Numb.:	 1 (0x1)
+Number of Hard Links:	 1 (0x1)
+Attribute Offset:	 56 (0x38)
+MFT Record Flags:	 IN_USE DIRECTORY
+Bytes Used:		 552 (0x228) bytes
+Bytes Allocated:	 1024 (0x400) bytes
+Next Attribute Instance: 6 (0x6)
+MFT Padding:	00 00
+Dumping attribute $STANDARD_INFORMATION (0x10) from mft record 67 (0x43)
+	Attribute length:	 72 (0x48)
+	Resident: 		 Yes
+	Name length:		 0 (0x0)
+	Name offset:		 0 (0x0)
+	Attribute flags:	 0x0000
+	Attribute instance:	 0 (0x0)
+	Data size:		 48 (0x30)
+	Data offset:		 24 (0x18)
+	Resident flags:		 0x00
+	ReservedR:		 0 (0x0)
+	File Creation Time:	 Wed Jan  1 00:00:00 2020 UTC
+	File Altered Time:	 Wed Jan  1 00:00:00 2020 UTC
+	MFT Changed Time:	 Mon Nov  2 05:02:29 2026 UTC
+	Last Accessed Time:	 Wed Jan  1 00:00:00 2020 UTC
+	File attributes:	 ARCHIVE (0x00000020)
+Dumping attribute $FILE_NAME (0x30) from mft record 67 (0x43)
+	Attribute length:	 104 (0x68)
+	Resident: 		 Yes
+	Name length:		 0 (0x0)
+	Name offset:		 0 (0x0)
+	Attribute flags:	 0x0000
+	Attribute instance:	 3 (0x3)
+	Data size:		 78 (0x4e)
+	Data offset:		 24 (0x18)
+	Resident flags:		 0x01
+	ReservedR:		 0 (0x0)
+	Parent directory:	 5 (0x5)
+	File Creation Time:	 Wed Jan  1 00:00:00 2020 UTC
+	File Altered Time:	 Wed Jan  1 00:00:00 2020 UTC
+	MFT Changed Time:	 Mon Nov  2 05:02:29 2026 UTC
+	Last Accessed Time:	 Wed Jan  1 00:00:00 2020 UTC
+	Allocated Size:		 0 (0x0)
+	Data Size:		 0 (0x0)
+	Filename Length:	 6 (0x6)
+	File attributes:	 ARCHIVE I30_INDEX (0x10000020)
+	Namespace:		 POSIX
+	Filename:		 'bigdir'
+Dumping attribute $SECURITY_DESCRIPTOR (0x50) from mft record 67 (0x43)
+	Attribute length:	 104 (0x68)
+	Resident: 		 Yes
+	Name length:		 0 (0x0)
+	Name offset:		 0 (0x0)
+	Attribute flags:	 0x0000
+	Attribute instance:	 1 (0x1)
+	Data size:		 80 (0x50)
+	Data offset:		 24 (0x18)
+	Resident flags:		 0x00
+	ReservedR:		 0 (0x0)
+	Revision:		 1
+	Control:		 0x8004
+	Owner SID:		 S-1-5-32-544
+	Group SID:		 S-1-5-32-544
+	System ACL:		 missing
+	Discretionary ACL:
+			Revision	 2
+			ACE:		 type:allow  flags:0x3  access:0x1f01ff
+					 SID: S-1-1-0
+Dumping attribute $INDEX_ROOT (0x90) from mft record 67 (0x43)
+	Attribute length:	 88 (0x58)
+	Resident: 		 Yes
+	Name length:		 4 (0x4)
+	Name offset:		 24 (0x18)
+	Attribute name:		 '$I30'
+	Attribute flags:	 0x0000
+	Attribute instance:	 2 (0x2)
+	Data size:		 56 (0x38)
+	Data offset:		 32 (0x20)
+	Resident flags:		 0x00
+	ReservedR:		 0 (0x0)
+	Indexed Attr Type:	 DIRECTORY_I30
+	Collation Rule:		 1 (0x1)
+	Index Block Size:	 4096 (0x1000)
+	Clusters Per Block:	 1 (0x1)
+	Entries Offset:		 16 (0x10)
+	Index Size:		 40 (0x28)
+	Allocated Size:		 40 (0x28)
+	Index header flags:	 0x01
+	Dumping index root:
+		Entry length:		 24 (0x18)
+		Key length:		 0 (0x0)
+		Index entry flags:	 0x03
+		Subnode VCN:		 5 (0x5)
+	End of index block reached
+	Index entries total:	 1
+Dumping attribute $INDEX_ALLOCATION (0xa0) from mft record 67 (0x43)
+	Attribute length:	 80 (0x50)
+	Resident: 		 No
+	Name length:		 4 (0x4)
+	Name offset:		 64 (0x40)
+	Attribute name:		 '$I30'
+	Attribute flags:	 0x0000
+	Attribute instance:	 5 (0x5)
+	Lowest VCN		 0 (0x0)
+	Highest VCN:		 9 (0x9)
+	Mapping pairs offset:	 72 (0x48)
+	Compression unit:	 0 (0x0)
+	Data size:		 40960 (0xa000)
+	Allocated size:		 40960 (0xa000)
+	Initialized size:	 40960 (0xa000)
+	Runlist:	VCN		LCN		Length
+			0x0		0xa10		0xa
+	[verbose INDX contents omitted]
+Dumping attribute $BITMAP (0xb0) from mft record 67 (0x43)
+	Attribute length:	 40 (0x28)
+	Resident: 		 Yes
+	Name length:		 4 (0x4)
+	Name offset:		 24 (0x18)
+	Attribute name:		 '$I30'
+	Attribute flags:	 0x0000
+	Attribute instance:	 4 (0x4)
+	Data size:		 8 (0x8)
+	Data offset:		 32 (0x20)
+	Resident flags:		 0x00
+	ReservedR:		 0 (0x0)
+End of inode reached
+Total runs: 1 (fragments: 1)

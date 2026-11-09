@@ -1,0 +1,97 @@
+Dumping Inode 318 (0x13e)
+Upd. Seq. Array Off.:	 48 (0x30)
+Upd. Seq. Array Count:	 3 (0x3)
+Upd. Seq. Number:	 132 (0x84)
+LogFile Seq. Number:	 0x0
+MFT Record Seq. Numb.:	 1 (0x1)
+Number of Hard Links:	 1 (0x1)
+Attribute Offset:	 56 (0x38)
+MFT Record Flags:	 IN_USE
+Bytes Used:		 440 (0x1b8) bytes
+Bytes Allocated:	 1024 (0x400) bytes
+Next Attribute Instance: 4 (0x4)
+MFT Padding:	00 00
+Dumping attribute $STANDARD_INFORMATION (0x10) from mft record 318 (0x13e)
+	Attribute length:	 72 (0x48)
+	Resident: 		 Yes
+	Name length:		 0 (0x0)
+	Name offset:		 0 (0x0)
+	Attribute flags:	 0x0000
+	Attribute instance:	 0 (0x0)
+	Data size:		 48 (0x30)
+	Data offset:		 24 (0x18)
+	Resident flags:		 0x00
+	ReservedR:		 0 (0x0)
+	File Creation Time:	 Wed Jan  1 00:00:00 2020 UTC
+	File Altered Time:	 Wed Jan  1 00:00:00 2020 UTC
+	MFT Changed Time:	 Mon Nov  2 05:02:29 2026 UTC
+	Last Accessed Time:	 Wed Jan  1 00:00:00 2020 UTC
+	File attributes:	 ARCHIVE COMPRESSED (0x00000820)
+Dumping attribute $FILE_NAME (0x30) from mft record 318 (0x13e)
+	Attribute length:	 104 (0x68)
+	Resident: 		 Yes
+	Name length:		 0 (0x0)
+	Name offset:		 0 (0x0)
+	Attribute flags:	 0x0000
+	Attribute instance:	 3 (0x3)
+	Data size:		 76 (0x4c)
+	Data offset:		 24 (0x18)
+	Resident flags:		 0x01
+	ReservedR:		 0 (0x0)
+	Parent directory:	 317 (0x13d)
+	File Creation Time:	 Wed Jan  1 00:00:00 2020 UTC
+	File Altered Time:	 Wed Jan  1 00:00:00 2020 UTC
+	MFT Changed Time:	 Mon Nov  2 05:02:29 2026 UTC
+	Last Accessed Time:	 Wed Jan  1 00:00:00 2020 UTC
+	Allocated Size:		 32768 (0x8000)
+	Data Size:		 0 (0x0)
+	Filename Length:	 5 (0x5)
+	File attributes:	 ARCHIVE COMPRESSED (0x00000820)
+	Namespace:		 POSIX
+	Filename:		 'c.txt'
+Dumping attribute $SECURITY_DESCRIPTOR (0x50) from mft record 318 (0x13e)
+	Attribute length:	 104 (0x68)
+	Resident: 		 Yes
+	Name length:		 0 (0x0)
+	Name offset:		 0 (0x0)
+	Attribute flags:	 0x0000
+	Attribute instance:	 1 (0x1)
+	Data size:		 80 (0x50)
+	Data offset:		 24 (0x18)
+	Resident flags:		 0x00
+	ReservedR:		 0 (0x0)
+	Revision:		 1
+	Control:		 0x8004
+	Owner SID:		 S-1-5-32-544
+	Group SID:		 S-1-5-32-544
+	System ACL:		 missing
+	Discretionary ACL:
+			Revision	 2
+			ACE:		 type:allow  flags:0x3  access:0x1f01ff
+					 SID: S-1-1-0
+Dumping attribute $DATA (0x80) from mft record 318 (0x13e)
+	Attribute length:	 96 (0x60)
+	Resident: 		 No
+	Name length:		 0 (0x0)
+	Name offset:		 72 (0x48)
+	Attribute flags:	 0x0001
+	Attribute instance:	 2 (0x2)
+	Lowest VCN		 0 (0x0)
+	Highest VCN:		 63 (0x3f)
+	Mapping pairs offset:	 72 (0x48)
+	Compression unit:	 4 (0x4)
+	Data size:		 262144 (0x40000)
+	Allocated size:		 262144 (0x40000)
+	Initialized size:	 262144 (0x40000)
+	Compressed size:	 32768 (0x8000)
+	Runlist:	VCN		LCN		Length
+			0x0		0x269		0x2
+			0x2		<HOLE>		0xe
+			0x10		0x26b		0x2
+			0x12		<HOLE>		0xe
+			0x20		0x26d		0x2
+			0x22		<HOLE>		0xe
+			0x30		0x26f		0x2
+			0x32		<HOLE>		0xe
+End of inode reached
+Total runs: 8 (fragments: 1)
