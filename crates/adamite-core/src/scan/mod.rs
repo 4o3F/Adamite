@@ -2,6 +2,7 @@
 
 mod bootstrap;
 mod config;
+mod discovery;
 mod ingest;
 mod mapping;
 mod merge;

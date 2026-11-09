@@ -4,11 +4,13 @@ use super::{ConfigError, FeedError, ScanConfig, config::BOOT_BYTES, protocol::Re
 use super::{ReadRequest, RequestId};
 use super::{
     bootstrap::{self, Record0},
+    discovery::{Discovery, DiscoveryStep},
     mapping::{MftMapping, RecordAssembly, overflow},
 };
 use crate::{ScanStats, Snapshot};
 use adamite_ntfs::{
-    AttributeError, GeometryError, RecordError, RunlistError, fixup::FixupError, parse_boot_sector,
+    AttributeError, AttributeListError, GeometryError, RecordError, RunlistError,
+    fixup::FixupError, parse_boot_sector,
 };
 use snafu::Snafu;
 use std::collections::TryReserveError;
@@ -110,19 +112,19 @@ pub enum ScanError {
         /// Parser geometry failure.
         source: GeometryError,
     },
-    /// Record-zero update-sequence protection could not be restored.
-    #[snafu(display("invalid record-zero fixup: {source}"))]
+    /// Bootstrap record update-sequence protection could not be restored.
+    #[snafu(display("invalid bootstrap fixup: {source}"))]
     Fixup {
         /// Parser fixup failure.
         source: FixupError,
     },
-    /// The fixed record-zero header is invalid.
-    #[snafu(display("invalid record zero: {source}"))]
+    /// A fixed bootstrap record header is invalid.
+    #[snafu(display("invalid bootstrap record: {source}"))]
     Record {
         /// Parser record failure.
         source: RecordError,
     },
-    /// Record zero contains an invalid attribute header.
+    /// A bootstrap record contains an invalid attribute header.
     #[snafu(display("invalid bootstrap attribute: {source}"))]
     Attribute {
         /// Parser attribute failure.
@@ -134,6 +136,21 @@ pub enum ScanError {
         /// Parser runlist failure.
         source: RunlistError,
     },
+    /// Attribute-list value or entry decoding failed.
+    #[snafu(display("invalid bootstrap attribute list: {source}"))]
+    AttributeList {
+        /// Parser attribute-list failure.
+        source: AttributeListError,
+    },
+    /// A non-resident list advertises more than the parser's 256 KiB bound.
+    #[snafu(display("attribute-list size {size} exceeds 262144 bytes"))]
+    AttributeListTooLarge {
+        /// Advertised logical value size.
+        size: u64,
+    },
+    /// A discovery pass found no reachable work and bootstrap remains incomplete.
+    #[snafu(display("MFT bootstrap is incomplete and discovery cannot progress"))]
+    BootstrapIncomplete,
     /// Required record-zero identity, stream or mapping invariants failed.
     #[snafu(display("invalid MFT bootstrap: {reason}"))]
     Bootstrap {
@@ -168,9 +185,9 @@ pub enum ScanError {
     },
 }
 
-/// Decodes boot geometry and assembles record zero from caller-supplied bytes.
+/// Bootstraps the complete MFT mapping from caller-supplied bytes.
 ///
-/// Stops explicitly before ATTRIBUTE_LIST and extension discovery, implemented in M6.
+/// Stops explicitly before MFT streaming, implemented in M7.
 #[derive(Debug)]
 pub struct Scanner {
     config: ScanConfig,
@@ -179,6 +196,7 @@ pub struct Scanner {
     output: Option<ScanOutput>,
     record_read: Option<(MftMapping, RecordAssembly)>,
     bootstrap: Option<Record0>,
+    discovery: Option<Discovery>,
 }
 
 impl Scanner {
@@ -196,6 +214,7 @@ impl Scanner {
             output: None,
             record_read: None,
             bootstrap: None,
+            discovery: None,
         })
     }
 
@@ -209,8 +228,8 @@ impl Scanner {
     /// # Errors
     ///
     /// Invalid geometry, bootstrap data, arithmetic overflow or allocation failure
-    /// terminates the scan. Successful record-zero decoding currently terminates with
-    /// [`ScanError::PhaseNotImplemented`] for Discover. Further calls return Inactive.
+    /// terminates the scan. Successful bootstrap currently terminates with
+    /// [`ScanError::PhaseNotImplemented`] for Stream. Further calls return Inactive.
     pub fn step(&mut self) -> Result<ScanStep, ScanError> {
         let span = tracing::info_span!("scan_phase", phase = ?self.phase);
         let _entered = span.enter();
@@ -248,6 +267,7 @@ impl Scanner {
                 Ok(self.progress(true))
             }
             ScanPhase::Record0 => self.read_record0(),
+            ScanPhase::Discover => self.discover(),
             phase => Err(ScanError::PhaseNotImplemented { phase }),
         }
     }
@@ -286,6 +306,28 @@ impl Scanner {
         Ok(self.progress(!self.requests.has_ready()))
     }
 
+    fn discover(&mut self) -> Result<ScanStep, ScanError> {
+        let base = self.bootstrap.as_mut().ok_or(ScanError::Bootstrap {
+            reason: "missing record-zero bootstrap",
+        })?;
+        if self.discovery.is_none() {
+            self.discovery = Some(Discovery::new(base)?);
+            return Ok(self.progress(false));
+        }
+        let state = self.discovery.as_mut().ok_or(ScanError::Bootstrap {
+            reason: "missing discovery state",
+        })?;
+        match state.step(base, &mut self.requests, &self.config)? {
+            DiscoveryStep::Need(request) => Ok(ScanStep::Need(request)),
+            DiscoveryStep::Progress { waiting } => Ok(self.progress(waiting)),
+            DiscoveryStep::Complete => {
+                self.discovery = None;
+                self.phase = ScanPhase::Stream;
+                Ok(self.progress(false))
+            }
+        }
+    }
+
     fn progress(&self, waiting_for_input: bool) -> ScanStep {
         ScanStep::Progress(ScanProgress {
             phase: self.phase,
@@ -312,6 +354,7 @@ impl Scanner {
         self.phase = ScanPhase::Failed;
         self.requests.deactivate();
         self.record_read = None;
+        self.discovery = None;
     }
 }
 

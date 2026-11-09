@@ -71,6 +71,48 @@ impl MftMapping {
         Ok(Self { geometry, runs })
     }
 
+    pub(super) fn with_runs(&self, additional: &[OwnedRun]) -> Result<Self, ScanError> {
+        let mut runs = Vec::new();
+        let count = self
+            .runs
+            .len()
+            .checked_add(additional.len())
+            .ok_or_else(|| overflow("mapping run count"))?;
+        runs.try_reserve_exact(count)
+            .map_err(|source| ScanError::Allocation { source })?;
+        runs.extend_from_slice(&self.runs);
+        runs.extend_from_slice(additional);
+        runs.sort_unstable_by_key(|run| run.vcn);
+        Self::new(self.geometry, runs)
+    }
+
+    pub(super) fn covers(&self, start: u64, len: u64) -> Result<bool, ScanError> {
+        let end = start
+            .checked_add(len)
+            .ok_or_else(|| overflow("mapped range end"))?;
+        let mut cursor = start;
+        while cursor < end {
+            let remaining = end
+                .checked_sub(cursor)
+                .ok_or_else(|| overflow("mapped range remainder"))?;
+            let chunk = usize::try_from(remaining.min(16_777_216))
+                .map_err(|_| overflow("mapped range length"))?;
+            match self.read_piece(cursor, chunk) {
+                Ok(piece) => {
+                    cursor = cursor
+                        .checked_add(
+                            u64::try_from(piece.len)
+                                .map_err(|_| overflow("mapped piece length"))?,
+                        )
+                        .ok_or_else(|| overflow("mapped range cursor"))?
+                }
+                Err(ScanError::UnmappedRange { .. }) => return Ok(false),
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(true)
+    }
+
     /// The boot sector locates a contiguous record before its own runlist is available.
     pub(super) fn record0(geometry: VolumeGeometry) -> Result<Self, ScanError> {
         let cluster = u64::from(geometry.cluster_size());

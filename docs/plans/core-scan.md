@@ -122,8 +122,8 @@ Each automated milestone is one bounded Codex run targeting 15–30 minutes, inc
 
 ### M6 — Attribute-list and extension bootstrap
 
-- [ ] M6.1 Implement resident/non-resident list assembly, reachable extension discovery, segment-reference validation, duplicate detection, complete mapping validation and no-progress failure.
-- [ ] M6.2 Add multi-pass discovery, stale/missing target, overlap/gap, unsupported storage and inaccessible-list tests. Verify: `cargo test -p adamite-core --locked bootstrap`.
+- [x] M6.1 Implement resident/non-resident list assembly, reachable extension discovery, segment-reference validation, duplicate detection, complete mapping validation and no-progress failure.
+- [x] M6.2 Add multi-pass discovery, stale/missing target, overlap/gap, unsupported storage and inaccessible-list tests. Verify: `cargo test -p adamite-core --locked bootstrap`.
 
 ### M7 — Bounded streaming ingestion
 
