@@ -127,8 +127,8 @@ Each automated milestone is one bounded Codex run targeting 15–30 minutes, inc
 
 ### M7 — Bounded streaming ingestion
 
-- [ ] M7.1 Stream mapped MFT ranges with capped requests and ordered record assembly; classify and transactionally decode each record into slots/patches without retaining the whole raw MFT.
-- [ ] M7.2 Implement classification/parser counters and test cross-extent record 4095, partial records, deleted/BAAD/unused input and late parse errors. Verify: `cargo test -p adamite-core --locked ingest`.
+- [x] M7.1 Stream mapped MFT ranges with capped requests and ordered record assembly; classify and transactionally decode each record into slots/patches without retaining the whole raw MFT.
+- [x] M7.2 Implement classification/parser counters and test cross-extent record 4095, partial records, deleted/BAAD/unused input and late parse errors. Verify: `cargo test -p adamite-core --locked ingest`.
 
 ### M8 — Extension merge and accounting
 

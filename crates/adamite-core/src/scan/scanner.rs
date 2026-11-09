@@ -5,11 +5,12 @@ use super::{ReadRequest, RequestId};
 use super::{
     bootstrap::{self, Record0},
     discovery::{Discovery, DiscoveryStep},
+    ingest::{Ingest, IngestStep},
     mapping::{MftMapping, RecordAssembly, overflow},
 };
 use crate::{ScanStats, Snapshot};
 use adamite_ntfs::{
-    AttributeError, AttributeListError, GeometryError, RecordError, RunlistError,
+    AttributeError, AttributeListError, FileRefError, GeometryError, RecordError, RunlistError,
     fixup::FixupError, parse_boot_sector,
 };
 use snafu::Snafu;
@@ -151,6 +152,24 @@ pub enum ScanError {
     /// A discovery pass found no reachable work and bootstrap remains incomplete.
     #[snafu(display("MFT bootstrap is incomplete and discovery cannot progress"))]
     BootstrapIncomplete,
+    /// A streamed record ordinal cannot be represented by an NTFS reference.
+    #[snafu(display("unrepresentable streamed file reference: {source}"))]
+    FileRef {
+        /// Parser reference construction failure.
+        source: FileRefError,
+    },
+    /// A required filesystem record was absent or corrupt.
+    #[snafu(display("required MFT record {record} is missing or corrupt"))]
+    RequiredRecord {
+        /// Required virtual record ordinal.
+        record: u64,
+    },
+    /// An internal streaming invariant failed.
+    #[snafu(display("invalid MFT stream: {reason}"))]
+    Stream {
+        /// Violated transport or assembly invariant.
+        reason: &'static str,
+    },
     /// Required record-zero identity, stream or mapping invariants failed.
     #[snafu(display("invalid MFT bootstrap: {reason}"))]
     Bootstrap {
@@ -187,7 +206,7 @@ pub enum ScanError {
 
 /// Bootstraps the complete MFT mapping from caller-supplied bytes.
 ///
-/// Stops explicitly before MFT streaming, implemented in M7.
+/// Stops explicitly before extension merge, implemented in M8.
 #[derive(Debug)]
 pub struct Scanner {
     config: ScanConfig,
@@ -197,6 +216,7 @@ pub struct Scanner {
     record_read: Option<(MftMapping, RecordAssembly)>,
     bootstrap: Option<Record0>,
     discovery: Option<Discovery>,
+    ingest: Option<Ingest>,
 }
 
 impl Scanner {
@@ -215,6 +235,7 @@ impl Scanner {
             record_read: None,
             bootstrap: None,
             discovery: None,
+            ingest: None,
         })
     }
 
@@ -228,8 +249,8 @@ impl Scanner {
     /// # Errors
     ///
     /// Invalid geometry, bootstrap data, arithmetic overflow or allocation failure
-    /// terminates the scan. Successful bootstrap currently terminates with
-    /// [`ScanError::PhaseNotImplemented`] for Stream. Further calls return Inactive.
+    /// terminates the scan. Successful record ingestion currently terminates with
+    /// [`ScanError::PhaseNotImplemented`] for Merge. Further calls return Inactive.
     pub fn step(&mut self) -> Result<ScanStep, ScanError> {
         let span = tracing::info_span!("scan_phase", phase = ?self.phase);
         let _entered = span.enter();
@@ -268,6 +289,7 @@ impl Scanner {
             }
             ScanPhase::Record0 => self.read_record0(),
             ScanPhase::Discover => self.discover(),
+            ScanPhase::Stream => self.stream(),
             phase => Err(ScanError::PhaseNotImplemented { phase }),
         }
     }
@@ -328,10 +350,37 @@ impl Scanner {
         }
     }
 
+    fn stream(&mut self) -> Result<ScanStep, ScanError> {
+        let base = self.bootstrap.as_ref().ok_or(ScanError::Stream {
+            reason: "missing complete MFT mapping",
+        })?;
+        if self.ingest.is_none() {
+            self.ingest = Some(Ingest::new(
+                base.data_size,
+                base.mapping.geometry.file_record_size(),
+            )?);
+            return Ok(self.progress(false));
+        }
+        let state = self.ingest.as_mut().ok_or(ScanError::Stream {
+            reason: "missing ingestion state",
+        })?;
+        match state.step(&base.mapping, &mut self.requests, &self.config)? {
+            IngestStep::Need(request) => Ok(ScanStep::Need(request)),
+            IngestStep::Progress { waiting } => Ok(self.progress(waiting)),
+            IngestStep::Complete => {
+                self.phase = ScanPhase::Merge;
+                Ok(self.progress(false))
+            }
+        }
+    }
+
     fn progress(&self, waiting_for_input: bool) -> ScanStep {
         ScanStep::Progress(ScanProgress {
             phase: self.phase,
-            records_processed: 0,
+            records_processed: self
+                .ingest
+                .as_ref()
+                .map_or(0, |state| state.stats.records_total),
             outstanding: self.requests.len(),
             waiting_for_input,
         })

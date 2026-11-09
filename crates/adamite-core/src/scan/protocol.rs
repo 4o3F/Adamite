@@ -74,6 +74,7 @@ pub enum FeedError {
 struct Slot {
     request: ReadRequest,
     response: Option<Vec<u8>>,
+    consumed: usize,
 }
 
 /// The planner enqueues ranges in virtual order, independent of physical offsets.
@@ -133,6 +134,7 @@ impl Requests {
         self.slots.push_back(Slot {
             request,
             response: None,
+            consumed: 0,
         });
         self.next_id = id.checked_add(1);
         Ok(request)
@@ -176,6 +178,44 @@ impl Requests {
         self.slots.front()?.response.as_ref()?;
         let slot = self.slots.pop_front()?;
         slot.response.map(|response| (slot.request, response))
+    }
+
+    /// Keeps a partially consumed response in its slot until its last byte is used.
+    pub(super) fn ready_bytes(&self) -> Option<&[u8]> {
+        let slot = self.slots.front()?;
+        slot.response.as_ref()?.get(slot.consumed..)
+    }
+
+    pub(super) fn consume_prefix(&mut self, len: usize) -> Result<(), ScanError> {
+        let slot = self.slots.front_mut().ok_or(ScanError::Stream {
+            reason: "missing stream response",
+        })?;
+        let response = slot.response.as_ref().ok_or(ScanError::Stream {
+            reason: "stream response not ready",
+        })?;
+        let end = slot.consumed.checked_add(len).ok_or(ScanError::Overflow {
+            operation: "response consumption cursor",
+        })?;
+        if end > response.len() {
+            return Err(ScanError::Stream {
+                reason: "stream response over-consumed",
+            });
+        }
+        slot.consumed = end;
+        if end == response.len() {
+            self.slots.pop_front();
+        }
+        Ok(())
+    }
+
+    pub(super) fn retained_bytes(&self) -> Result<usize, ScanError> {
+        self.slots.iter().try_fold(0usize, |total, slot| {
+            total
+                .checked_add(slot.response.as_ref().map_or(0, Vec::capacity))
+                .ok_or(ScanError::Overflow {
+                    operation: "retained transport bytes",
+                })
+        })
     }
 
     pub(super) fn deactivate(&mut self) {
