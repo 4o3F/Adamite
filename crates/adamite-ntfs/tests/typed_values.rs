@@ -8,12 +8,12 @@
 //! Typed payload scenarios and independent semantic round-trip properties.
 
 mod support;
+use adamite_fixtures::builders::{AttrBuilder, FileNameBuilder, NonResidentModel, RecordBuilder};
 use adamite_ntfs::{
     Attribute, AttributeList, Bitmap, BitmapError, Data, FileAttributes, FileName, FileRecord,
     IndexAllocation, ReparsePoint, StandardInformation, ValueError, fixup,
 };
 use proptest::prelude::*;
-use support::builders::{AttrBuilder, FileNameBuilder, NonResidentModel, RecordBuilder};
 
 fn record(attributes: Vec<Vec<u8>>) -> Vec<u8> {
     RecordBuilder {

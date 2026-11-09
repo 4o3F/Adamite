@@ -7,7 +7,10 @@
 )]
 //! Counts allocations while classifying records and exhausting attributes and runs.
 
-mod support;
+use adamite_fixtures::builders::{
+    AttrBuilder, AttrListBuilder, AttrListEntryModel, FileNameBuilder, NonResidentModel,
+    RecordBuilder,
+};
 use adamite_ntfs::{
     AttributeList, Bitmap, Data, FileName, IndexAllocation, RecordClass, ReparsePoint,
     StandardInformation, classify,
@@ -15,10 +18,6 @@ use adamite_ntfs::{
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     cell::Cell,
-};
-use support::builders::{
-    AttrBuilder, AttrListBuilder, AttrListEntryModel, FileNameBuilder, NonResidentModel,
-    RecordBuilder,
 };
 
 thread_local! {
@@ -183,13 +182,14 @@ fn real_fixture_records_do_not_allocate_during_classification_or_iteration() {
     for name in ["basic-4k", "frag-512", "4kn-64k"] {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join(format!("../../tests/fixtures/ntfs/{name}.json"));
-        let fixture = support::fixture::Fixture::load(&path).unwrap();
+        let fixture = adamite_fixtures::Fixture::load(&path).unwrap();
+        let reference = adamite_fixtures::ReferenceMft::from_fixture(&fixture).unwrap();
         records.extend(
             fixture
-                .manifest
+                .manifest()
                 .entries
                 .iter()
-                .map(|entry| fixture.record(entry.record).unwrap().to_vec()),
+                .map(|entry| reference.record(entry.record).unwrap().to_vec()),
         );
     }
     ALLOCATIONS.with(|count| count.set(0));

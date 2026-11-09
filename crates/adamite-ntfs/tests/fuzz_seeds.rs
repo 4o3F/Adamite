@@ -8,14 +8,13 @@
 //! Generated typed-value seeds must select and satisfy their intended decoder.
 #[path = "../fuzz/fuzz_targets/typed_values/selectors.rs"]
 mod selectors;
-mod support;
 
+use adamite_fixtures::builders::RecordBuilder;
 use adamite_ntfs::{
     AttributeList, Bitmap, Data, FileName, FileRecord, IndexAllocation, ReparsePoint,
     StandardInformation, Utf16Le, fixup,
 };
 use std::{collections::BTreeSet, fs, path::Path};
-use support::builders::RecordBuilder;
 
 fn check_attributes(region: &[u8], selector: u8) {
     let mut offset = 0;

@@ -1,22 +1,23 @@
-#![allow(
-    clippy::indexing_slicing,
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::arithmetic_side_effects
-)]
-
 //! Independent on-disk encoders used by parser integration tests.
 
 #[derive(Debug, Clone)]
+/// Configurable NTFS boot-sector encoder independent of the parser.
 pub struct BootSectorBuilder {
+    /// Bytes per logical sector.
     pub sector: u16,
+    /// Raw sectors-per-cluster byte.
     pub cluster_encoding: u8,
+    /// Signed file-record-size encoding.
     pub file_encoding: i8,
+    /// Signed index-record-size encoding.
     pub index_encoding: i8,
+    /// Total volume sectors.
     pub sectors: u64,
+    /// MFT starting physical cluster.
     pub mft: u64,
+    /// MFT mirror starting physical cluster.
     pub mirror: u64,
+    /// Volume serial number.
     pub serial: u64,
 }
 
@@ -36,6 +37,11 @@ impl Default for BootSectorBuilder {
 }
 
 impl BootSectorBuilder {
+    /// Encodes the configured fields into owned bytes.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the configured lengths, offsets or values cannot fit the encoded format.
     pub fn build(&self) -> [u8; 512] {
         let mut bytes = [0; 512];
         bytes[..3].copy_from_slice(&[0xeb, 0x52, 0x90]);
@@ -54,17 +60,29 @@ impl BootSectorBuilder {
 }
 
 #[derive(Debug, Clone)]
+/// FILE record encoder with configurable headers, attributes and fixup trailers.
 pub struct RecordBuilder {
+    /// Record buffer size in bytes.
     pub size: usize,
+    /// Update-sequence array byte offset.
     pub usa_offset: u16,
+    /// Update-sequence number written to protected trailers.
     pub usn: u16,
+    /// Raw record flags.
     pub flags: u16,
+    /// Record sequence number.
     pub sequence: u16,
+    /// Header hard-link count.
     pub hard_links: u16,
+    /// Raw base FileRef; zero for a base record.
     pub base: u64,
+    /// Stored NTFS 3.1 record number.
     pub record_number: u32,
+    /// Log sequence number.
     pub lsn: u64,
+    /// Next available attribute instance id.
     pub next_attribute_id: u16,
+    /// Encoded, eight-byte-aligned attributes.
     pub attributes: Vec<Vec<u8>>,
 }
 
@@ -87,10 +105,16 @@ impl Default for RecordBuilder {
 }
 
 impl RecordBuilder {
+    /// Returns the aligned first-attribute offset after the update-sequence array.
     pub fn first_attribute(&self) -> usize {
         (usize::from(self.usa_offset) + (self.size / 512 + 1) * 2 + 7) & !7
     }
 
+    /// Encodes the record without applying update-sequence protection.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the configured lengths, offsets or values cannot fit the encoded format.
     pub fn plain(&self) -> Vec<u8> {
         let mut bytes = vec![0; self.size];
         bytes[..4].copy_from_slice(b"FILE");
@@ -120,6 +144,11 @@ impl RecordBuilder {
         bytes
     }
 
+    /// Copies a plain record and applies update-sequence protection.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the configured lengths, offsets or values cannot fit the encoded format.
     pub fn protect(&self, plain: &[u8]) -> Vec<u8> {
         let mut bytes = plain.to_vec();
         let usa = usize::from(self.usa_offset);
@@ -133,10 +162,20 @@ impl RecordBuilder {
         bytes
     }
 
+    /// Encodes the configured fields into owned bytes.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the configured lengths, offsets or values cannot fit the encoded format.
     pub fn build(&self) -> Vec<u8> {
         self.protect(&self.plain())
     }
 
+    /// Flips one protected trailer byte for a selected stride.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the configured lengths, offsets or values cannot fit the encoded format.
     pub fn corrupt_tail(&self, bytes: &mut [u8], stride: usize) {
         assert!(stride < self.size / 512);
         bytes[(stride + 1) * 512 - 2] ^= 1;
@@ -144,12 +183,19 @@ impl RecordBuilder {
 }
 
 #[derive(Debug, Clone)]
+/// Raw non-resident descriptor fields, including deliberately invalid test values.
 pub struct NonResidentModel {
+    /// Lowest VCN of this segment.
     pub lowest: i64,
+    /// Highest VCN of this segment.
     pub highest: i64,
+    /// Raw compression-unit byte.
     pub compression_unit: u8,
+    /// Allocated, data, initialized and compressed sizes, in that order.
     pub sizes: [i64; 4],
+    /// Encoded mapping pairs including their terminator.
     pub mapping_pairs: Vec<u8>,
+    /// Whether to force the extended size header.
     pub extended_header: bool,
 }
 
@@ -167,23 +213,35 @@ impl Default for NonResidentModel {
 }
 
 #[derive(Debug, Clone)]
+/// Resident bytes or a raw non-resident descriptor to encode.
 pub enum AttrBody {
+    /// Resident value bytes.
     Resident(Vec<u8>),
+    /// Non-resident descriptor and mapping pairs.
     NonResident(NonResidentModel),
 }
 
 #[derive(Debug, Clone)]
+/// Attribute encoder supporting names, padding and both storage forms.
 pub struct AttrBuilder {
+    /// Raw attribute type code.
     pub type_code: u32,
+    /// Attribute instance id.
     pub id: u16,
+    /// Raw attribute flags.
     pub flags: u16,
+    /// Attribute name as UTF-16 units.
     pub name: Vec<u16>,
+    /// Padding before the name.
     pub name_gap: usize,
+    /// Padding before the value or mapping pairs.
     pub body_gap: usize,
+    /// Storage form and value to encode.
     pub body: AttrBody,
 }
 
 impl AttrBuilder {
+    /// Creates a resident attribute with the supplied value.
     pub fn resident(type_code: u32, value: Vec<u8>) -> Self {
         Self {
             type_code,
@@ -196,6 +254,7 @@ impl AttrBuilder {
         }
     }
 
+    /// Creates a non-resident attribute from raw descriptor fields.
     pub fn non_resident(type_code: u32, model: NonResidentModel) -> Self {
         Self {
             body: AttrBody::NonResident(model),
@@ -203,6 +262,11 @@ impl AttrBuilder {
         }
     }
 
+    /// Encodes the configured fields into owned bytes.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the configured lengths, offsets or values cannot fit the encoded format.
     pub fn build(&self) -> Vec<u8> {
         assert!(self.name.len() <= 255);
         let header = match &self.body {
@@ -255,14 +319,23 @@ impl AttrBuilder {
 }
 
 #[derive(Debug, Clone)]
+/// FILE_NAME value encoder retaining cached sizes and raw name units.
 pub struct FileNameBuilder {
+    /// Raw parent FileRef.
     pub parent: u64,
+    /// Created, modified, changed and accessed FILETIMEs.
     pub times: [u64; 4],
+    /// Cached allocated size.
     pub allocated: u64,
+    /// Cached logical data size.
     pub data: u64,
+    /// Raw file attributes.
     pub attributes: u32,
+    /// EA-size or reparse-tag word.
     pub ea_or_reparse: u32,
+    /// Raw namespace byte.
     pub namespace: u8,
+    /// Filename as UTF-16 code units.
     pub name: Vec<u16>,
 }
 impl Default for FileNameBuilder {
@@ -280,6 +353,11 @@ impl Default for FileNameBuilder {
     }
 }
 impl FileNameBuilder {
+    /// Encodes the configured fields into owned bytes.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the configured lengths, offsets or values cannot fit the encoded format.
     pub fn build(&self) -> Vec<u8> {
         let mut bytes = vec![0; 66 + 2 * self.name.len()];
         bytes[..8].copy_from_slice(&self.parent.to_le_bytes());
@@ -300,11 +378,17 @@ impl FileNameBuilder {
 }
 
 #[derive(Debug, Clone)]
+/// Raw ATTRIBUTE_LIST segment reference for independent encoding.
 pub struct AttrListEntryModel {
+    /// Referenced attribute type.
     pub type_code: u32,
+    /// Lowest VCN of the referenced segment.
     pub lowest: i64,
+    /// Raw segment FileRef.
     pub segment: u64,
+    /// Referenced attribute instance id.
     pub id: u16,
+    /// Referenced attribute name as UTF-16 units.
     pub name: Vec<u16>,
 }
 impl Default for AttrListEntryModel {
@@ -319,11 +403,19 @@ impl Default for AttrListEntryModel {
     }
 }
 #[derive(Debug, Clone, Default)]
+/// ATTRIBUTE_LIST encoder with optional zero padding.
 pub struct AttrListBuilder {
+    /// Entries to encode in the supplied order.
     pub entries: Vec<AttrListEntryModel>,
+    /// Zero bytes appended after all entries.
     pub zero_tail: usize,
 }
 impl AttrListBuilder {
+    /// Encodes the configured fields into owned bytes.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the configured lengths, offsets or values cannot fit the encoded format.
     pub fn build(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
         for entry in &self.entries {

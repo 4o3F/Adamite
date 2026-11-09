@@ -8,9 +8,9 @@
 //! Bounded attribute iteration and non-resident stream descriptor contracts.
 
 mod support;
+use adamite_fixtures::builders::{AttrBody, AttrBuilder, NonResidentModel, RecordBuilder};
 use adamite_ntfs::{Attribute, AttributeError, FileRecord, fixup};
 use proptest::prelude::*;
-use support::builders::{AttrBody, AttrBuilder, NonResidentModel, RecordBuilder};
 
 #[test]
 fn basic_attribute_sequence_names_and_resident_values() {
@@ -53,8 +53,11 @@ fn normal_records_and_unknown_attributes_between_known_types() {
     for unknown in [false, true] {
         let mut attributes = vec![
             AttrBuilder::resident(0x10, vec![0x5a; 72]).build(),
-            AttrBuilder::resident(0x30, support::builders::FileNameBuilder::default().build())
-                .build(),
+            AttrBuilder::resident(
+                0x30,
+                adamite_fixtures::builders::FileNameBuilder::default().build(),
+            )
+            .build(),
             AttrBuilder::resident(0x80, vec![]).build(),
         ];
         let mut expected = vec![0x10, 0x30, 0x80];

@@ -10,9 +10,9 @@
 
 mod support;
 
+use adamite_fixtures::builders::BootSectorBuilder;
 use adamite_ntfs::{GeometryError, parse_boot_sector};
 use proptest::prelude::*;
-use support::builders::BootSectorBuilder;
 
 fn cluster_model(sector: u16, encoding: u8) -> Option<u128> {
     let sectors = match encoding {

@@ -10,10 +10,10 @@
 
 mod support;
 
+use adamite_fixtures::builders::RecordBuilder;
 use adamite_ntfs::fixup::{self, FixupError};
 use adamite_ntfs::{FileRecord, RecordClass, RecordError, RecordFlags, RecordHeader, classify};
 use proptest::prelude::*;
-use support::builders::RecordBuilder;
 
 #[test]
 fn peek_decodes_every_fixed_field_without_mutation() {

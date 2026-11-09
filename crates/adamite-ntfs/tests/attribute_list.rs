@@ -8,11 +8,11 @@
 //! Complete attribute-list values, entry boundaries and independent encoders.
 
 mod support;
-use adamite_ntfs::{AttributeList, AttributeListError, FileRecord, fixup};
-use proptest::prelude::*;
-use support::builders::{
+use adamite_fixtures::builders::{
     AttrBuilder, AttrListBuilder, AttrListEntryModel, NonResidentModel, RecordBuilder,
 };
+use adamite_ntfs::{AttributeList, AttributeListError, FileRecord, fixup};
+use proptest::prelude::*;
 
 fn default_value() -> Vec<u8> {
     AttrListBuilder {

@@ -8,10 +8,8 @@
 
 //! Independent encoders produce the requested on-disk byte layouts.
 
-mod support;
-
-use support::builders::{AttrBuilder, BootSectorBuilder, NonResidentModel, RecordBuilder};
-use support::runlist_encoder::{RunModel, RunlistEncoder};
+use adamite_fixtures::builders::{AttrBuilder, BootSectorBuilder, NonResidentModel, RecordBuilder};
+use adamite_fixtures::runlist_encoder::{RunModel, RunlistEncoder};
 
 #[test]
 fn boot_builder_encodes_literals_and_exponents() {

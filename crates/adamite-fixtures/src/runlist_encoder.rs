@@ -1,24 +1,27 @@
-#![allow(
-    clippy::indexing_slicing,
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::arithmetic_side_effects
-)]
-
 //! Independent semantic run encoder using wide integer arithmetic.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// One semantic run for independent mapping-pair encoding.
 pub struct RunModel {
+    /// Run length in clusters.
     pub len: u64,
+    /// Physical cluster, absent for a sparse run.
     pub lcn: Option<u64>,
 }
 
+/// Independent mapping-pair encoder with per-segment LCN delta state.
+#[derive(Debug, Clone)]
 pub struct RunlistEncoder {
+    /// Semantic runs to encode in their supplied order.
     pub runs: Vec<RunModel>,
 }
 
 impl RunlistEncoder {
+    /// Encodes runs with at least the requested field width.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the configured lengths, offsets or values cannot fit the encoded format.
     pub fn encode(&self, minimum_width: usize) -> Vec<u8> {
         assert!(minimum_width <= 8);
         let mut bytes = Vec::new();

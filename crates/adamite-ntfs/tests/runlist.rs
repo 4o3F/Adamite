@@ -10,10 +10,10 @@
 
 mod support;
 
+use adamite_fixtures::builders::BootSectorBuilder;
+use adamite_fixtures::runlist_encoder::{RunModel, RunlistEncoder};
 use adamite_ntfs::{Run, Runlist, RunlistError, VcnRange, parse_boot_sector};
 use proptest::prelude::*;
-use support::builders::BootSectorBuilder;
-use support::runlist_encoder::{RunModel, RunlistEncoder};
 
 fn decode(bytes: &[u8], lowest: i64, highest: i64) -> Result<Vec<Run>, RunlistError> {
     Runlist::new(bytes, VcnRange::new(lowest, highest)?).collect()

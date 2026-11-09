@@ -3,12 +3,22 @@
 version = 4
 
 [[package]]
+name = "adamite-fixtures"
+version = "0.1.0"
+dependencies = [
+ "adamite-ntfs",
+ "ruzstd",
+ "serde",
+ "serde_json",
+ "snafu",
+]
+
+[[package]]
 name = "adamite-ntfs"
 version = "0.1.0"
 dependencies = [
+ "adamite-fixtures",
  "proptest",
- "ruzstd",
- "serde",
  "serde_json",
  "snafu",
 ]

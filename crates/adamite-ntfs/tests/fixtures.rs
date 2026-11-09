@@ -6,8 +6,8 @@
     clippy::arithmetic_side_effects
 )]
 //! Independent manifest oracles over the complete MFT of every committed image.
-mod support;
 
+use adamite_fixtures::{EntryKind, Fixture, ReferenceMft};
 use adamite_ntfs::{
     AttributeFlags, AttributeType, FileName, FileRecord, FileRef, IndexAllocation, RecordClass,
     RecordFlags, RecordHeader, ReparsePoint, StandardInformation, classify,
@@ -16,7 +16,6 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     path::Path,
 };
-use support::fixture::{EntryKind, Fixture};
 
 type NameKey = (u64, u16, Vec<u16>, u8);
 #[derive(Debug, Default)]
@@ -99,10 +98,12 @@ fn verify(name: &str) {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join(format!("../../tests/fixtures/ntfs/{name}.json"));
     let fixture = Fixture::load(&path).unwrap_or_else(|error| panic!("{name}: {error}"));
-    assert_eq!(fixture.extents, fixture.manifest.mft.extents);
+    let mft =
+        ReferenceMft::from_fixture(&fixture).unwrap_or_else(|error| panic!("{name}: {error}"));
+    assert_eq!(mft.extents(), fixture.manifest().mft.extents);
     let mut observed: BTreeMap<u64, Observed> = BTreeMap::new();
     let mut extensions = Vec::new();
-    for (number, bytes) in fixture.records().enumerate() {
+    for (number, bytes) in mft.records().enumerate() {
         let mut raw = bytes.to_vec();
         match classify(&mut raw) {
             RecordClass::Base(record) => {
@@ -123,7 +124,7 @@ fn verify(name: &str) {
             base.sequence()
         );
     }
-    for entry in &fixture.manifest.entries {
+    for entry in &fixture.manifest().entries {
         let actual = observed
             .get(&entry.record)
             .unwrap_or_else(|| panic!("missing {}", entry.path));
@@ -217,7 +218,7 @@ fn verify(name: &str) {
             assert!(actual.has_index);
         }
     }
-    for fill in &fixture.manifest.fill {
+    for fill in &fixture.manifest().fill {
         let prefix: Vec<_> = fill.name_prefix.encode_utf16().collect();
         let parent = FileRef::new(fill.parent_record, fill.parent_seq).unwrap();
         let mut count = 0;
@@ -235,7 +236,7 @@ fn verify(name: &str) {
                 "{} record range",
                 fill.dir
             );
-            let mut raw = fixture.record(number).unwrap().to_vec();
+            let mut raw = mft.record(number).unwrap().to_vec();
             assert!(
                 matches!(classify(&mut raw), RecordClass::Base(_)),
                 "{} record {number} is not Base",
@@ -254,10 +255,10 @@ fn verify(name: &str) {
     assert!(root.names.iter().any(|name| name.0 == 5 && name.1 == 5));
     assert_eq!(
         observed[&0].has_list,
-        fixture.manifest.mft.has_attribute_list
+        fixture.manifest().mft.has_attribute_list
     );
-    for deleted in &fixture.manifest.deleted {
-        let mut raw = fixture.record(deleted.record).unwrap().to_vec();
+    for deleted in &fixture.manifest().deleted {
+        let mut raw = mft.record(deleted.record).unwrap().to_vec();
         assert!(
             matches!(classify(&mut raw), RecordClass::NotInUse(_)),
             "{} deleted record",

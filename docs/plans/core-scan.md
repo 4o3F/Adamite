@@ -97,8 +97,8 @@ Each automated milestone is one bounded Codex run targeting 15–30 minutes, inc
 
 ### M1 — Shared fixtures and workspace dependencies
 
-- [ ] M1.1 Add workspace tracing, create the unpublished fixture crate, extract the loader/reference bootstrap and reusable builders, and migrate parser tests without changing v2 behavior.
-- [ ] M1.2 Update lockfiles and dev-dependencies; retain parser allocation and embedded checks. Verify: `deno task check`.
+- [x] M1.1 Add workspace tracing, create the unpublished fixture crate, extract the loader/reference bootstrap and reusable builders, and migrate parser tests without changing v2 behavior.
+- [x] M1.2 Update lockfiles and dev-dependencies; retain parser allocation and embedded checks. Verify: `deno task check`.
 
 ### M2 — Schema v3 generator and compatible readers
 

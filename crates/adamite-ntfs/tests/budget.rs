@@ -6,13 +6,12 @@
     clippy::arithmetic_side_effects
 )]
 //! Compressed fixture budget and compiled reference bootstrap support.
-mod support;
-use std::{fs, io, path::Path};
-use support::builders::{
+use adamite_fixtures::builders::{
     AttrBuilder, AttrListBuilder, AttrListEntryModel, BootSectorBuilder, NonResidentModel,
     RecordBuilder,
 };
-use support::fixture::{Fixture, Manifest};
+use adamite_fixtures::{Fixture, Manifest, ReferenceMft};
+use std::{fs, io, path::Path};
 
 fn compressed_size(directory: &Path) -> io::Result<u64> {
     let entries = match fs::read_dir(directory) {
@@ -177,10 +176,15 @@ fn bootstrap_follows_an_attribute_list_only_through_known_extents() {
     image[2048..4096].copy_from_slice(&mft[..2048]);
     image[6144..12288].copy_from_slice(&mft[2048..]);
     let fixture = Fixture::from_image(image.clone(), manifest()).unwrap();
-    assert_eq!(fixture.records().len(), 8);
-    assert_eq!(fixture.record(2).unwrap(), &mft[2048..3072]);
-    assert!(fixture.record(8).is_none());
+    let reference = ReferenceMft::from_fixture(&fixture).unwrap();
+    assert_eq!(reference.records().len(), 8);
+    assert_eq!(reference.record(2).unwrap(), &mft[2048..3072]);
+    assert!(reference.record(8).is_none());
     let mut unreachable = image;
     unreachable[2048 + 56 + 64 + 2] = 1;
-    assert!(Fixture::from_image(unreachable, manifest()).is_err());
+    assert!(
+        Fixture::from_image(unreachable, manifest())
+            .and_then(|fixture| ReferenceMft::from_fixture(&fixture))
+            .is_err()
+    );
 }
