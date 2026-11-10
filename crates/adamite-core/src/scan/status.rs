@@ -63,6 +63,17 @@ impl ScanOutput {
     pub fn to_bytes(&self) -> Result<Vec<u8>, PersistError> {
         self.snapshot.to_adm_bytes(&self.stats)
     }
+
+    /// Decodes canonical `.adm` v1 bytes after validating the format, tree and indexes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PersistError`] for invalid or truncated bytes, unsupported versions,
+    /// checksum or snapshot invariant failures, arithmetic overflow, or allocation failure.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, PersistError> {
+        let (snapshot, stats) = Snapshot::from_adm_bytes(bytes)?;
+        Ok(Self { snapshot, stats })
+    }
 }
 
 /// A read request, current progress or the completed scan result.

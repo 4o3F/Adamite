@@ -95,7 +95,7 @@ Each milestone ends with one reviewed commit and `deno task check` green. A mile
 
 ### P3 — Decoder and validation
 
-- [ ] Add `decode.rs` and `validate.rs` with every D3 and D4 check and public `ScanOutput::from_bytes`. Round-trip tests on all fixtures and the context variants.
+- [x] Add `decode.rs` and `validate.rs` with every D3 and D4 check and public `ScanOutput::from_bytes`. Round-trip tests on all fixtures and the context variants.
 
 ### P4 — Rejection tests
 
