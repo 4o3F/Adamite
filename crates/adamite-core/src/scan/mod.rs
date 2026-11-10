@@ -1,8 +1,6 @@
 //! Scan configuration, request transport and phase transitions.
 
 mod config;
-mod ingest;
-mod merge;
 mod protocol;
 mod scanner;
 mod stats;

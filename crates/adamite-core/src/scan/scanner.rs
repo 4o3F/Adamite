@@ -2,10 +2,6 @@
 
 use super::{ConfigError, FeedError, ScanConfig, config::BOOT_BYTES, protocol::Requests};
 use super::{ReadRequest, RequestId};
-use super::{
-    ingest::{Ingest, IngestStep},
-    merge::Merge,
-};
 use crate::{
     ScanStats, Snapshot,
     error::ScanError,
@@ -14,11 +10,16 @@ use crate::{
     mft::{
         bootstrap::Record0,
         discovery::{Discovery, DiscoveryStep},
+        ingest::Ingest,
         mapping::{MftMapping, RecordAssembly},
+        merge::Merge,
     },
     snapshot::{Aggregator, Finalizer, ParentTree, SnapshotBuilder},
 };
 use adamite_ntfs::boot::VolumeGeometry;
+
+/// Maximum streamed records decoded in one driver call across all ready responses.
+const RECORDS_PER_STEP: usize = 256;
 
 /// A scan's current processing phase or terminal state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -275,6 +276,32 @@ impl Scanner {
         }
     }
 
+    fn stream_transport_bytes(state: &Ingest, requests: &Requests) -> Result<usize, ScanError> {
+        requests
+            .retained_bytes()?
+            .checked_add(state.buffer_capacity())
+            .ok_or_else(|| ScanError::overflow("stream transport storage"))
+    }
+
+    fn check_stream_bound(
+        state: &Ingest,
+        requests: &Requests,
+        config: &ScanConfig,
+    ) -> Result<(), ScanError> {
+        let bound = config
+            .max_outstanding
+            .checked_mul(config.chunk_size)
+            .and_then(|bytes| bytes.checked_add(state.record_size()))
+            .ok_or_else(|| ScanError::overflow("stream transport bound"))?;
+        let retained = Self::stream_transport_bytes(state, requests)?;
+        if retained > bound {
+            return Err(ScanError::stream(
+                "stream transport storage exceeds its bound",
+            ));
+        }
+        Ok(())
+    }
+
     fn stream(&mut self) -> Result<ScanStep, ScanError> {
         let base = self.bootstrap.as_ref().ok_or(ScanError::Stream {
             reason: "missing complete MFT mapping",
@@ -289,18 +316,43 @@ impl Scanner {
         let state = self.ingest.as_mut().ok_or(ScanError::Stream {
             reason: "missing ingestion state",
         })?;
-        match state.step(&base.mapping, &mut self.requests, &self.config)? {
-            IngestStep::Need(request) => Ok(ScanStep::Need(request)),
-            IngestStep::Progress { waiting } => Ok(self.progress(if waiting {
-                InputStatus::Waiting
-            } else {
-                InputStatus::Ready
-            })),
-            IngestStep::Complete => {
-                self.phase = ScanPhase::Merge;
-                Ok(self.progress(InputStatus::Ready))
+        Self::check_stream_bound(state, &self.requests, &self.config)?;
+        if self.requests.len() < self.config.max_outstanding
+            && let Some(plan) = state.next_piece(&base.mapping, self.config.chunk_size)?
+        {
+            let request = self.requests.issue(plan.offset, plan.len)?;
+            state.planned(plan);
+            return Ok(ScanStep::Need(request));
+        }
+        let mut remaining = RECORDS_PER_STEP;
+        while remaining != 0 {
+            let Some(bytes) = self.requests.ready_bytes() else {
+                break;
+            };
+            let consumed = state.accept_prefix(bytes)?;
+            self.requests.consume_prefix(consumed)?;
+            if state.finish_record(&base.mapping)? {
+                remaining = remaining
+                    .checked_sub(1)
+                    .ok_or_else(|| ScanError::overflow("CPU record batch"))?;
             }
         }
+        Self::check_stream_bound(state, &self.requests, &self.config)?;
+        if state.is_complete()? {
+            if state.has_partial_record() || self.requests.len() != 0 {
+                return Err(ScanError::stream(
+                    "leftover MFT transport after the final record",
+                ));
+            }
+            self.phase = ScanPhase::Merge;
+            return Ok(self.progress(InputStatus::Ready));
+        }
+        let can_issue = state.has_unplanned() && self.requests.len() < self.config.max_outstanding;
+        Ok(self.progress(if !self.requests.has_ready() && !can_issue {
+            InputStatus::Waiting
+        } else {
+            InputStatus::Ready
+        }))
     }
 
     fn merge(&mut self) -> Result<ScanStep, ScanError> {

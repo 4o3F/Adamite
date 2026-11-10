@@ -1,14 +1,13 @@
-//! Bounded MFT transport, ordinal classification and owned record contributions.
+//! Bounded MFT byte assembly, ordinal classification and owned record contributions.
 
 mod decode;
 
-use super::{ReadRequest, ScanConfig, protocol::Requests};
 use crate::{
     ScanStats,
     error::ScanError,
     mft::{
         mapping::MftMapping,
-        model::{Patch, RecordKind, RecordSlot},
+        model::{Patch, RecordContribution, RecordKind, RecordSlot},
     },
     util::{CounterExt, VecExt},
 };
@@ -17,17 +16,16 @@ use adamite_ntfs::record::{
     system::ROOT,
 };
 
-const RECORDS_PER_STEP: usize = 256;
-
+/// A checked read range and the virtual cursor to commit after successful issue.
 #[derive(Debug)]
-pub(super) enum IngestStep {
-    Need(ReadRequest),
-    Progress { waiting: bool },
-    Complete,
+pub(crate) struct ReadPlan {
+    pub offset: u64,
+    pub len: usize,
+    end: u64,
 }
 
 #[derive(Debug)]
-pub(super) struct Ingest {
+pub(crate) struct Ingest {
     data_size: u64,
     record_size: usize,
     planned: u64,
@@ -38,7 +36,7 @@ pub(super) struct Ingest {
 }
 
 impl Ingest {
-    pub(super) fn new(data_size: u64, record_size: u32) -> Result<Self, ScanError> {
+    pub(crate) fn new(data_size: u64, record_size: u32) -> Result<Self, ScanError> {
         let record_size =
             usize::try_from(record_size).map_err(|_| ScanError::overflow("record size"))?;
         let mut raw = Vec::new();
@@ -54,84 +52,84 @@ impl Ingest {
         })
     }
 
-    pub(super) fn transport_bytes(&self, requests: &Requests) -> Result<usize, ScanError> {
-        requests
-            .retained_bytes()?
-            .checked_add(self.raw.capacity())
-            .ok_or_else(|| ScanError::overflow("stream transport storage"))
+    pub(crate) fn buffer_capacity(&self) -> usize {
+        self.raw.capacity()
     }
 
-    fn check_bound(&self, requests: &Requests, config: &ScanConfig) -> Result<(), ScanError> {
-        let bound = config
-            .max_outstanding
-            .checked_mul(config.chunk_size)
-            .and_then(|bytes| bytes.checked_add(self.record_size))
-            .ok_or_else(|| ScanError::overflow("stream transport bound"))?;
-        let retained = self.transport_bytes(requests)?;
-        if retained > bound {
-            return Err(ScanError::stream(
-                "stream transport storage exceeds its bound",
-            ));
-        }
-        Ok(())
+    pub(crate) fn record_size(&self) -> usize {
+        self.record_size
     }
 
-    pub(super) fn step(
-        &mut self,
+    pub(crate) fn has_partial_record(&self) -> bool {
+        !self.raw.is_empty()
+    }
+
+    pub(crate) fn has_unplanned(&self) -> bool {
+        self.planned < self.data_size
+    }
+
+    pub(crate) fn next_piece(
+        &self,
         mapping: &MftMapping,
-        requests: &mut Requests,
-        config: &ScanConfig,
-    ) -> Result<IngestStep, ScanError> {
-        self.check_bound(requests, config)?;
-        if self.planned < self.data_size && requests.len() < config.max_outstanding {
-            let remaining = self
-                .data_size
-                .checked_sub(self.planned)
-                .ok_or_else(|| ScanError::overflow("unplanned MFT bytes"))?;
-            let len = usize::try_from(
-                remaining.min(
-                    u64::try_from(config.chunk_size)
-                        .map_err(|_| ScanError::overflow("chunk length"))?,
-                ),
+        chunk: usize,
+    ) -> Result<Option<ReadPlan>, ScanError> {
+        if !self.has_unplanned() {
+            return Ok(None);
+        }
+        let remaining = self
+            .data_size
+            .checked_sub(self.planned)
+            .ok_or_else(|| ScanError::overflow("unplanned MFT bytes"))?;
+        let len = usize::try_from(
+            remaining.min(u64::try_from(chunk).map_err(|_| ScanError::overflow("chunk length"))?),
+        )
+        .map_err(|_| ScanError::overflow("stream request length"))?;
+        let piece = mapping.read_piece(self.planned, len)?;
+        let end = self
+            .planned
+            .checked_add(
+                u64::try_from(piece.len)
+                    .map_err(|_| ScanError::overflow("stream request length"))?,
             )
-            .map_err(|_| ScanError::overflow("stream request length"))?;
-            let piece = mapping.read_piece(self.planned, len)?;
-            let end = self
-                .planned
-                .checked_add(
-                    u64::try_from(piece.len)
-                        .map_err(|_| ScanError::overflow("stream request length"))?,
-                )
-                .ok_or_else(|| ScanError::overflow("stream planning cursor"))?;
-            let request = requests.issue(piece.offset, piece.len)?;
-            self.planned = end;
-            return Ok(IngestStep::Need(request));
+            .ok_or_else(|| ScanError::overflow("stream planning cursor"))?;
+        Ok(Some(ReadPlan {
+            offset: piece.offset,
+            len: piece.len,
+            end,
+        }))
+    }
+
+    /// Commits the prechecked cursor after the driver successfully issues this range.
+    pub(crate) fn planned(&mut self, plan: ReadPlan) {
+        self.planned = plan.end;
+    }
+
+    /// Appends at most the prefix needed to finish one record.
+    pub(crate) fn accept_prefix(&mut self, bytes: &[u8]) -> Result<usize, ScanError> {
+        let remaining = self
+            .record_size
+            .checked_sub(self.raw.len())
+            .ok_or_else(|| ScanError::overflow("partial record remainder"))?;
+        let len = remaining.min(bytes.len());
+        self.raw.extend_from_slice(
+            bytes
+                .get(..len)
+                .ok_or_else(|| ScanError::stream("missing response prefix"))?,
+        );
+        Ok(len)
+    }
+
+    /// Decodes a complete record after its response prefix has been consumed.
+    pub(crate) fn finish_record(&mut self, mapping: &MftMapping) -> Result<bool, ScanError> {
+        if self.raw.len() != self.record_size {
+            return Ok(false);
         }
-        let mut processed = 0usize;
-        while processed < RECORDS_PER_STEP {
-            let Some(bytes) = requests.ready_bytes() else {
-                break;
-            };
-            let remaining = self
-                .record_size
-                .checked_sub(self.raw.len())
-                .ok_or_else(|| ScanError::overflow("partial record remainder"))?;
-            let len = remaining.min(bytes.len());
-            self.raw.extend_from_slice(
-                bytes
-                    .get(..len)
-                    .ok_or_else(|| ScanError::stream("missing response prefix"))?,
-            );
-            requests.consume_prefix(len)?;
-            if self.raw.len() == self.record_size {
-                self.record(mapping)?;
-                self.raw.clear();
-                processed = processed
-                    .checked_add(1)
-                    .ok_or_else(|| ScanError::overflow("CPU record batch"))?;
-            }
-        }
-        self.check_bound(requests, config)?;
+        self.record(mapping)?;
+        self.raw.clear();
+        Ok(true)
+    }
+
+    pub(crate) fn is_complete(&self) -> Result<bool, ScanError> {
         let consumed = self
             .stats
             .records_total
@@ -147,17 +145,9 @@ impl Ingest {
             {
                 return Err(ScanError::RequiredRecord { record: ROOT });
             }
-            if !self.raw.is_empty() || requests.len() != 0 {
-                return Err(ScanError::stream(
-                    "leftover MFT transport after the final record",
-                ));
-            }
-            return Ok(IngestStep::Complete);
+            return Ok(true);
         }
-        let can_issue = self.planned < self.data_size && requests.len() < config.max_outstanding;
-        Ok(IngestStep::Progress {
-            waiting: !requests.has_ready() && !can_issue,
-        })
+        Ok(false)
     }
 
     fn record(&mut self, mapping: &MftMapping) -> Result<(), ScanError> {
@@ -181,7 +171,7 @@ impl Ingest {
             }
             RecordClass::NotInUse(header) => {
                 slot.classification = RecordKind::Deleted;
-                set_header(&mut slot, header);
+                slot.set_header(header);
                 self.stats.deleted.try_bump()?;
                 // Unallocated FILE slots can leave the stored record number unset.
                 if header
@@ -194,7 +184,7 @@ impl Ingest {
             }
             RecordClass::Corrupt(error) => {
                 self.stats.corrupt_records.try_bump()?;
-                record_error(error, &mut self.stats)?;
+                Self::record_error(error, &mut self.stats)?;
             }
             RecordClass::Base(record) | RecordClass::Extension(record) => {
                 let header = record.header();
@@ -204,7 +194,7 @@ impl Ingest {
                 } else {
                     RecordKind::Extension
                 };
-                set_header(&mut slot, header);
+                slot.set_header(header);
                 self.stats.records_in_use.try_bump()?;
                 let counter = if base {
                     &mut self.stats.base_records
@@ -226,14 +216,14 @@ impl Ingest {
                             return Err(ScanError::FileRef { source });
                         }
                     };
-                    match decode::contribution(&record, reference, mapping.geometry) {
+                    match RecordContribution::decode(&record, reference, mapping.geometry) {
                         Ok(contribution) if base => slot.base = Some(contribution),
                         Ok(contribution) => self.patches.try_push(Patch {
                             base: header.base_reference(),
                             source: reference,
                             contribution,
                         })?,
-                        Err(error) => decode::contribution_error(error, &mut self.stats)?,
+                        Err(error) => error.account(&mut self.stats)?,
                     }
                 }
             }
@@ -250,22 +240,24 @@ impl Ingest {
         }
         Ok(())
     }
+
+    fn record_error(error: RecordError, stats: &mut ScanStats) -> Result<(), ScanError> {
+        let counter = match error {
+            RecordError::Fixup {
+                source: FixupError::TrailerMismatch { .. },
+            } => &mut stats.bad_fixup,
+            RecordError::Fixup { .. } => &mut stats.invalid_fixup_metadata,
+            RecordError::InvalidSignature { .. } => &mut stats.invalid_signature,
+            _ => &mut stats.corrupt_headers,
+        };
+        counter.try_bump()?;
+        Ok(())
+    }
 }
 
-fn set_header(slot: &mut RecordSlot, header: RecordHeader) {
-    slot.sequence = Some(header.sequence());
-    slot.flags = Some(header.flags());
-}
-
-fn record_error(error: RecordError, stats: &mut ScanStats) -> Result<(), ScanError> {
-    let counter = match error {
-        RecordError::Fixup {
-            source: FixupError::TrailerMismatch { .. },
-        } => &mut stats.bad_fixup,
-        RecordError::Fixup { .. } => &mut stats.invalid_fixup_metadata,
-        RecordError::InvalidSignature { .. } => &mut stats.invalid_signature,
-        _ => &mut stats.corrupt_headers,
-    };
-    counter.try_bump()?;
-    Ok(())
+impl RecordSlot {
+    fn set_header(&mut self, header: RecordHeader) {
+        self.sequence = Some(header.sequence());
+        self.flags = Some(header.flags());
+    }
 }

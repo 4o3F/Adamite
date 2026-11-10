@@ -256,10 +256,11 @@ fn merge_missing_stale_and_discarded_bases_reject_patch_without_mutation() -> Te
             _ => slots.get_mut(6).ok_or("slot")?.base = None,
         }
         let mut stats = ScanStats::default();
-        apply_patch(&mut slots, added, &mut stats)?;
+        let mut merge = Merge::new(slots, vec![], 512);
+        merge.apply_patch(added, &mut stats)?;
         assert_eq!(stats.rejected_extensions, 1);
         assert_eq!(stats.invalid_file_refs, 1);
-        if let Some(base) = slots.get(6).and_then(|slot| slot.base.as_ref()) {
+        if let Some(base) = merge.slots.get(6).and_then(|slot| slot.base.as_ref()) {
             assert_eq!(base.names.len(), 1);
             assert_eq!(base.names.first().ok_or("base name")?.name, vec![65]);
             assert!(base.standard_information.is_empty());

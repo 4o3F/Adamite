@@ -1643,7 +1643,7 @@ fn assert_transport_bound(scanner: &Scanner) -> Result<usize, Box<dyn Error>> {
             .checked_mul(scanner.config.chunk_size)
             .and_then(|n| n.checked_add(record_size))
             .ok_or("transport byte bound")?;
-        let retained = state.transport_bytes(&scanner.requests)?;
+        let retained = Scanner::stream_transport_bytes(state, &scanner.requests)?;
         assert!(
             retained <= bound,
             "retained raw MFT exceeds cap * chunk + record"
@@ -2054,9 +2054,30 @@ fn ingest_small_chunks_reordering_and_transport_bound_are_independent() -> TestR
             chunk_size: chunk,
             ..ScanConfig::default()
         })?;
-        let (_, outcome, peak_transport_bytes) =
+        let (requests, outcome, peak_transport_bytes) =
             drive_to_observed(&mut scanner, &volume, ScanPhase::Merge)?;
         outcome?;
+        let mut expected_ranges = vec![(0, 512), (4096, chunk.min(1024))];
+        if chunk == 512 {
+            expected_ranges.push((4608, 512));
+        }
+        for offset in (4096u64..20_480).step_by(chunk) {
+            expected_ranges.push((
+                offset,
+                usize::try_from(20_480u64.checked_sub(offset).ok_or("read end")?)?.min(chunk),
+            ));
+        }
+        assert_eq!(
+            requests
+                .iter()
+                .map(|request| (request.offset, request.len))
+                .collect::<Vec<_>>(),
+            expected_ranges,
+            "ingest request ranges at cap {cap}, chunk {chunk}"
+        );
+        for (index, request) in requests.iter().enumerate() {
+            assert_eq!(request.id.raw(), u64::try_from(index)?);
+        }
         let actual = scanner.ingest.as_ref().ok_or("state")?;
         assert_eq!(actual.slots, expected.slots);
         assert_eq!(actual.patches, expected.patches);
@@ -2077,13 +2098,81 @@ fn ingest_small_chunks_reordering_and_transport_bound_are_independent() -> TestR
 }
 
 #[test]
+fn ingest_issues_before_consuming_and_retains_partial_response_slots() -> TestResult {
+    let volume = ingest_volume(700, vec![])?;
+    let mut scanner = Scanner::new(ScanConfig {
+        max_outstanding: 3,
+        chunk_size: 196_608,
+        ..ScanConfig::default()
+    })?;
+    drive_to(&mut scanner, &volume, ScanPhase::Stream)?.1?;
+    assert!(matches!(scanner.step()?, ScanStep::Progress(_)));
+    for _ in 0..3 {
+        let ScanStep::Need(request) = scanner.step()? else {
+            return Err("stream must fill available request slots before consuming".into());
+        };
+        let start = usize::try_from(request.offset)?;
+        let end = start.checked_add(request.len).ok_or("response end")?;
+        scanner.feed(request.id, volume.get(start..end).ok_or("response bytes")?)?;
+        assert_eq!(
+            scanner.ingest.as_ref().ok_or("ingest")?.stats.records_total,
+            0
+        );
+    }
+    let ScanStep::Progress(progress) = scanner.step()? else {
+        return Err("full request queue must consume a bounded record batch".into());
+    };
+    assert_eq!(progress.records_processed, 256);
+    assert!(!progress.waiting_for_input);
+    assert_eq!(scanner.requests.len(), 2);
+    assert_eq!(
+        scanner
+            .requests
+            .ready_bytes()
+            .ok_or("partial response")?
+            .len(),
+        131_072
+    );
+
+    let ScanStep::Need(request) = scanner.step()? else {
+        return Err("freed request capacity must be filled before further consumption".into());
+    };
+    assert_eq!((request.offset, request.len), (593_920, 126_976));
+    assert_eq!(
+        scanner.ingest.as_ref().ok_or("ingest")?.stats.records_total,
+        256
+    );
+    assert_eq!(scanner.requests.len(), 3);
+    assert_eq!(
+        scanner
+            .requests
+            .ready_bytes()
+            .ok_or("retained response")?
+            .len(),
+        131_072
+    );
+    let start = usize::try_from(request.offset)?;
+    let end = start.checked_add(request.len).ok_or("response end")?;
+    scanner.feed(request.id, volume.get(start..end).ok_or("response bytes")?)?;
+    drive_to(&mut scanner, &volume, ScanPhase::Merge)?.1?;
+    assert_eq!(
+        scanner.ingest.as_ref().ok_or("ingest")?.stats.records_total,
+        700
+    );
+    assert_eq!(scanner.requests.len(), 0);
+    Ok(())
+}
+
+#[test]
 fn ingest_cpu_steps_yield_within_256_records() -> TestResult {
     let volume = ingest_volume(700, vec![])?;
-    let (scanner, _, outcome) = ingest_image(&volume, 1, 1_048_576)?;
-    outcome?;
-    let state = scanner.ingest.as_ref().ok_or("state")?;
-    assert_eq!(state.stats.records_total, 700);
-    assert_eq!(state.slots.len(), 700);
+    for (cap, chunk) in [(1, 1_048_576), (4, 131_072), (3, 262_144)] {
+        let (scanner, _, outcome) = ingest_image(&volume, cap, chunk)?;
+        outcome?;
+        let state = scanner.ingest.as_ref().ok_or("state")?;
+        assert_eq!(state.stats.records_total, 700);
+        assert_eq!(state.slots.len(), 700);
+    }
     Ok(())
 }
 

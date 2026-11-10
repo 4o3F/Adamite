@@ -133,8 +133,8 @@ Each milestone is one bounded agent run of at most 30 minutes, including verific
 
 ### M5 — Ingestion and merge ownership
 
-- [ ] Move ingest/decode/merge into MFT, apply the remaining D5 owners, and move request-queue/capacity/waiting work into the driver. Preserve prefix consumption and one per-call work budget; remove all five old scan-stage modules and protocol imports from MFT.
-- [ ] Verify record 4095 reassembly, diagnostic counters, late-decode rejection, transactional patches, stream accounting and 256-item batches. Finish with `deno task check` green.
+- [x] Move ingest/decode/merge into MFT, apply the remaining D5 owners, and move request-queue/capacity/waiting work into the driver. Preserve prefix consumption and one per-call work budget; remove all five old scan-stage modules and protocol imports from MFT.
+- [x] Verify record 4095 reassembly, diagnostic counters, late-decode rejection, transactional patches, stream accounting and 256-item batches. Finish with `deno task check` green.
 
 ### M6 — Canonical public paths and driver contract types
 
