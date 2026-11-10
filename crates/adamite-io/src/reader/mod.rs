@@ -2,9 +2,13 @@
 
 mod image;
 mod slice;
+#[cfg(windows)]
+mod windows;
 
 pub use image::ImageReader;
 pub use slice::SliceReader;
+#[cfg(windows)]
+pub use windows::RawVolumeReader;
 
 use crate::error::VolumeError;
 

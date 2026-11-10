@@ -2,6 +2,8 @@
 
 use adamite_core::scan::{ScanConfig, ScanContext};
 use adamite_fixtures::Fixture;
+#[cfg(windows)]
+use adamite_io::reader::RawVolumeReader;
 use adamite_io::{
     driver::SyncDriver,
     error::VolumeError,
@@ -18,6 +20,8 @@ fn assert_send_sync<T: Send + Sync>() {}
 fn public_thread_safety_bounds() {
     assert_send::<SliceReader<'static>>();
     assert_send::<ImageReader>();
+    #[cfg(windows)]
+    assert_send::<RawVolumeReader>();
     assert_send::<SyncDriver>();
     assert_send_sync::<VolumeError>();
 }

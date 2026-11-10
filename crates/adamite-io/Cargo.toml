@@ -11,8 +11,13 @@ adamite-core = { version = "0.1.0", path = "../adamite-core" }
 snafu.workspace = true
 tracing.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+nt-time = { version = "0.15", default-features = false, features = ["std"] }
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Ioctl", "Win32_System_IO"] }
+
 [dev-dependencies]
 adamite-fixtures = { version = "0.1.0", path = "../adamite-fixtures" }
+proptest = { version = "1.12", default-features = false, features = ["std"] }
 
 [lints]
 workspace = true
