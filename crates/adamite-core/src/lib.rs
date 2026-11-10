@@ -1,15 +1,18 @@
 //! Single-threaded NTFS scans from caller-supplied bytes into immutable snapshots and diagnostic counters.
 //!
-//! [`Scanner::step`] emits volume-relative [`ReadRequest`] values; [`Scanner::feed`] copies exact responses. Core performs no I/O, defines no reader trait or callback, and starts no threads or timers. The caller owns reads, waiting and optional [`ScanContext`] metadata.
+//! [`scan::Scanner::step`] emits volume-relative [`scan::ReadRequest`] values; [`scan::Scanner::feed`] copies exact responses. Core performs no I/O, defines no reader trait or callback, and starts no threads or timers. The caller owns reads, waiting and optional [`scan::ScanContext`] metadata.
 //!
-//! [`ScanConfig::default`] selects one outstanding request and 1 MiB chunks. Valid chunks are multiples of 512 from 512 bytes to 16 MiB; cap must be positive and cap × chunk must fit `usize`. Responses may arrive in any order, but slots stay occupied until consumed in virtual order. Transport storage is bounded separately from metadata storage, which grows with the scan.
+//! [`scan::ScanConfig::default`] selects one outstanding request and 1 MiB chunks. Valid chunks are multiples of 512 from 512 bytes to 16 MiB; cap must be positive and cap × chunk must fit `usize`. Responses may arrive in any order, but slots stay occupied until consumed in virtual order. Transport storage is bounded separately from metadata storage, which grows with the scan.
 //!
 //! # Examples
 //!
-//! This synchronous adapter serves every request from an in-memory image. The doctest passes a blank sector and checks geometry rejection; a valid complete image produces [`ScanOutput`]. Asynchronous adapters may queue reads and wait when [`ScanProgress::waiting_for_input`] is true.
+//! This synchronous adapter serves every request from an in-memory image. The doctest passes a blank sector and checks geometry rejection; a valid complete image produces [`scan::ScanOutput`]. Asynchronous adapters may queue reads and wait when [`scan::ScanProgress::waiting_for_input`] is true.
 //!
 //! ```
-//! use adamite_core::{ScanConfig, ScanError, ScanOutput, ScanStep, Scanner};
+//! use adamite_core::{
+//!     error::ScanError,
+//!     scan::{ScanConfig, ScanOutput, ScanStep, Scanner},
+//! };
 //! use std::error::Error;
 //!
 //! fn scan_image(image: &[u8]) -> Result<ScanOutput, Box<dyn Error + Send + Sync>> {
@@ -36,14 +39,14 @@
 //! # }
 //! ```
 //!
-//! [`ScanStep::Done`] transfers snapshot and stats exactly once; subsequent calls return an inactive error. [`Snapshot`] is Send + Sync and may be shared through `std::sync::Arc`. Its node, children and name accessors borrow immutable data; [`Snapshot::path`] constructs a path iteratively.
+//! [`scan::ScanStep::Done`] transfers snapshot and stats exactly once; subsequent calls return an inactive error. [`snapshot::Snapshot`] is Send + Sync and may be shared through `std::sync::Arc`. Its node, children and name accessors borrow immutable data; [`snapshot::Snapshot::path`] constructs a path iteratively.
 //!
 //! # Errors
 //!
-//! - [`ConfigError`]: invalid transport bounds, before the scanner is created.
-//! - [`FeedError`]: inactive/unknown/duplicate ids, wrong response lengths or allocation failure; rejected feeds preserve state and may be corrected.
-//! - [`ScanError`]: fatal geometry/bootstrap, required-root, arithmetic or allocation failures terminate the scan. Ordinary corrupt records are discarded and counted in [`ScanStats`].
-//! - [`SnapshotError`]: allocation, representational bounds or tree validation during path access/construction; construction failures are wrapped by [`ScanError::Snapshot`].
+//! - [`scan::ConfigError`]: invalid transport bounds, before the scanner is created.
+//! - [`scan::FeedError`]: inactive/unknown/duplicate ids, wrong response lengths or allocation failure; rejected feeds preserve state and may be corrected.
+//! - [`error::ScanError`]: fatal geometry/bootstrap, required-root, arithmetic or allocation failures terminate the scan. Ordinary corrupt records are discarded and counted in [`scan::ScanStats`].
+//! - [`snapshot::SnapshotError`]: allocation, representational bounds or tree validation during path access/construction; construction failures are wrapped by [`error::ScanError::Snapshot`].
 //!
 //! # Determinism and accounting
 //!
@@ -61,26 +64,9 @@
     clippy::panic
 )]
 
-mod error;
+pub mod error;
 mod graph;
 mod mft;
-mod scan;
-mod snapshot;
+pub mod scan;
+pub mod snapshot;
 mod util;
-
-pub use error::ScanError;
-pub use scan::ScanStats;
-pub use scan::{
-    ConfigError, FeedError, ReadRequest, RequestId, ScanConfig, ScanContext, ScanOutput, ScanPhase,
-    ScanProgress, ScanStep, Scanner,
-};
-pub use snapshot::{
-    ExtensionStat, Node, NodeFlags, NodeId, NodeView, Snapshot, SnapshotError, VolumeInfo,
-};
-
-const _: fn() = || {
-    fn assert_send<T: Send>() {}
-    assert_send::<ScanStats>();
-    assert_send::<ScanOutput>();
-    assert_send::<Scanner>();
-};

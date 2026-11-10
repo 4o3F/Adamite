@@ -2,7 +2,7 @@
 
 use super::input::{NameRange, ParentTree, ResolvedNode};
 use crate::{
-    ScanContext,
+    scan::ScanContext,
     snapshot::{Node, NodeId, Snapshot, SnapshotError, VolumeInfo, storage::SnapshotStorage},
     util::VecExt,
 };
@@ -245,7 +245,7 @@ impl SnapshotBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::NodeFlags;
+    use crate::snapshot::NodeFlags;
     use adamite_fixtures::builders::BootSectorBuilder;
     use std::error::Error;
 

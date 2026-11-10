@@ -1,8 +1,9 @@
 //! Public end-to-end scans checked against independent v3 NTFS fixture manifests.
 
 use adamite_core::{
-    FeedError, NodeFlags, NodeId, NodeView, ReadRequest, RequestId, ScanConfig, ScanError,
-    ScanOutput, ScanStep, Scanner, Snapshot,
+    error::ScanError,
+    scan::{FeedError, ReadRequest, RequestId, ScanConfig, ScanOutput, ScanStep, Scanner},
+    snapshot::{NodeFlags, NodeId, NodeView, Snapshot},
 };
 use adamite_fixtures::{Entry, EntryKind, Fixture, Manifest, Name};
 use std::{

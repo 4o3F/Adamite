@@ -1,8 +1,16 @@
 # adamite-core
 
-`adamite-core` scans caller-supplied NTFS bytes into an immutable `Snapshot` and `ScanStats`. It uses `std`, forbids unsafe code and depends on `adamite-ntfs`, snafu and tracing. It performs no I/O, defines no reader trait or callback, and starts no threads or timers.
+`adamite-core` scans caller-supplied NTFS bytes into an immutable `snapshot::Snapshot` and `scan::ScanStats`. It uses `std`, forbids unsafe code and depends on `adamite-ntfs`, snafu and tracing. It performs no I/O, defines no reader trait or callback, and starts no threads or timers.
 
 ## Driving a scan
+
+```rust
+use adamite_core::{
+    error::ScanError,
+    scan::{ScanConfig, ScanOutput, ScanStep, Scanner},
+    snapshot::Snapshot,
+};
+```
 
 1. Construct `Scanner::new(ScanConfig::default())`: one outstanding request and 1 MiB chunks. Chunks must be multiples of 512 between 512 bytes and 16 MiB.
 2. Call `step()`. For `Need(ReadRequest { id, offset, len })`, acquire the exact volume-relative byte range and call `feed(id, bytes)`. Responses may arrive in any order; retained responses occupy their slots until consumed in virtual order.
@@ -17,7 +25,7 @@ The [crate docs](src/lib.rs) contain a runnable in-memory driver loop. Bootstrap
 
 Self logical size is unnamed DATA; ADS logical bytes are separate. Allocation includes every non-resident stream, using compressed size for compressed/sparse streams. Primary links alone contribute to ancestors and file indexes. Output is deterministic across chunk sizes, caps and response orders; final name comparisons use UTF-16 re-encoding of pooled text.
 
-`ConfigError` rejects invalid bounds, `FeedError` rejects responses without changing state, `ScanError` terminates a failed scan, and `SnapshotError` covers snapshot construction/path failures. Ordinary corrupt records are discarded and counted; a missing/corrupt root or bootstrap is fatal. Errors preserve parser/allocation sources through snafu.
+`scan::ConfigError` rejects invalid bounds, `scan::FeedError` rejects responses without changing state, `error::ScanError` terminates a failed scan, and `snapshot::SnapshotError` covers snapshot construction/path failures. Ordinary corrupt records are discarded and counted; a missing/corrupt root or bootstrap is fatal. Errors preserve parser/allocation sources through snafu.
 
 ## Local checks and fixtures
 

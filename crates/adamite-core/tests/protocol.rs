@@ -1,8 +1,11 @@
 //! Public Boot driver and configuration contract.
 
 use adamite_core::{
-    ConfigError, FeedError, ReadRequest, RequestId, ScanConfig, ScanContext, ScanError, ScanPhase,
-    ScanProgress, ScanStep, Scanner,
+    error::ScanError,
+    scan::{
+        ConfigError, FeedError, ReadRequest, RequestId, ScanConfig, ScanContext, ScanPhase,
+        ScanProgress, ScanStep, Scanner,
+    },
 };
 use std::error::Error;
 

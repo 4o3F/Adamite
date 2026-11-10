@@ -1,10 +1,10 @@
 //! Transactional patch application and per-stream accounting before generic linking.
 
 use crate::{
-    ScanStats,
     error::ScanError,
     graph::entry::{EntryName, EntryRecord},
     mft::model::{Patch, RecordContribution, RecordKind, RecordSlot, StreamSegment, StreamStorage},
+    scan::ScanStats,
     snapshot::NodeFlags,
     util::{CounterExt, VecExt},
 };

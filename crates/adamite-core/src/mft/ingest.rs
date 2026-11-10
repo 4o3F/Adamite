@@ -3,12 +3,12 @@
 mod decode;
 
 use crate::{
-    ScanStats,
     error::ScanError,
     mft::{
         mapping::MftMapping,
         model::{Patch, RecordContribution, RecordKind, RecordSlot},
     },
+    scan::ScanStats,
     util::{CounterExt, VecExt},
 };
 use adamite_ntfs::record::{

@@ -1,11 +1,11 @@
 //! Arena, name pool and CSR behavior through the frozen read interface.
 
 use super::*;
-use crate::ScanContext;
+use crate::scan::ScanContext;
 use crate::{
-    ScanStats,
     graph::entry::{EntryName, EntryRecord},
     graph::link::Linker,
+    scan::ScanStats,
 };
 use adamite_fixtures::builders::BootSectorBuilder;
 use adamite_ntfs::record::reference::FileRef;
@@ -193,8 +193,8 @@ fn snapshot_representational_overflows_are_rejected() -> TestResult {
         .err()
         .ok_or("overlong UTF-8 name accepted")?;
     assert!(matches!(
-        error.downcast_ref::<crate::ScanError>(),
-        Some(crate::ScanError::Snapshot {
+        error.downcast_ref::<crate::error::ScanError>(),
+        Some(crate::error::ScanError::Snapshot {
             source: SnapshotError::Overflow {
                 field: "name length"
             }

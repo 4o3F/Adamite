@@ -2,9 +2,9 @@
 
 use super::*;
 use crate::{
-    ScanContext, ScanStats,
     graph::entry::{EntryName, EntryRecord},
     graph::link::Linker,
+    scan::{ScanContext, ScanStats},
     snapshot::{Finalizer, SnapshotBuilder},
 };
 use adamite_fixtures::builders::BootSectorBuilder;

@@ -7,7 +7,7 @@ mod input;
 #[path = "../fuzz_targets/scan/volume.rs"]
 mod volume;
 
-use adamite_core::{ScanStep, Scanner};
+use adamite_core::scan::{ScanStep, Scanner};
 use std::{error::Error, fs, path::Path};
 
 fn assert_seed(bytes: &[u8]) -> Result<(), Box<dyn Error>> {

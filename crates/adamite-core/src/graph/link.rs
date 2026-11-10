@@ -1,9 +1,9 @@
 //! Resolve EntryRecord names and parents into a flat parent-index array.
 
 use crate::{
-    ScanStats,
     error::ScanError,
     graph::entry::EntryRecord,
+    scan::ScanStats,
     snapshot::{NameRange, NodeFlags, NodeId, ParentTree, ResolvedNode, SnapshotError},
     util::{CounterExt, VecExt},
 };

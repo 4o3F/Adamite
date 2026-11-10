@@ -1,12 +1,12 @@
 //! Transactional decoding and parser diagnostic categorization.
 
 use crate::{
-    ScanStats,
     error::ScanError,
     mft::model::{
         NameAttribute, RecordContribution, ReparseAttribute, StandardAttribute, StreamSegment,
         StreamStorage,
     },
+    scan::ScanStats,
     util::{CounterExt, VecExt},
 };
 use adamite_ntfs::{

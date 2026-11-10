@@ -138,9 +138,9 @@ Each milestone is one bounded agent run of at most 30 minutes, including verific
 
 ### M6 — Canonical public paths and driver contract types
 
-- [ ] Extract status types from scanner; expose the D1 modules/facades, with `scan/mod.rs` explicitly exporting the complete flat D1 scan API and all scan child modules remaining private. Remove every root re-export and temporary alias, and delete both production Send-check blocks specified in D1.
-- [ ] Add `tests/thread_safety.rs` with D1's plain generic trait checks, a complete fixture scan on a spawned thread with Scanner moved into it and ScanOutput returned, and concurrent `Arc<Snapshot>` reads compared with the single-threaded result. Use only public D1 paths. Verify `cargo test -p adamite-core --test thread_safety --locked`.
-- [ ] Migrate integration tests, excluded fuzz consumers, README/rustdoc imports and links in the same run. Retain the runnable driver doctest and counter documentation. Verify doctests and core fuzz harness tests; finish with `deno task check` green.
+- [x] Extract status types from scanner; expose the D1 modules/facades, with `scan/mod.rs` explicitly exporting the complete flat D1 scan API and all scan child modules remaining private. Remove every root re-export and temporary alias, and delete both production Send-check blocks specified in D1.
+- [x] Add `tests/thread_safety.rs` with D1's plain generic trait checks, a complete fixture scan on a spawned thread with Scanner moved into it and ScanOutput returned, and concurrent `Arc<Snapshot>` reads compared with the single-threaded result. Use only public D1 paths. Verify `cargo test -p adamite-core --test thread_safety --locked`.
+- [x] Migrate integration tests, excluded fuzz consumers, README/rustdoc imports and links in the same run. Retain the runnable driver doctest and counter documentation. Verify doctests and core fuzz harness tests; finish with `deno task check` green.
 
 ### M7 — Phase tests, architecture and final verification
 

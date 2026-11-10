@@ -1,4 +1,5 @@
 use super::*;
+use crate::scan::ReadRequest;
 use adamite_ntfs::record::{RecordError, fixup::FixupError};
 use std::error::Error;
 
@@ -2828,7 +2829,7 @@ fn snapshot_fixture(name: &str) -> TestResult {
             .join("../../tests/fixtures/ntfs")
             .join(format!("{name}.json")),
     )?;
-    let context = crate::ScanContext {
+    let context = crate::scan::ScanContext {
         label: Some(name.into()),
         scanned_at_filetime: Some(123),
         free_bytes: Some(456),
@@ -2846,7 +2847,7 @@ fn snapshot_fixture(name: &str) -> TestResult {
     assert_eq!(&scanner.config.context, &context);
     let mut paths = std::collections::BTreeMap::new();
     for raw in 0..u32::try_from(snapshot.len())? {
-        let id = crate::NodeId::from_raw(raw);
+        let id = crate::snapshot::NodeId::from_raw(raw);
         paths.insert(snapshot.path(id)?.ok_or("snapshot path")?, id);
     }
     for expected in &fixture.manifest().entries {
@@ -2964,7 +2965,7 @@ fn aggregation_fixture(name: &str) -> TestResult {
             .ok_or("filler file count")?;
     }
     let snapshot = &output.snapshot;
-    let root = snapshot.node(crate::NodeId::ROOT).ok_or("root")?;
+    let root = snapshot.node(crate::snapshot::NodeId::ROOT).ok_or("root")?;
     assert_eq!(
         (
             root.total_size(),
@@ -2994,7 +2995,7 @@ fn aggregation_fixture(name: &str) -> TestResult {
     assert!(snapshot.top_files().len() <= 100);
     if name == "basic-4k" {
         let links: Vec<_> = (0..u32::try_from(snapshot.len())?)
-            .filter_map(|raw| snapshot.node(crate::NodeId::from_raw(raw)))
+            .filter_map(|raw| snapshot.node(crate::snapshot::NodeId::from_raw(raw)))
             .filter(|node| {
                 node.file_ref()
                     .is_some_and(|reference| reference.record() == 270)
@@ -3004,7 +3005,9 @@ fn aggregation_fixture(name: &str) -> TestResult {
         assert_eq!(
             links
                 .iter()
-                .filter(|node| !node.flags().contains(crate::NodeFlags::HARDLINK_DUP))
+                .filter(|node| !node
+                    .flags()
+                    .contains(crate::snapshot::NodeFlags::HARDLINK_DUP))
                 .count(),
             1
         );

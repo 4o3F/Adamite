@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::{
-    ScanContext,
+    scan::ScanContext,
     snapshot::{ParentTree, ResolvedNode, SnapshotBuilder},
 };
 use adamite_fixtures::builders::BootSectorBuilder;

@@ -1,8 +1,9 @@
 //! Public protocol properties over bounded, independently encoded NTFS volumes.
 
 use adamite_core::{
-    FeedError, NodeFlags, NodeId, NodeView, ReadRequest, ScanConfig, ScanError, ScanOutput,
-    ScanStep, Scanner, Snapshot,
+    error::ScanError,
+    scan::{FeedError, ReadRequest, ScanConfig, ScanOutput, ScanStep, Scanner},
+    snapshot::{NodeFlags, NodeId, NodeView, Snapshot},
 };
 use adamite_fixtures::{
     builders::{

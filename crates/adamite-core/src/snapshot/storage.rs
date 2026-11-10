@@ -2,7 +2,7 @@
 
 use super::{ExtensionStat, Node, NodeId, NodeView, SnapshotError};
 
-use crate::ScanContext;
+use crate::scan::ScanContext;
 use adamite_ntfs::{boot::VolumeGeometry, record::reference::FileRef};
 
 /// Parsed volume geometry together with metadata supplied by the caller.
@@ -45,11 +45,6 @@ pub(super) struct SnapshotStorage {
     pub(super) top_files: Vec<NodeId>,
     pub(super) ext_stats: Vec<ExtensionStat>,
 }
-
-const _: fn() = || {
-    fn assert_send_sync<T: Send + Sync>() {}
-    assert_send_sync::<Snapshot>();
-};
 
 impl Snapshot {
     pub(super) fn from_storage(storage: SnapshotStorage) -> Result<Self, SnapshotError> {

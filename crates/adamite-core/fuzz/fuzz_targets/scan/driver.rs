@@ -1,7 +1,8 @@
 //! Public protocol checks, including a valid-feed-only reference scanner.
 
 use adamite_core::{
-    FeedError, NodeFlags, NodeId, ReadRequest, RequestId, ScanConfig, ScanStep, Scanner, Snapshot,
+    scan::{FeedError, ReadRequest, RequestId, ScanConfig, ScanStep, Scanner},
+    snapshot::{NodeFlags, NodeId, Snapshot},
 };
 
 #[derive(Debug)]
