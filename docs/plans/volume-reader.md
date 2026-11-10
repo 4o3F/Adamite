@@ -137,7 +137,7 @@ Each milestone is one bounded Codex run (< 40 minutes) and one reviewed commit, 
 
 ### M2 — Image file reader
 
-- [ ] Add `reader::ImageReader` and private `image::ExactRead` per D3 with its scripted unit tests. Extend equivalence to image files in `CARGO_TARGET_TMPDIR`, faults to missing, truncated and truncated-after-open images, and thread safety to `ImageReader`. Finish with `deno task check` green.
+- [x] Add `reader::ImageReader` and private `image::ExactRead` per D3 with its scripted unit tests. Extend equivalence to image files in `CARGO_TARGET_TMPDIR`, faults to missing, truncated and truncated-after-open images, and thread safety to `ImageReader`. Finish with `deno task check` green.
 
 ### M3 — Alignment, timestamp and the Windows lint gate
 

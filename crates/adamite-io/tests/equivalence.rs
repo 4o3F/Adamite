@@ -4,7 +4,7 @@ use adamite_core::scan::{ScanConfig, ScanContext, ScanOutput, ScanStep, Scanner}
 use adamite_fixtures::Fixture;
 use adamite_io::{
     driver::SyncDriver,
-    reader::{SliceReader, VolumeReader},
+    reader::{ImageReader, SliceReader, VolumeReader},
 };
 use std::{error::Error, path::Path};
 
@@ -30,12 +30,15 @@ fn baseline(config: ScanConfig, image: &[u8]) -> TestResult<ScanOutput> {
 }
 
 #[test]
-fn slice_scans_match_baseline_for_all_fixtures_and_configs() -> TestResult {
+fn slice_and_image_scans_match_baseline_for_all_fixtures_and_configs() -> TestResult {
     for name in ["basic-4k", "frag-512", "4kn-64k"] {
         let fixture = Fixture::load(
             &Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join(format!("../../tests/fixtures/ntfs/{name}.json")),
         )?;
+        let image_path =
+            Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("equivalence-{name}.img"));
+        std::fs::write(&image_path, fixture.image())?;
         let context = ScanContext {
             label: Some("fixture volume".to_owned()),
             scanned_at_filetime: Some(133_000_000_000_000_000),
@@ -83,6 +86,12 @@ fn slice_scans_match_baseline_for_all_fixtures_and_configs() -> TestResult {
                 driver.run(reader)?,
                 immediate,
                 "reused driver for {name}, config {config:?}"
+            );
+            let mut reader = ImageReader::open(&image_path)?;
+            assert_eq!(
+                driver.run(&mut reader)?,
+                immediate,
+                "image fixture {name}, config {config:?}"
             );
         }
     }

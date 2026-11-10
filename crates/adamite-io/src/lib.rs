@@ -1,6 +1,6 @@
 //! Exact volume reads and a synchronous driver for NTFS scans.
 //!
-//! [`reader`] defines the exact positional read contract and a borrowed [`reader::SliceReader`]. [`driver::SyncDriver`] queues core requests and serves them in issue order when the scanner waits for input. [`error::VolumeError`] preserves host and core error sources.
+//! [`reader`] defines the exact positional read contract, a borrowed [`reader::SliceReader`] and an [`reader::ImageReader`] for image files. [`driver::SyncDriver`] queues core requests and serves them in issue order when the scanner waits for input. [`error::VolumeError`] preserves host and core error sources.
 //!
 //! Sources start at volume byte zero. The caller supplies scan configuration and optional context.
 //!

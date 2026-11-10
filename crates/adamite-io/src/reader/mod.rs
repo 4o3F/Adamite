@@ -1,7 +1,9 @@
 //! Exact positional reads from a source of known length.
 
+mod image;
 mod slice;
 
+pub use image::ImageReader;
 pub use slice::SliceReader;
 
 use crate::error::VolumeError;

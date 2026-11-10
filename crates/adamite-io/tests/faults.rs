@@ -8,7 +8,7 @@ use adamite_fixtures::Fixture;
 use adamite_io::{
     driver::SyncDriver,
     error::VolumeError,
-    reader::{SliceReader, VolumeReader},
+    reader::{ImageReader, SliceReader, VolumeReader},
 };
 use std::{error::Error, io, path::Path};
 
@@ -203,6 +203,83 @@ fn truncated_slice_reports_actual_volume_length_before_reading() -> TestResult {
     );
     assert!(!reader.reads.contains(&(offset, len)));
     assert_eq!(reader.reads, [(0, 512)]);
+    assert!(error.source().is_none());
+    Ok(())
+}
+
+#[test]
+fn missing_image_preserves_path_and_open_source() -> TestResult {
+    let path = Path::new(env!("CARGO_TARGET_TMPDIR")).join("fault-missing-image.img");
+    let error = ImageReader::open(&path)
+        .err()
+        .ok_or("missing image opened")?;
+    assert!(matches!(error, VolumeError::Open { path: ref actual, .. } if actual == &path));
+    let source = error.source().ok_or("open source was lost")?;
+    let source = source
+        .downcast_ref::<io::Error>()
+        .ok_or("wrong open source type")?;
+    assert_eq!(source.kind(), io::ErrorKind::NotFound);
+    assert!(source.source().is_none());
+    Ok(())
+}
+
+#[test]
+fn truncated_image_reports_actual_volume_length_before_reading() -> TestResult {
+    let fixture = fixture()?;
+    let image = fixture
+        .image()
+        .get(..512)
+        .ok_or("invalid truncated range")?;
+    let path = Path::new(env!("CARGO_TARGET_TMPDIR")).join("fault-truncated-image.img");
+    std::fs::write(&path, image)?;
+    let driver = SyncDriver::new(ScanConfig::default())?;
+    let mut complete = FaultReader::new(fixture.image(), None);
+    driver.run(&mut complete)?;
+    let (expected_offset, expected_len) =
+        *complete.reads.get(1).ok_or("missing record-zero read")?;
+    let mut reader = ImageReader::open(&path)?;
+    assert_eq!(reader.len_bytes(), 512);
+    let error = driver
+        .run(&mut reader)
+        .err()
+        .ok_or("truncated image accepted")?;
+    assert!(matches!(error, VolumeError::OutOfBounds {
+        offset, len, volume_len: 512,
+    } if offset == expected_offset && len == expected_len));
+    assert!(error.source().is_none());
+    Ok(())
+}
+
+#[test]
+fn image_truncated_after_open_reports_short_read_with_cached_length() -> TestResult {
+    let fixture = fixture()?;
+    let path = Path::new(env!("CARGO_TARGET_TMPDIR")).join("fault-truncated-after-open-image.img");
+    std::fs::write(&path, fixture.image())?;
+    let mut reader = ImageReader::open(&path)?;
+    let original_len = u64::try_from(fixture.image().len())?;
+    assert_eq!(reader.len_bytes(), original_len);
+    std::fs::File::options()
+        .write(true)
+        .open(&path)?
+        .set_len(512)?;
+    assert_eq!(
+        reader.len_bytes(),
+        original_len,
+        "the length is cached at open and stays unchanged after truncation"
+    );
+    assert!(original_len >= 1536);
+    let error = reader
+        .read_exact_at(1024, &mut [0; 512])
+        .err()
+        .ok_or("image truncation ignored")?;
+    assert!(matches!(
+        error,
+        VolumeError::ShortRead {
+            offset: 1024,
+            expected: 512,
+            actual: 0,
+        }
+    ));
     assert!(error.source().is_none());
     Ok(())
 }
