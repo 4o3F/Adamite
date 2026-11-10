@@ -2,7 +2,7 @@
 
 /// Scan counters, independent of transport chunk size and response arrival order.
 ///
-/// Counter updates use checked arithmetic as ingestion and tree phases are implemented.
+/// Counter updates use checked arithmetic; corruption categories may overlap.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ScanStats {
@@ -20,7 +20,7 @@ pub struct ScanStats {
     pub deleted: u64,
     /// Records marked BAAD.
     pub baad: u64,
-    /// Ordinary records discarded after parser failures.
+    /// Record-level parse, identity or merge failures; may overlap the deleted count.
     pub corrupt_records: u64,
     /// Mismatched protected trailers.
     pub bad_fixup: u64,

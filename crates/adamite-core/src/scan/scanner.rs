@@ -1,4 +1,4 @@
-//! Caller-driven boot decoding and record-zero assembly.
+//! Caller-driven phase transitions from boot bytes to an immutable scan output.
 
 use super::{ConfigError, FeedError, ScanConfig, config::BOOT_BYTES, protocol::Requests};
 use super::{ReadRequest, RequestId};

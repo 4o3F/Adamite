@@ -11,7 +11,7 @@ use std::{
     vec::IntoIter,
 };
 
-/// Maximum nodes, directory sorts or extension groups processed per call.
+/// Maximum nodes or extension groups per call; each directory sort yields immediately.
 const ITEMS_PER_STEP: usize = 256;
 /// Number of primary files retained in the allocation ranking.
 const TOP_FILES: usize = 100;
@@ -103,13 +103,14 @@ impl Finalizer {
         Self::default()
     }
 
-    fn sort_children(&mut self, data: &mut SnapshotStorage) -> Result<(), SnapshotError> {
+    fn sort_children(&mut self, data: &mut SnapshotStorage) -> Result<bool, SnapshotError> {
         let Some(node) = data.nodes.get(self.cursor) else {
             self.stage = Stage::Collect;
             self.cursor = 0;
-            return Ok(());
+            return Ok(false);
         };
-        if has(node, NodeFlags::DIRECTORY) || has(node, NodeFlags::SYNTHETIC) {
+        let directory = has(node, NodeFlags::DIRECTORY) || has(node, NodeFlags::SYNTHETIC);
+        if directory {
             let start =
                 usize::try_from(node.child_start).map_err(|_| overflow("child range start"))?;
             let end = start
@@ -129,7 +130,7 @@ impl Finalizer {
             .cursor
             .checked_add(1)
             .ok_or_else(|| overflow("directory sort cursor"))?;
-        Ok(())
+        Ok(directory)
     }
 
     fn collect(&mut self, data: &mut SnapshotStorage) -> Result<(), SnapshotError> {
@@ -231,7 +232,11 @@ impl Finalizer {
     pub(crate) fn step(&mut self, snapshot: &mut Snapshot) -> Result<bool, SnapshotError> {
         for _ in 0..ITEMS_PER_STEP {
             match self.stage {
-                Stage::SortChildren => self.sort_children(snapshot.data_mut())?,
+                Stage::SortChildren => {
+                    if self.sort_children(snapshot.data_mut())? {
+                        return Ok(false);
+                    }
+                }
                 Stage::Collect => self.collect(snapshot.data_mut())?,
                 Stage::HeapBuild => {
                     if let Some(group) = self.pending.next() {

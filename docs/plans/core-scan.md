@@ -172,5 +172,56 @@ Each automated milestone is one bounded Codex run targeting 15–30 minutes, inc
 
 ### M16 — Architecture documentation and final acceptance
 
-- [ ] M16.1 Apply D21 to docs/ARCHITECTURE.md and document the request/feed example, defaults, error handling and shared fixture workflow in crate documentation; preserve the explicit future-work boundaries.
-- [ ] M16.2 Review the implementation against this plan and record verification outcomes in repository documentation without local-only artifact links. Verify: `deno task check`; `deno test scripts/fixtures/`; confirm the Ubuntu/Windows CI results when available.
+- [x] M16.1 Apply D21 to docs/ARCHITECTURE.md and document the request/feed example, defaults, error handling and shared fixture workflow in crate documentation; preserve the explicit future-work boundaries.
+- [x] M16.2 Review the implementation against this plan and record verification outcomes in repository documentation without local-only artifact links. Verify: `deno task check`; `deno test scripts/fixtures/`; confirm the Ubuntu/Windows CI results when available.
+
+## Acceptance
+
+M1–M16 are complete, including the M3 user regeneration reflected in all three committed v3 manifests. D5 regressions enforce yielding during a 300-reference discovery pass and after each directory sort. The review found the following implementation differences; none of the D-items is deferred.
+
+| Item | Status | Result or deviation |
+|---|---|---|
+| D1 | Implemented with deviation | Expanded scan modules, a `snapshot/` subtree and separate finalizer; fixtures also serves excluded fuzz packages. Crate boundaries and panic-free lints are retained. |
+| D2 | Implemented with deviation | Driver signatures/errors are present; SnapshotError additionally covers representation overflow and invalid trees, beyond path allocation. |
+| D3 | Implemented as planned | Default cap 1/chunk 1 MiB, validation, identified reads and explicit waiting progress. |
+| D4 | Implemented as planned | Capped slots, copied exact feeds, virtual-order consumption and one-shot output; invalid feeds preserve state. |
+| D5 | Implemented with deviation | A dedicated Snapshot state separates Link/Aggregate. Per-item batches and single-directory sorting now meet the work bound. |
+| D6 | Implemented as planned | Checked record-zero bootstrap, reachable extensions, identity checks and gap-free mapping; no mirror fallback. |
+| D7 | Implemented as planned | Resident/non-resident lists, 256 KiB bound, additional descriptors and finite no-progress failure. |
+| D8 | Implemented with deviation | Deleted NTFS 3.1 headers may leave record number zero; nonzero mismatches are diagnosed and live identities remain strict. Cross-extent streaming and transactional ingestion are covered. |
+| D9 | Implemented as planned | Ordinal slots, FileRef patches, stream/segment identities and validated merge into EntryRecord. |
+| D10 | Implemented as planned | Unnamed/ADS/all-stream allocation accounting, first-segment sizes and BadClus exclusion match independent v3 measurements. |
+| D11 | Implemented as planned | Raw alias/primary selection, same-parent links, DOS suppression, DUP flags and pooled lossy names. |
+| D12 | Implemented as planned | Required root, primary directory parents, iterative cycle repair and conditional metadata/orphan groups. |
+| D13 | Implemented as planned | Checked u32 arena/CSR/pool bounds, exact 64-byte Node assertion and cold columns. |
+| D14 | Implemented as planned | Private immutable storage, minimal accessors, caller context and Send + Sync checks. |
+| D15 | Implemented with deviation | Final name ranking re-encodes pooled UTF-8: valid names retain raw UTF-16 order, malformed names use replacement text. IDs, totals, top-100 and extension summaries remain deterministic. |
+| D16 | Implemented as planned | All checked counters are exposed separately from Snapshot; transport order/chunk counts and clocks are excluded. |
+| D17 | Implemented as planned | Strict v3 measurements/metafiles/fill totals with compatible v2 reading; committed fixtures are v3. |
+| D18 | Implemented as planned | ntfsinfo first-segment measurements, continuation runs, complete base-record census, tool versions and fixture budgets. |
+| D19 | Implemented as planned | Shared loader/builders, separate ReferenceMft and core tests serving bytes without reference bootstrap seeding. |
+| D20 | Implemented with deviation | Full fixture oracles, 1024-case transport properties and bounded fuzzing are present; fuzz preflight also skips ambiguous cross-sector list headers conservatively. |
+| D21 | Implemented as planned | Architecture, crate docs and README describe the implemented sans-io boundary while retaining the planned access layer, queries, persistence, parallelism and adapter-owned resource controls. |
+
+Verification for M16:
+
+| Command or evidence | Outcome |
+|---|---|
+| `cargo doc -p adamite-core -p adamite-fixtures --no-deps` | Passed without rustdoc warnings. |
+| `cargo test --doc -p adamite-core` | Passed: 1 runnable in-memory driver doctest. |
+| `cargo test --doc -p adamite-fixtures` | Passed: 1 fixture-loading doctest. |
+| `cargo test -p adamite-core --locked bootstrap` | Passed: 37 unit tests and 2 integration regressions. |
+| `cargo test -p adamite-core --locked aggregation` | Passed: 13 unit tests and the transport property. |
+| `deno task check` | Passed: both feature sets (238/239 Rust tests including doctests), fuzz Clippy/harness tests, no_std builds, dependency policy and Deno checks. |
+| `deno test --allow-read=scripts/fixtures/testdata scripts/fixtures/` | Passed: 23 tests, without system NTFS tools or mounts. |
+| `rg -n "cfg\(test\)" crates` | Reviewed: every occurrence guards a test module. |
+| Architecture review against baseline `6ee0414` | Retained the planned overall/access-layer design and full resource-control proposals; implemented §§2, 3, 6 and 7 are preserved. |
+| Baseline `6ee0414` [CI run](https://github.com/4o3F/Adamite/actions/runs/42760772261) | Passed: Ubuntu/Windows workspace jobs, parser no_std, Deno/deny and all six Linux fuzz jobs. |
+
+Known limitations:
+
+- Platform I/O (`add-volume-reader`), parallelism/resource controls, queries, persistence, CLI/MCP, USN and walkdir remain deferred.
+- Metadata memory and a single directory sort have no general resource budget; no ten-million-node scaling benchmark is recorded.
+- No atomic live-volume view or MFT-mirror fallback; sparse/compressed/encrypted bootstrap storage is rejected. Manual Windows WizTree/`dir /s` comparison remains outstanding.
+- Original malformed UTF-16 is not retained after linking; distinct names can have identical lossy display paths and final name ties use replacement text.
+- Fuzzing is intentionally bounded and skips possible list headers whose fixed fields cross a 512-byte boundary; full-size fixture behavior is checked by the public oracle suite.

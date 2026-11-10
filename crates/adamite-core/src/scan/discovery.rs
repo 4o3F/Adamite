@@ -83,6 +83,8 @@ pub(super) struct Discovery {
     lists: Vec<ListStream>,
     active: Option<ActiveRead>,
     parsing: Option<Parsing>,
+    pending_cursor: usize,
+    unresolved: bool,
 }
 
 impl Discovery {
@@ -95,6 +97,8 @@ impl Discovery {
             lists: Vec::new(),
             active: None,
             parsing: None,
+            pending_cursor: 0,
+            unresolved: false,
         };
         let segments = std::mem::take(&mut base.segments);
         for segment in &segments {
@@ -459,7 +463,17 @@ impl Discovery {
                 _ => {}
             }
         }
-        for index in 0..self.pending.len() {
+        let end = self
+            .pending_cursor
+            .checked_add(ENTRIES_PER_STEP)
+            .ok_or_else(|| overflow("pending reference batch"))?
+            .min(self.pending.len());
+        while self.pending_cursor < end {
+            let index = self.pending_cursor;
+            self.pending_cursor = self
+                .pending_cursor
+                .checked_add(1)
+                .ok_or_else(|| overflow("pending reference cursor"))?;
             let pending = self
                 .pending
                 .get(index)
@@ -482,6 +496,8 @@ impl Discovery {
                 return Err(unsupported("extension record exceeds logical MFT size"));
             }
             if self.commit_cached(index, base)? {
+                self.pending_cursor = 0;
+                self.unresolved = false;
                 return Ok(DiscoveryStep::Progress { waiting: false });
             }
             if base.mapping.covers(start, len)? {
@@ -492,12 +508,18 @@ impl Discovery {
                         usize::try_from(len).map_err(|_| overflow("extension record length"))?,
                     )?,
                 });
+                self.pending_cursor = 0;
+                self.unresolved = false;
                 return Ok(DiscoveryStep::Progress { waiting: false });
             }
+            self.unresolved = true;
+        }
+        if self.pending_cursor < self.pending.len() {
+            return Ok(DiscoveryStep::Progress { waiting: false });
         }
         // Every eligible list and reference was considered, with no I/O or CPU work left.
         if self.lists.iter().all(|list| list.parsed)
-            && self.pending.iter().all(|pending| pending.done)
+            && !self.unresolved
             && base.mapping.covers(0, base.data_size)?
         {
             return Ok(DiscoveryStep::Complete);
@@ -510,5 +532,68 @@ fn list_lowest(descriptor: &AttributeListDescriptor) -> u64 {
     match descriptor.storage {
         ListStorage::Resident(_) => 0,
         ListStorage::NonResident { lowest_vcn, .. } => lowest_vcn,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scan::mapping::OwnedRun;
+    use adamite_fixtures::builders::BootSectorBuilder;
+    use std::error::Error;
+
+    #[test]
+    fn bootstrap_pending_references_yield_before_no_progress_failure() -> Result<(), Box<dyn Error>>
+    {
+        let geometry = adamite_ntfs::parse_boot_sector(
+            &BootSectorBuilder {
+                cluster_encoding: 1,
+                sectors: 4096,
+                ..BootSectorBuilder::default()
+            }
+            .build(),
+        )?;
+        let mut base = Record0 {
+            reference: FileRef::new(0, 7)?,
+            data_id: 0,
+            data_size: 1_048_576,
+            mapping: MftMapping::new(
+                geometry,
+                vec![OwnedRun {
+                    vcn: 0,
+                    lcn: 4,
+                    clusters: 2,
+                }],
+            )?,
+            attribute_lists: vec![],
+            segments: vec![],
+        };
+        let mut discovery = Discovery::new(&mut base)?;
+        for record in 10..310 {
+            discovery.add_reference(SegmentRef {
+                source: FileRef::new(record, 7)?,
+                attribute_type: AttributeType::DATA,
+                name: vec![],
+                id: 0,
+                lowest: 0,
+            })?;
+        }
+        let config = ScanConfig::default();
+        let mut requests = Requests::new(config.max_outstanding, config.chunk_size);
+        assert!(
+            matches!(
+                discovery.step(&mut base, &mut requests, &config)?,
+                DiscoveryStep::Progress { waiting: false }
+            ),
+            "a partial reference pass must yield"
+        );
+        assert!(
+            matches!(
+                discovery.step(&mut base, &mut requests, &config),
+                Err(ScanError::BootstrapIncomplete)
+            ),
+            "a completed pass must detect no progress"
+        );
+        Ok(())
     }
 }

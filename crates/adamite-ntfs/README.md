@@ -84,7 +84,7 @@ Parser errors are non-exhaustive snafu enums implementing `core::error::Error`, 
 
 ## Local checks and fixtures
 
-From the repository root, run `deno task check`. It checks formatting, both feature sets with Clippy and tests, documentation, embedded `no_std` builds, dependency policy and Deno scripts. The property tests run 1024 cases per property through this task. `deno test scripts/fixtures/` checks manifest serialization and tool-output parsing.
+From the repository root, run `deno task check`. It checks formatting, both feature sets with Clippy and tests, documentation, embedded `no_std` builds, dependency policy and Deno scripts. The property tests run 1024 cases per property through this task. `deno test --allow-read=scripts/fixtures/testdata scripts/fixtures/` checks manifest serialization and tool-output parsing.
 
 On Linux, install ntfs-3g, zstd and attr, then run `deno task fixtures` from the repository root. This manual step uses sudo for image mounting, populates and verifies `basic-4k`, `frag-512` and `4kn-64k`, and writes each compressed image together with its independent JSON manifest under `tests/fixtures/ntfs/`. `deno task fixtures --help` prints usage without tool execution. The total compressed budget is 1 MiB. Rust fixture support uses ruzstd and compares decompressed length and frame checksum before bootstrapping the MFT.
 
@@ -97,10 +97,10 @@ cargo install cargo-fuzz --locked
 cargo +nightly fuzz build
 ```
 
-Run `deno task fuzz-corpus` from the repository root to extract deterministic seeds from the committed images, with a 64 KiB budget per target. Re-running this command replaces generated and evolved corpus files with those seeds. Then, from `crates/adamite-ntfs`, run a target with:
+Run `deno task fuzz-corpus` from the repository root to generate deterministic parser/core seeds, with a 64 KiB budget per target. Re-running this command replaces generated and evolved corpus files with those seeds. Then, from `crates/adamite-ntfs`, run a target with:
 
 ```text
 cargo +nightly fuzz run file_record fuzz/corpus/file_record/ -- -max_total_time=30 -max_len=262144 -timeout=2 -rss_limit_mb=2048
 ```
 
-`deno task check --fuzz` requires a nonempty corpus for each target, builds all targets, and runs the five smoke checks. Missing or empty corpora fail the command; run `deno task fuzz-corpus` to restore the seeds.
+`deno task check --fuzz` requires a nonempty corpus for each target, builds both fuzz packages, and runs five parser targets plus core's `scan` target. Missing or empty corpora fail the command; run `deno task fuzz-corpus` to regenerate seeds.

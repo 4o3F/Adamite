@@ -1,267 +1,180 @@
 # Adamite Architecture
 
-Adamite gives agents a WizTree-like view of a filesystem. It reads the NTFS Master File Table (MFT) directly, builds a size-aggregated file tree, and exposes it through MCP, CLI and other front ends.
+Adamite aims to give agents a WizTree-like view of a filesystem through MCP, CLI and other front ends. The implemented libraries parse caller-supplied NTFS Master File Table (MFT) bytes and produce an immutable, size-aggregated `Snapshot` with `ScanStats`. Platform readers and front ends are planned.
 
 The project is split into two layers:
 
-- **Core layer**: scanning and tree building.
-- **Access layer**: MCP, CLI and future front ends.
+- **Core layer:** scanning and tree building, with query and persistence modules planned.
+- **Access layer (planned):** MCP, CLI and other front ends, backed by snapshot and scan-job services.
 
 Implementation language: Rust (Cargo workspace).
 
----
-
 ## 1. Overall Architecture
 
-```
-┌───────────────────────────── Access layer ────────────────────────────────┐
-│  adamite-cli            adamite-mcp (stdio/HTTP)        (future) HTTP/gRPC │
-│     │                        │                                             │
-│     └──────────┬─────────────┘                                             │
-│                ▼                                                           │
-│        adamite-service  ── snapshot cache / scan jobs / staleness / privilege │
-└────────────────┬───────────────────────────────────────────────────────────┘
-                 │  Snapshot (immutable, Arc)  +  Query API
-┌────────────────▼──────────────────────── Core layer ───────────────────────┐
-│  adamite-core                                                              │
-│   ├─ scan/      pipeline: read MFT → parallel parse → merge → link → aggregate │
-│   ├─ tree/      flat arena + CSR child index + name pool                   │
-│   ├─ query/     children / path / top-N / ext stats / search / budgeted summary │
-│   └─ persist/   snapshot serialization (flat arrays, mmap-able)            │
-│  adamite-ntfs   pure parsing, no I/O: boot sector, FILE record, fixup,     │
-│                 attributes, runlist                                        │
-│  adamite-io     trait VolumeReader: Windows volume / raw image / Linux block device │
-└────────────────────────────────────────────────────────────────────────────┘
+The diagram includes planned components; only the parser, single-threaded scan/snapshot implementation and fixture support exist today.
+
+```text
+┌──────────────────── Access layer (planned) ────────────────────┐
+│ adamite-cli       adamite-mcp (stdio/HTTP)      HTTP/gRPC        │
+│      └──────────────────┬────────────────────────┘             │
+│                         ▼                                      │
+│ adamite-service: snapshot cache / scan jobs / staleness /       │
+│                  privilege management                          │
+└────────────┬───────────────────────────────┬────────────────────┘
+             │ Snapshot (immutable, Arc)     │ drive scans
+             │ + planned Query API          ▼
+             │          ┌── Caller driver + I/O (planned) ───────┐
+             │          │ adamite-io::VolumeReader               │
+             │          │ Windows volume / raw image / Linux     │
+             │          │ block device; aligned buffers and reads│
+             │          └────────────┬─────────────────▲──────────┘
+             │             step()/feed(id, bytes)      │ Need(id,
+             │                       │                 │ offset,len)
+┌────────────▼───────────────────────▼─────────────────┴──────────┐
+│ Core layer                                                     │
+│ adamite-core                                                   │
+│   scan/: boot → discover MFT → stream → merge                   │
+│   tree/ + snapshot/: link → arena/CSR/name pool → aggregate     │
+│                      → finalize → Done(snapshot, stats)        │
+│   query/ (planned): summary / listing / search / subtree ranks │
+│   persist/ (planned): flat-array snapshot serialization        │
+│ adamite-ntfs: pure boot/FILE/fixup/attribute/runlist decoding    │
+└────────────────────────────────────────────────────────────────┘
 ```
 
 ### Workspace layout
 
-```
+```text
 crates/
-  adamite-ntfs/     # depends only on &[u8]; fuzzable; testable on Linux
-  adamite-io/       # VolumeReader + platform implementations
-  adamite-core/     # scan pipeline, tree, query, persistence
-  adamite-service/  # snapshot management, job scheduling, resource limits
-  adamite-cli/
-  adamite-mcp/
+  adamite-ntfs/     # implemented: byte decoding, no I/O, no_std
+  adamite-core/     # implemented: scan/tree/snapshot; query/persist planned
+  adamite-fixtures/ # implemented: shared development-only fixture support
+  adamite-io/       # planned: VolumeReader + platform adapters serving requests
+  adamite-service/  # planned: snapshots, jobs, privilege and resource scheduling
+  adamite-cli/      # planned
+  adamite-mcp/      # planned
 ```
+
+| Implemented crate | Responsibility |
+|---|---|
+| `adamite-ntfs` | `no_std` decoding of geometry, records, fixup, attributes and runlists; optional `alloc` helpers |
+| `adamite-core` | Single-threaded `std` scan driver, NTFS merge, generic linking, aggregation and snapshot storage |
+| `adamite-fixtures` | Unpublished development support: image loading, independent manifests/reference MFT reconstruction and synthetic builders |
+
+Core performs no file, device or network I/O. It defines no reader trait or callback, starts no threads, reads no clocks and never sleeps. The caller owns transport and scheduling; `ScanContext` supplies optional label, scan FILETIME and free bytes. Core never acquires these values itself.
+
+`EntryRecord` separates NTFS ingestion/merge from generic tree processing. A future fallback scanner could use this boundary, but no walkdir scanner exists yet. Future I/O, query, persistence, service, CLI, MCP and USN components are described in §4–§6.
 
 ### Key decisions
 
 | Decision | Rationale |
 |---|---|
-| `adamite-ntfs` does no I/O | Unit tests, fuzzing and benchmarks run on Linux/WSL against dd images or exported `$MFT` files |
-| MFT location comes from record 0's own runlist, not `FSCTL_GET_RETRIEVAL_POINTERS` | The same code path works for live volumes and images |
-| The Snapshot is immutable and shared through `Arc` | Queries need no locks, so multiple agents can query concurrently |
-| Scanning is decoupled from querying, and snapshots can be persisted | Scanning needs admin rights; querying does not (see §4.1) |
-| A fallback `walkdir` scanner emits the same `EntryRecord`s | Supports FAT/exFAT/ReFS/network drives without changing tree building |
-
----
+| `adamite-ntfs` and `adamite-core` do no I/O | Caller-owned reads allow the same parsing/scan code to use memory images, platform adapters and fuzz inputs. |
+| MFT mapping comes from record 0's own runlist and attribute-list discovery, not `FSCTL_GET_RETRIEVAL_POINTERS` | Live volumes and images can use the same bootstrap algorithm. |
+| Snapshot is immutable and can be shared through `Arc` | Multiple consumers can read it without locking; cloning Snapshot itself copies its arrays. |
+| Scanning is decoupled from queries; persistence is planned | Future raw-volume scans can run elevated while saved-snapshot queries run unelevated (§4.1). |
+| A planned walkdir fallback emits the same EntryRecord boundary | FAT/exFAT/ReFS/network drives could reuse tree building without an NTFS parser. |
 
 ## 2. Scan Pipeline
 
-### 2.1 Overview
+### 2.1 Phases and driver protocol
 
-```
-Phase 0  Open & Geometry
-   open \\.\C: (admin) → boot sector → MFT record 0
-   → $MFT $DATA runlist = MFT extents; $MFT $BITMAP = in-use record bitmap
-   → (Windows) record current USN journal position for incremental refresh
-Phase 1  Read + Parse (parallel, bounded — see §5)
-   reader thread: split MFT virtual offset space into 4–16 MiB chunks, map extents → LCN, sequential reads
-   worker pool: per chunk → fixup each record → parse attributes
-      → write slots[record_no] (disjoint slots, lock-free)
-      → extension records emit Patch into thread-local Vec
-Phase 2  Merge
-   apply extension-record Patches to their base records
-Phase 3  Link
-   for each in-use base record: resolve parent_ref in slots, validate seq
-   → one edge per hard link; unresolved parents go under <orphaned>
-Phase 4  Build CSR
-   count children per parent → prefix sum → fill child_index
-Phase 5  Aggregate
-   BFS from root (FRN 5), iterate BFS order in reverse accumulating into parents (no recursion)
-Phase 6  Finalize (parallel)
-   sort each directory's children by total_alloc desc; build top-N files and extension stats
-   → Snapshot
-```
-
-### 2.2 Reading
-
-- **Boot sector** (offset 0): `bytes_per_sector` is a u16 at 0x0B; `sectors_per_cluster` is a u8 at 0x0D; `total_sectors`, `mft_lcn`, `mftmirr_lcn` and the volume serial are u64 fields at 0x28, 0x30, 0x38 and 0x48. The cluster byte is a literal power of two from 1 to 128, or an exponent byte 0xF4..=0xFF encoding 2^(256 − value) sectors, with a maximum cluster size of 2 MiB. File and index record sizes use signed bytes at 0x40 and 0x44: positive n means n clusters; negative −k means 2^k bytes. File records are usually 1024 bytes, or 4096 on 4Kn volumes.
-- **The MFT itself may be fragmented.** Read record 0 (`$MFT`) and decode its non-resident `$DATA` runlist into `Vec<Extent { vcn, lcn, len }>`.
-- **`$MFT`'s `$BITMAP` attribute** marks which records are in use. Chunk planning skips large unused regions.
-- **Chunks are defined in MFT virtual offset space.** The reader stitches extents into a contiguous buffer, which handles records that straddle an extent boundary (e.g. 512 B clusters with 1 KiB records).
-- **On Windows, use `FILE_FLAG_NO_BUFFERING`** with sector-aligned offsets and buffers, rotated through a fixed buffer pool (see §5).
-
-### 2.3 Parsing a FILE record
-
-```
-Record header
- 0x00 "FILE"          0x04 usa_offset u16   0x06 usa_count u16
- 0x08 lsn u64
- 0x10 sequence u16    0x12 link_count u16   0x14 first_attr u16
- 0x16 flags u16 (0x1 IN_USE, 0x2 DIRECTORY)
- 0x18 bytes_used u32  0x1C bytes_allocated u32
- 0x20 base_ref u64 (≠0 → extension record)  0x28 next_attr_id u16
- NTFS 3.1: usa_offset ≥ 0x30, record_no u32 at 0x2C
- NTFS 3.0: USA starts at 0x2A, record_no is absent
-```
-
-1. **Peek at the header and check `IN_USE`.** Validate the header, then skip records with `IN_USE` clear before applying fixup.
-2. **Apply fixup to in-use records.** Protection always uses 512-byte strides, including on 4Kn volumes. Validate all USA metadata and every trailer against `usa[0]` before restoring any trailer with its USA entry. A mismatch means a torn write: count it in `stats.bad_fixup` and skip the record with its buffer unchanged.
-3. Walk the attributes until `0xFFFFFFFF`. The attributes we need:
-
-| Type | Attribute | What we take |
+| Pipeline phase | Scanner states | Work |
 |---|---|---|
-| 0x10 | `$STANDARD_INFORMATION` | mtime and file attributes (hidden/system/compressed/sparse/reparse) |
-| 0x30 | `$FILE_NAME` | parent_ref (48-bit record + 16-bit seq), UTF-16 name, namespace (0 POSIX / 1 Win32 / 2 DOS / 3 Win32&DOS) |
-| 0x80 | `$DATA` | Unnamed = main stream; named = ADS. Resident: size = value_len, alloc = 0 (data lives inside the MFT). Non-resident: `data_size@0x30`, `alloc@0x28`; when compressed/sparse, use `compressed_size@0x40` as the real on-disk size |
-| 0xA0 | `$INDEX_ALLOCATION` | Counted as the directory's own alloc (matches WizTree) |
-| 0xC0 | `$REPARSE_POINT` | Flag only. The tree is built from parent refs, so junctions/symlinks are never followed or double-counted |
+| 0 | `Boot → Record0 → Discover` | Validate geometry, read record 0 and discover the complete MFT mapping |
+| 1 | `Stream` | Assemble and classify records in virtual order; retain base contributions and extension patches |
+| 2 | `Merge` | Validate patches, merge stream segments and emit `EntryRecord` values |
+| 3 | `Link` | Select names, resolve parents, repair cycles and append names to the shared pool |
+| 4 | `Snapshot` | Build the node arena, cold columns and CSR child index |
+| 5 | `Aggregate` | Build BFS order and accumulate checked subtree totals in reverse |
+| 6 | `Finalize` | Sort children and build top files and extension statistics |
 
-Attribute header:
+`Scanner::step()` returns `Need`, `Progress` or one `Done`; fatal errors enter `Failed`. Calls after delivery or failure return an inactive error. A phase-work tracing span is entered and dropped within each call. CPU passes process at most 256 items before yielding, with at most one directory sort per call; bulk allocation/resize/fill and loops over the small set of attribute lists may run within a call. This is a work-count bound, not a wall-clock deadline.
 
-```
-0x00 type u32  0x04 length u32  0x08 non_resident u8  0x09 name_len u8  0x0A name_off u16
-0x0C flags u16 (0x0001 compressed, 0x4000 encrypted, 0x8000 sparse)  0x0E id u16
-resident:     0x10 value_len u32  0x14 value_off u16
-non-resident: 0x10 lowest_vcn i64  0x18 highest_vcn i64  0x20 runlist_off u16
-              0x22 compression_unit u8  0x23..0x28 reserved (5 bytes)
-              0x28 allocated_size  0x30 data_size  0x38 initialized_size
-              0x40 compressed_size (compressed/sparse header of at least 0x48 bytes)
-```
+`ScanConfig` defaults to one outstanding request and 1 MiB chunks. Chunks must be multiples of 512 between 512 bytes and 16 MiB; cap must be positive and cap × chunk must fit `usize`. Every request has a checked, monotonic `RequestId`, a volume-relative byte offset and a nonzero length no larger than the chunk bound.
 
-Runlist encoding: the header byte's low nibble is the length field size and its high nibble is the offset field size. Run lengths must be positive. The offset is a signed delta from the previous LCN, whose base resets to zero for every segment; an offset size of 0 means a sparse run that keeps the previous physical LCN base.
+`feed(id, bytes)` copies an exact response and retains no borrow. Responses may arrive in any order; slots remain occupied until consumed in virtual order. Unknown/consumed ids, duplicates, wrong lengths and inactive scans are rejected without changing state. `Progress.waiting_for_input` asks the caller to wait for its own reads. Feed pending responses before polling again when waiting; other progress calls need no input.
 
-### 2.4 Pitfalls
+### 2.2 Bootstrap and streaming
 
-- **Sizes inside `$FILE_NAME` are stale** (they are only updated on rename). Always use `$DATA`.
-- **Non-resident streams may span multiple extension records.** All size fields, including allocated, data, initialized and compressed sizes, are valid only in the segment with `lowest_vcn == 0`.
-- **`$ATTRIBUTE_LIST` supports `$MFT` bootstrap.** Phase 0 uses its entries to locate DATA segments in extension records reachable through already-known MFT extents. Phase 1 scans extension records in full and merges them into their base by `base_ref`.
-- **Root parent:** the root directory's reference and parent reference are both 5:5.
-- **Directory record flags:** use DIRECTORY (0x2) to identify directories and preserve 0x4 and 0x8 as raw flags.
-- **DOS short names are deduplicated.** Within one parent, prefer Win32/POSIX, then Win32&DOS; use the DOS name only as a last resort.
-- **Hard links:** each `$FILE_NAME` under a different parent becomes its own edge. Bytes are counted only on the primary link; other links are flagged `HARDLINK_DUP` and count as 0 during aggregation (configurable).
-- **Metafiles:** records 0–15 (`$MFT`, `$LogFile`, `$Bitmap`, …) and entries under `$Extend` go under a virtual `<NTFS metadata>` node by default, so the volume total matches "used space".
-- **Orphans:** if the parent's sequence number does not match the one in parent_ref, the parent was deleted or its record reused. The node goes under a synthetic `<orphaned>` node.
-- **Consistency:** a live volume changes during the scan, so the MFT read is not atomic. Small inconsistencies are accepted; the USN recorded at scan start marks the snapshot point.
+1. Request offset 0, length 512, and decode volume geometry through `adamite-ntfs`.
+2. Request record 0 at `mft_lcn × cluster_size`, splitting its assembly at the chunk bound. Require an in-use base with the correct identity and an unnamed non-resident DATA first segment. Its data size must be positive and record-aligned.
+3. Validate every run and iterator terminator. Acquire resident attribute lists from record bytes and non-resident lists from their own mappings, up to the parser's 256 KiB value bound.
+4. Track references by segment FileRef, attribute type, raw name, instance id and lowest VCN. Read an extension only when its whole virtual record range is mapped. Validate its sequence, base FileRef and segment identity before adding runs; inspect it for further list descriptors.
+5. Deduplicate discoveries, reject conflicting/overlapping mappings and require gap-free coverage of the logical MFT range. An exhausted pass with inaccessible targets or lists returns `BootstrapIncomplete`; stale references, missing attributes and malformed values are fatal. Sparse, compressed or encrypted bootstrap storage is unsupported. There is no MFT-mirror fallback.
+6. Stream every logical MFT ordinal. Requests stop at extent and chunk boundaries; core assembles records across responses and extents before classification. The deleted record 4095 in `frag-512` crosses the first extent boundary and is still assembled and counted. `$BITMAP` skipping is deferred.
 
----
+The caller never needs to supply the whole raw MFT at once. Streaming transport storage is bounded by cap × chunk plus one record; bootstrap additionally assembles attribute-list values. Owned record/name/stream metadata grows with the scan, so the transport bound is not a total memory limit.
+
+### 2.3 Record ingestion and linking
+
+The parser classifies unused, BAAD, deleted, base, extension and corrupt records. In-use records receive fixup once, using 512-byte protection strides even on 4Kn volumes. Each live NTFS 3.1 stored record number must match its virtual ordinal. Deleted headers may leave it zero; nonzero mismatches are counted as corrupt. Bootstrap rereads never publish contributions or increment streaming record counts.
+
+Attributes and required runlists are exhausted before publishing a record. Ordinary parse failures discard its entire contribution and increment diagnostic counters; deleted/BAAD/unused records produce no nodes. Invalid geometry/bootstrap, a missing or corrupt directory root, arithmetic/representation overflow and allocation failure terminate the scan. Reparse tags are retained; targets are never followed.
+
+Linking consumes only `EntryRecord`. It deduplicates identical links and drops DOS namespace 2 names when the same parent FileRef has a non-DOS name; DOS-only names remain. Distinct non-DOS names, including same-parent hard links, become separate nodes. Primary selection uses `(parent record, raw UTF-16 name, namespace, parent sequence)` ascending; secondary nodes have `HARDLINK_DUP`.
+
+Record 5 is required and becomes NodeId 0 named `/`; its self-parent name creates no edge. Parents must be surviving directory entries with matching sequences. Children of a multi-name directory attach to its primary node. Unresolved links and every cycle-member directory are reparented under `<orphaned>`; descendants stay beneath their directories. Cycle detection is iterative.
+
+In-use bases 0–15 except root and direct children of `$Extend` are grouped under `<NTFS metadata>`; descendants remain beneath them. Synthetic directories are created only when needed and have zero self sizes and no FileRef. Nameless records receive `<record N>` names. A live-volume scan is not atomic; coherent source bytes are the caller's responsibility, and no USN checkpoint is acquired.
 
 ## 3. Data Structures
 
-Target: 10M entries in memory with no per-node heap allocation. Everything is a flat SoA-style arena indexed by `u32`.
+### 3.1 Scan-time ownership
 
-### 3.1 Scan-time intermediate structures
+`Vec<RecordSlot>` grows in ordinal order and holds classification, optional sequence/record flags and an optional owned base contribution. Contributions retain raw UTF-16 names, SI metadata, reparse tags and stream segments. Extension `Patch` values carry base and source FileRefs plus their owned contribution, including attribute instance ids; extensions may precede bases because merge follows the full stream pass.
 
-```rust
-/// Dense, indexed by MFT record number. Workers write disjoint slots.
-pub struct RecordSlot {
-    pub seq: u16,
-    pub flags: SlotFlags,          // IN_USE | DIR | REPARSE | COMPRESSED | SPARSE | METAFILE
-    pub attrs: u32,                // FILE_ATTRIBUTE_* from $STANDARD_INFORMATION
-    pub mtime: u64,                // FILETIME
-    pub size: u64,                 // unnamed $DATA logical size
-    pub alloc: u64,                // on-disk bytes (incl. ADS + $INDEX_ALLOCATION)
-    pub ads_size: u64,
-    pub names: NameList,           // usually 1, inline small-vec
-}
+A stream key is `(attribute type, raw UTF-16 name)`. Segment identity adds lowest VCN, source FileRef and attribute id. Only `lowest_vcn == 0` supplies sizes. Duplicate resident streams, conflicting first segments, gaps and overlaps discard the affected ordinary base. Missing/stale-base patches are rejected without modifying the base. Merge produces the scalar sizes, flags, metadata and names in `EntryRecord`.
 
-pub struct NameLink {
-    pub parent: FileRef,           // 48-bit record + 16-bit seq
-    pub name: NameRef,             // into the per-worker name pool, remapped at merge
-    pub namespace: u8,
-}
+Linking retains raw names for alias selection and ordering, then writes lossy UTF-8 directly into one shared pool. Its intermediate `ParentTree` is a flat parent-index array; each `ResolvedNode` holds only a name offset/length. Raw names are released after their record's nodes are emitted. There is no per-node name allocation in the intermediate or final tree.
 
-/// Produced by extension records, merged into base in Phase 2.
-pub enum Patch {
-    Data   { base: FileRef, size: Option<u64>, alloc: Option<u64>, named: bool },
-    Name   { base: FileRef, link: NameLink },
-    Index  { base: FileRef, alloc: Option<u64> },
-}
+### 3.2 Immutable snapshot
 
-#[derive(Clone, Copy)]
-pub struct FileRef(u64);           // record() -> u64 (low 48), sequence() -> u16 (high 16)
-```
+`NodeId` is a `u32` newtype. Root is 0, synthetic metadata/orphan directories follow in that order, then ordinary nodes follow `(record, parent record, raw name, namespace)` order. Internal conversions and array ranges are checked.
 
-`slots` is a `Vec<RecordSlot>` with length `mft_size / record_size`, so FRN-to-slot lookup is plain array indexing with no HashMap.
+| Storage | Fields |
+|---|---|
+| `#[repr(C)] Node`, in order | Five `u64`: `size`, `alloc`, `total_size`, `total_alloc`, `mtime`; five `u32`: `parent`, `child_start`, `child_len`, `file_count`, `name_off`; then `u16 name_len`, `u16 flags` |
+| Parallel cold columns | ADS size, optional FileRef, raw SI attributes, nlink and optional reparse tag |
+| Shared arrays | UTF-8 name bytes and CSR `NodeId` children; every non-root node occurs once in child ranges that partition the array |
+| Snapshot metadata/indexes | Parsed geometry plus `ScanContext`, top-100 primary files and extension summaries |
+| Separate output | `ScanOutput.stats`; checked counters contain neither durations nor transport counts |
 
-### 3.2 Final Snapshot (immutable)
+The implementation has a compile-time `assert!(size_of::<Node>() == 64)`. Node count, CSR indices and pool length must fit `u32`; individual UTF-8 name lengths must fit `u16`. Overflow is an error. Node flags are directory, reparse, sparse, compressed, hidden, system, hard-link duplicate and synthetic; orphan/metadata placement is represented by the tree.
 
-```rust
-pub type NodeId = u32;
+All snapshot storage is private and frozen when delivered. `Snapshot` is Send + Sync and can be shared through `Arc`; cloning a snapshot copies its owned arrays. `node(NodeId)` returns a read-only `NodeView` covering hot and cold fields. `children` and `name` borrow slices; `path` constructs a string iteratively and fallibly. `len`, `is_empty`, `volume`, `top_files` and `ext_stats` expose the remaining read-only data. Unknown ids return `None`. Dynamic query operations remain future work (§4).
 
-#[repr(C)]
-pub struct Node {                  // 64 bytes
-    pub size: u64,                 // self logical
-    pub alloc: u64,                // self on-disk
-    pub total_size: u64,           // subtree logical
-    pub total_alloc: u64,          // subtree on-disk
-    pub mtime: u64,
-    pub parent: NodeId,
-    pub child_start: u32,          // range into Snapshot::children
-    pub child_len: u32,
-    pub file_count: u32,           // files in subtree
-    pub name: NameRef,             // { off: u32, len: u16 } into name pool (UTF-8)
-    pub flags: NodeFlags,          // u16: DIR | HIDDEN | SYSTEM | REPARSE | HARDLINK_DUP | ORPHAN | META | SPARSE | COMPRESSED
-}
+### 3.3 Accounting and final ordering
 
-pub struct Snapshot {
-    pub volume: VolumeInfo,        // letter, serial, cluster size, total/free, scanned_at, usn_checkpoint
-    pub nodes: Vec<Node>,          // nodes[0] = volume root
-    pub children: Vec<NodeId>,     // CSR: children of n = children[n.child_start..][..n.child_len], sorted by total_alloc desc
-    pub names: Vec<u8>,            // UTF-8 name pool
-    pub frn: Vec<u64>,             // NodeId -> FileRef (cold, for USN incremental update)
-    pub top_files: Vec<NodeId>,    // precomputed top-K by alloc
-    pub ext_stats: Vec<ExtStat>,   // { ext: NameRef, count, total_alloc }, sorted desc
-    pub stats: ScanStats,          // records_total/in_use/bad_fixup/orphans/hardlinks, durations, limits used
-}
-```
+- `size` is unnamed DATA logical size. `ads_size` sums named DATA logical sizes, excluding `$BadClus:$Bad`. FILE_NAME cached sizes never contribute.
+- `alloc` sums every non-resident stream, including DATA, ADS, INDEX_ALLOCATION, BITMAP and security descriptors, once from its first segment. Compressed/sparse streams use `compressed_size`; other streams use `allocated_size`. Resident allocation is zero.
+- Iterative BFS followed by reverse accumulation initializes totals from self size/allocation. Primary files contribute one file; directories, synthetic nodes and duplicates contribute zero files. DUP nodes keep self values and totals but contribute nothing to ancestors, top files or extension statistics. Directory self-allocation is included. Logical subtree totals exclude ADS; allocation includes it.
+- Children sort by `(-total_alloc, name, FileRef, NodeId)`; top files use `-alloc` with the same ties and include metafiles. Name comparisons re-encode pooled UTF-8 to UTF-16 without allocation. Valid names reproduce raw ordering; malformed names sort by replacement text, then record/sequence and NodeId.
+- Extension summaries group primary files by the last ASCII-lowercased suffix without its dot. Leading-dot-only, trailing-dot and no-dot names use the empty extension. Summaries contain count, logical bytes and allocation, sorted by `(-total_alloc, extension)`.
 
-Rationale:
+Checked arithmetic protects counters and totals. Output is independent of request chunk size and response arrival order. Root totals describe retained entries, not a reconciliation of all allocated volume clusters.
 
-- **CSR instead of first_child/next_sibling.** Siblings sit contiguously in memory, sorting parallelizes per directory, and paginated listing (`offset/limit`) is an O(1) slice.
-- **UTF-8 name pool.** Conversion happens in parallel during Phase 1, and ASCII names take half the space of UTF-16.
-- **Hot data stays in `nodes`;** cold columns such as `frn` are stored separately.
-- **Estimate:** 10M nodes ≈ 640 MB nodes + 40 MB children + ~150 MB names. If needed, `mtime` and `size` can move to cold columns.
-- **Persistence:** the snapshot is a handful of flat arrays, so the file is a header plus raw slices and can later be mmapped zero-copy (or use `rkyv`).
+## 4. Access Layer (planned)
 
-### 3.3 Aggregation (Phase 5)
+`add-core-query` will add operations such as summary, directory listing and search over immutable snapshots. Precomputed `top_files` and `ext_stats` are available now; filtering/ranking arbitrary subtrees is not.
 
-```rust
-// BFS order from root; reverse iteration guarantees children before parents.
-let order = bfs_order(&nodes, &children, ROOT);
-for &id in order.iter().rev() {
-    let n = &nodes[id as usize];
-    let (s, a, f) = if n.flags.contains(HARDLINK_DUP) { (0, 0, 0) }
-                    else { (n.total_size, n.total_alloc, n.file_count) };
-    let p = n.parent as usize;
-    if id != ROOT { nodes[p].total_size += s; nodes[p].total_alloc += a; nodes[p].file_count += f; }
-}
-```
-
-Initialization: `total_* = self`; files have `file_count = 1`. There is no recursion, so deep directory nesting cannot overflow the stack.
-
----
-
-## 4. Access Layer
+The following privilege model, algorithms and tools are planned. Snapshot persistence, CLI, MCP, a snapshot/job service and USN-based refresh are unimplemented. Planned persistence uses a header and flat-array sections; mmap-friendly encoding or `rkyv` are candidates, with no serialized format or daemon protocol established yet.
 
 ### 4.1 Privilege model
 
-Scanning a raw volume needs admin rights, but an MCP process spawned by an agent host usually runs unelevated.
+Scanning a Windows raw volume needs elevated device access, while an MCP process spawned by an agent host usually runs unelevated. The future I/O adapter or service owns that access.
 
-- **MVP:** run `adamite scan C: -o C.adm` elevated once to produce a snapshot file. MCP and CLI queries read the `.adm` file and need no elevation.
-- **Later:** an elevated `adamite-daemon` (Windows service) holds snapshots and keeps them fresh through the USN journal. CLI and MCP become thin clients over a named pipe.
+- **Planned MVP:** run `adamite scan C: -o C.adm` elevated once to produce a snapshot file. MCP and CLI queries read the `.adm` file without elevation.
+- **Later:** an elevated `adamite-daemon` Windows service holds snapshots and keeps them fresh through the USN journal. CLI and MCP become thin clients over a named pipe.
 
-### 4.2 Budgeted summary (agent-oriented core query)
+### 4.2 Budgeted summary (planned agent-oriented query)
 
-Agent context is limited, so the core provides "the most informative tree within N nodes":
+Agent context is limited, so the planned query returns the most informative tree within a node budget:
 
-```
+```text
 summarize(root, budget_nodes, min_share):
   heap = MaxHeap by total_alloc, push(root)
-  while emitted < budget and heap non-empty:
+  while emitted < budget_nodes and heap non-empty:
       n = pop; emit(n)
       for c in children(n) (already sorted desc):
           if c.total_alloc / root.total_alloc < min_share: collapse into "… N more (X GB)", break
@@ -269,7 +182,7 @@ summarize(root, budget_nodes, min_share):
   render as an indented tree
 ```
 
-### 4.3 MCP tools
+### 4.3 MCP tools (planned)
 
 | Tool | Purpose |
 |---|---|
@@ -281,54 +194,59 @@ summarize(root, budget_nodes, min_share):
 | `search(pattern, under?, min_size?)` | Name search by glob/regex |
 | `node_info(path)` | Size, alloc, mtime, attributes, hard links, reparse flag |
 
-Every result includes the snapshot timestamp and units, and supports `format: text|json` (text by default, to save tokens). The CLI mirrors these tools: `adamite tree C:\Users --budget 80`, `adamite top --n 20 --json`, and so on.
+The planned response convention includes snapshot timestamp and units in every result, with `format: text|json` and text as the default to save tokens. CLI commands will mirror the tools, for example `adamite tree C:\Users --budget 80` and `adamite top --n 20 --json`.
 
----
+## 5. Parallelism and Resource Limits (planned)
 
-## 5. Parallelism and Resource Limits
+`adamite-io`/`add-volume-reader` is the next change. Any `VolumeReader` abstraction belongs there. Adapters will open devices/images, perform reads, propagate host errors and feed the exact requested bytes to core. Native alignment belongs to the adapter: it may round device reads outward into aligned buffers and slice the requested range, including core's 512-byte boot request on a 4Kn source.
 
-Principle: CPU, I/O, memory and concurrent scans each have their own cap, all controlled by a single `ScanLimits`. The core never uses a global thread pool.
+The full design below is future roadmap step 3 work. CPU, I/O, transport memory and concurrent scans each have their own cap, coordinated by a driver/service-level `ScanLimits`. Core already supports multiple outstanding requests through `ScanConfig.max_outstanding`; it still processes records on one thread. Buffer pools, native I/O depth, rate limiting and waiting belong to the adapter/driver, and core never uses a global thread pool.
 
 ### 5.1 Resources and controls
 
-| Resource | Failure if unbounded | Control |
+| Resource | Failure if unbounded | Planned control |
 |---|---|---|
-| CPU | Parse workers and sorting saturate all cores and the foreground stutters | Dedicated rayon `ThreadPool` with a capped thread count and lowered thread priority |
-| Disk I/O | Large sequential reads fill the disk queue and other I/O latency spikes | Cap on in-flight reads + optional rate limit + low I/O priority |
-| Memory | The reader outpaces the workers and buffers pile up | Fixed-size buffer pool (also provides backpressure) |
-| Concurrent scans | Several agents trigger scans at once and the load stacks | Service-level semaphore; one scan per volume, duplicate requests share the running task |
+| CPU | Parse workers and sorting saturate all cores and the foreground stutters | A driver-owned dedicated rayon ThreadPool with a capped thread count and lowered priority |
+| Disk I/O | Large sequential reads fill the disk queue and increase other I/O latency | Adapter cap on in-flight native reads, optional rate limit and low I/O priority |
+| Transport memory | The reader outpaces consumption and buffers pile up | Fixed-size adapter buffer pool and bounded response queue, coordinated with core's request cap |
+| Concurrent scans | Several agents trigger scans and their loads stack | Service semaphore; one scan per volume, with duplicate requests sharing the running task |
+
+The retained scaling target is 10M nodes without per-node name allocation. A rough layout estimate is 640 MB of hot nodes, 40 MB of CSR children and approximately 150 MB of names, plus cold columns, scan intermediates and transport storage. This is a planning estimate, not a measured total-memory bound; metadata budgets remain future work.
 
 ### 5.2 Configuration
 
+This proposed configuration belongs to the future adapter/scan driver; its profile defaults are separate from today's core defaults of cap 1 and 1 MiB chunks.
+
 ```rust
 pub struct ScanLimits {
-    /// Worker threads for parse/sort/aggregate. Default: max(1, cores / 2).
+    /// Future parse/sort worker count. Planned default: max(1, cores / 2).
     pub threads: NonZeroUsize,
-    /// Read chunk size in bytes. Default: 4 MiB.
+    /// Planned driver chunk size: 4 MiB; also configure ScanConfig.chunk_size.
     pub chunk_size: usize,
-    /// Max buffers alive at once (in flight + queued + being parsed).
-    /// Bounds memory to chunk_size * buffers. Default: threads + 2.
+    /// Adapter buffers in flight or queued. Planned default: threads + 2.
     pub buffers: NonZeroUsize,
-    /// Max outstanding read requests (overlapped I/O depth). Default: 2.
+    /// Outstanding native reads. Planned default: 2; 1 for synchronous I/O.
     pub io_depth: NonZeroUsize,
-    /// Optional read throughput cap (token bucket). Default: None.
+    /// Optional adapter token-bucket throughput cap. Planned default: None.
     pub max_read_bytes_per_sec: Option<NonZeroU64>,
-    /// Lower CPU + I/O priority of scan threads. Default: true.
+    /// Lower driver/worker CPU and I/O priority. Planned default: true.
     pub low_priority: bool,
 }
 
 pub enum ScanProfile { Background, Balanced, Max }
 ```
 
-| Profile | threads | io_depth | Rate limit | Low priority |
+| Planned profile | threads | io_depth | Rate limit | Low priority |
 |---|---|---|---|---|
 | Background | 2 | 1 | 200 MB/s | yes |
-| Balanced (default) | cores / 2 | 2 | none | yes |
+| Balanced (default) | max(1, cores / 2) | 2 | none | yes |
 | Max | all cores | 4 | none | no |
 
-Individual fields can override a profile: the CLI takes `--threads 4 --io-depth 1 --max-read 300M`, and MCP `scan_volume` accepts `profile` plus overrides.
+The planned CLI permits field overrides such as `--threads 4 --io-depth 1 --max-read 300M`; MCP `scan_volume` accepts a profile plus overrides. The driver coordinates native `io_depth`, buffer capacity and core's `max_outstanding`: native reads and unconsumed logical requests are different limits. Raising the request cap does not parallelize core.
 
 ### 5.3 CPU: dedicated pool
+
+The future driver/service owns the CPU pool. A later parallel implementation will route parse and sort work onto it; the current Scanner remains serial.
 
 ```rust
 let pool = rayon::ThreadPoolBuilder::new()
@@ -338,74 +256,81 @@ let pool = rayon::ThreadPoolBuilder::new()
     .build()?;
 
 pool.install(|| {
-    // Phase 1 parse, Phase 6 par_sort / ext_stats — all parallel work runs here.
-    // Nested par_iter inside install() stays on this pool.
+    // Planned Phase 1 parsing and Phase 6 sorting/extension-stat work.
+    // Nested parallel iterators stay on this dedicated pool.
 });
 ```
 
-- **The core never calls `rayon::spawn` or relies on the global pool.** All parallel code runs on the pool passed in, so an embedding process (e.g. an MCP server) keeps its own threads.
-- **The reader is one extra, mostly I/O-blocked thread** and does not count toward `threads`.
-- **Windows:** worker threads use `SetThreadPriority(THREAD_PRIORITY_BELOW_NORMAL)`. A standalone CLI scan may use `PROCESS_MODE_BACKGROUND_BEGIN`, which lowers CPU, I/O and memory-page priority together.
+- Planned parallel work uses the supplied pool rather than `rayon::spawn` or a global pool, so embedding applications keep control of their threads.
+- The proposed blocking reader is one extra driver-owned, mostly I/O-blocked thread and does not count toward `threads`.
+- On Windows, the driver will lower worker priority with `SetThreadPriority(THREAD_PRIORITY_BELOW_NORMAL)`. A standalone CLI may use `PROCESS_MODE_BACKGROUND_BEGIN` to lower CPU, I/O and memory-page priority together.
 
 ### 5.4 I/O and memory: buffer-pool backpressure
 
-```
-            ┌──── free_rx (bounded, N = buffers) ◄──────────────┐
-            ▼                                                   │
- reader ── take free buffer ── rate-limit acquire ── read_at ── full_tx ──► worker parse ── return buffer
-          (no free buffer → block = backpressure)        (bounded)
+The planned adapter/driver pipeline is:
+
+```text
+          ┌──── free buffers (bounded, N = buffers) ◄───────────────────┐
+          ▼                                                            │
+adapter: take buffer → rate limit → aligned read → bounded ready queue  │
+                                                  │                   │
+driver:                               feed(id, exact slice) → return buffer
+                                                  │ copies response
+                                                  ▼
+core:                                  step() → consume request slot
 ```
 
-- **`buffers` aligned buffers are allocated once at startup**, with no further allocation during the scan. Peak memory is `chunk_size × buffers`.
-- **The reader must get a free buffer before issuing a read.** When workers fall behind, the reader stalls, so disk throughput matches CPU throughput automatically.
-- **`io_depth` caps outstanding reads** (1 for synchronous reads). On HDDs, a depth of 2 saturates sequential bandwidth without starving other programs.
-- **Rate limit:** a simple token bucket; `acquire(chunk_len)` before each read, sleeping when tokens run out.
-- **Low I/O priority:** `SetFileInformationByHandle(FileIoPriorityHintInfo, IoPriorityHintLow)` on the volume handle.
+- Allocate the adapter's aligned buffers once and reuse them. Pool payload capacity is approximately `chunk_size × buffers`, with alignment padding; core's copied responses and growing metadata require additional memory.
+- The reader must acquire a free buffer before issuing a read. A full response queue or exhausted pool blocks the driver/reader. Core's occupied request slots independently cap accepted but unconsumed responses; the driver also stops issuing work when that cap is reached.
+- After a successful `feed`, core retains its own copy, so the adapter can return the source buffer to the pool immediately. Core neither borrows the pool nor waits on its channels.
+- On Windows, the planned raw-volume adapter uses `FILE_FLAG_NO_BUFFERING` with sector-aligned offsets, lengths and buffers. It rounds outward as needed and feeds only the exact requested range.
+- `io_depth` caps outstanding native reads, with 1 for synchronous reads. Depth 2 is the proposed balanced starting point for sequential HDD access, subject to measurement on the device.
+- The planned rate limiter is a token bucket: acquire `chunk_len` before reading and sleep in the adapter/driver when tokens run out.
+- Low I/O priority is planned through `SetFileInformationByHandle(FileIoPriorityHintInfo, IoPriorityHintLow)` on the volume handle.
 
 ### 5.5 Service-level scan scheduling
 
+The proposed service scheduler is:
+
 ```rust
 pub struct ScanScheduler {
-    global: Semaphore,                                    // max concurrent scans, default 1
-    running: Mutex<HashMap<VolumeId, Shared<ScanTask>>>,  // per-volume dedup
+    global: Semaphore,                                  // concurrent scans, default 1
+    running: Mutex<HashMap<VolumeId, Shared<ScanTask>>>,  // per-volume deduplication
 }
 ```
 
-- **A duplicate request for the same volume** returns the running task's handle; the caller subscribes to its progress.
-- **The global semaphore defaults to 1.** Scans of different volumes queue and run serially, so their thread pools never stack beyond the configured limits.
-- **Every scan carries a `CancellationToken`.** The reader checks it before each chunk and workers check it per chunk, so a scan stops within tens of milliseconds. MCP exposes this as `cancel_scan`.
-- **Queries are mostly single-threaded slice operations.** Only full-scan queries such as `search` run on a small shared pool (2 threads by default).
+- A duplicate request for a volume will return the running task's handle; callers subscribe to its progress.
+- The planned global semaphore defaults to 1. Different-volume scans queue and run serially so their worker pools do not stack beyond configured limits.
+- Each future scan job carries a CancellationToken. The driver checks it before reads and driver calls, and future workers check it per chunk. Dropping the current Scanner stops further core work; no cancellation-token API exists in core. The planned cancellation target is tens of milliseconds, to be validated against directory-sort latency; MCP exposes `cancel_scan`.
+- Queries are planned as mostly single-threaded slice operations. Full-scan operations such as search may use a small shared query pool, initially 2 threads.
 
 ### 5.6 Impact on the pipeline
 
-- **Phase 1** uses the buffer-pool model above.
-- **Phases 4–5** (link, CSR build, aggregation) are single-threaded linear passes and are unaffected.
-- **Phase 6** runs `par_sort` and extension stats on the same pool.
-- **`ScanStats`** records `threads_used`, `peak_buffer_bytes` and `throttled_ms`, so the limits can be verified.
+- Phase 0 device opening, aligned reads and future USN-position acquisition belong to the adapter/service. Core keeps its boot → record 0 → discovery protocol.
+- Phase 1 will use adapter buffer-pool backpressure and, in the later parallel design, capped parse workers. Cross-extent assembly and virtual ordering remain core responsibilities.
+- Phases 3–5 (link, CSR construction and aggregation) remain single-threaded linear passes in the proposed parallel pipeline.
+- Phase 6 is planned to use parallel per-directory sorting and extension-stat work on the same dedicated CPU pool.
+- Future driver/service telemetry will record `threads_used`, `peak_buffer_bytes` and `throttled_ms` so resource controls can be measured. Core ScanStats remains independent of transport counts and clocks.
 
----
+Dedicated CPU pools, parallel parse/sort, buffer-pool backpressure, `$BITMAP` skipping and general CPU/memory/scan limits remain roadmap step 3 work. No ScanLimits, resource profiles, global pool or service scheduler is implemented. Memory for metadata and a single directory sort's cost remain unbounded by a general budget.
 
 ## 6. Implementation Order
 
-1. **`adamite-ntfs`:** boot sector, fixup, attribute and runlist parsing with synthetic builders, golden vectors and fuzzing. Generate compressed NTFS images and independent JSON manifests using `deno task fixtures` on Linux with ntfs-3g, zstd, attr and sudo; tests read those images on Linux and Windows without mounting them.
-2. **`adamite-core` single-threaded:** Phases 0–6 end to end, cross-checked against `dir /s` and WizTree.
-3. **Parallelism and I/O:** dedicated pool, buffer-pool backpressure, aligned reads, `$BITMAP` skipping, resource limits.
-4. **Snapshot persistence + CLI.**
-5. **MCP (rmcp).**
-6. **USN incremental refresh + daemon.**
+1. Done: `adamite-ntfs`, shared fixture support and independently measured v3 manifests; parser `no_std` builds remain supported.
+2. Done: single-threaded sans-io `adamite-core`, phases 0–6, fixture oracles, property tests and bounded fuzzing. Automated WizTree/`dir /s` comparison is deferred; manual Windows comparison has not been performed.
+3. Next: `adamite-io` in `add-volume-reader`; then roadmap step 3 parallelism, buffer ownership, bitmap skipping and resource controls.
+4. Future: `add-core-query`, snapshot persistence and CLI.
+5. Future: MCP and scan-job/snapshot services.
+6. Future: USN incremental refresh and a daemon; walkdir fallback remains separate future work.
 
 ## 7. Conventions
 
-Rust crates use edition 2024 and toolchain 1.99. Keep `rust-toolchain.toml` and the workspace `rust-version` synchronized.
+Rust crates use edition 2024 and toolchain 1.99. Keep `rust-toolchain.toml` and the workspace `rust-version` synchronized. Core forbids unsafe code and adopts the parser's panic-free Clippy denies; grow owned scan buffers fallibly and use checked arithmetic. Do not recurse through file trees.
 
 Production types must not carry fields, variants or hook state used only by tests; tests observe real outputs or existing production state.
 
-Every crate uses snafu errors. The parser configures snafu with `default-features = false` and `features = ["rust_1_81"]` for `no_std` support.
+Library errors use snafu with source chains and documented `# Errors` sections. Core separates configuration, feed, fatal scan and snapshot errors; ordinary rejected records are counted in `ScanStats`. Workspace snafu disables default features and enables `rust_1_81`, preserving parser `no_std` support.
 
-Crates that log use tracing, beginning with `adamite-core`; binaries install tracing-subscriber. `adamite-ntfs` returns parsed values and errors without logging.
+Crates that log use workspace tracing, beginning with core's per-call phase spans; entered guards never survive a driver call. The parser does not log. Future binaries will install subscribers. Core reads no clocks; caller context supplies timestamps.
 
-Task automation and fixture generation use Deno TypeScript scripts, invoked through the root `deno.json` with `deno task`.
-
-Do not add bash, Python or just scripts; CI steps invoke only `cargo` or `deno` one-liners.
-
-Implementation plans live in `docs/plans/`, one file per piece of work.
+Task automation and fixture generation use Deno TypeScript through root `deno.json`. Do not add bash, Python or just scripts; CI steps invoke only `cargo` or `deno` one-liners. Plans live in `docs/plans/`, one file per change.

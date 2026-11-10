@@ -1,4 +1,4 @@
-//! Independent on-disk encoders used by parser integration tests.
+//! Independent NTFS on-disk encoders for parser, core and fuzz tests.
 
 #[derive(Debug, Clone)]
 /// Configurable NTFS boot-sector encoder independent of the parser.

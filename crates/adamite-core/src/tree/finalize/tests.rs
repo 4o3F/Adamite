@@ -100,3 +100,19 @@ fn aggregation_finalization_steps_process_at_most_256_items() -> Result<(), Box<
     }
     Err("finalizer did not terminate".into())
 }
+
+#[test]
+fn aggregation_finalization_yields_after_one_directory_sort() -> Result<(), Box<dyn Error>> {
+    let mut snapshot = snapshot(3)?;
+    for node in &mut snapshot.data_mut().nodes {
+        node.flags = NodeFlags::DIRECTORY.raw();
+    }
+    let mut finalizer = Finalizer::new();
+    for expected in 1..=snapshot.len() {
+        assert!(!finalizer.step(&mut snapshot)?);
+        assert!(matches!(finalizer.stage, Stage::SortChildren));
+        assert_eq!(finalizer.cursor, expected, "one directory sort per call");
+    }
+    assert!(finalizer.step(&mut snapshot)?);
+    Ok(())
+}
