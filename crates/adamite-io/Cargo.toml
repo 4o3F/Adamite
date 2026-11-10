@@ -1,0 +1,18 @@
+[package]
+name = "adamite-io"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+adamite-core = { version = "0.1.0", path = "../adamite-core" }
+snafu.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+adamite-fixtures = { version = "0.1.0", path = "../adamite-fixtures" }
+
+[lints]
+workspace = true

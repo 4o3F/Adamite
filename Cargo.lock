@@ -25,6 +25,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "adamite-io"
+version = "0.1.0"
+dependencies = [
+ "adamite-core",
+ "adamite-fixtures",
+ "snafu",
+ "tracing",
+]
+
+[[package]]
 name = "adamite-ntfs"
 version = "0.1.0"
 dependencies = [
