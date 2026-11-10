@@ -114,7 +114,133 @@ function value(attribute: Uint8Array, image: Uint8Array, cluster: number): Uint8
   return result;
 }
 
+function scanHeader(mode: number, transport: number, layout = 0): Uint8Array {
+  return new Uint8Array([mode, transport, layout, 255, 224, 245, 234, 251, 236, 253, 230, 0]);
+}
+
+function protectRecord(record: Uint8Array): void {
+  const header = view(record);
+  const usa = header.getUint16(4, true);
+  const usn = header.getUint16(usa, true);
+  for (let stride = 1; stride <= record.length / 512; stride++) {
+    const tail = stride * 512 - 2;
+    header.setUint16(usa + stride * 2, header.getUint16(tail, true), true);
+    header.setUint16(tail, usn, true);
+  }
+}
+
+function compactRun(attribute: Uint8Array, clusters: number, lcn: number): void {
+  if (clusters < 1 || clusters > 255 || lcn > 127) {
+    throw new Error("seed run exceeds compact encoding");
+  }
+  const data = view(attribute);
+  data.setBigUint64(16, 0n, true);
+  data.setBigUint64(24, BigInt(clusters - 1), true);
+  const pairs = data.getUint16(32, true);
+  attribute.fill(0, pairs);
+  attribute.set([0x11, clusters, lcn, 0], pairs);
+}
+
+function reducedScanImage(image: Uint8Array, manifest: Manifest): Uint8Array {
+  const sector = manifest.geometry.bytes_per_sector;
+  const recordSize = manifest.geometry.file_record_size;
+  const cluster = manifest.geometry.cluster_size;
+  const mft = Number(manifest.mft.extents[0].lcn) * cluster;
+  const fixed = fixedRecord(image.subarray(mft, mft + recordSize));
+  if (fixed === null) throw new Error("invalid seed record zero");
+  const kept = Array.from(attributes(fixed)).filter((attribute) =>
+    view(attribute).getUint32(0, true) !== 0x20
+  )
+    .map((attribute) => attribute.slice());
+  const mftSize = 6 * recordSize;
+  const clusters = Math.ceil(mftSize / sector);
+  let found = false;
+  for (const attribute of kept) {
+    const data = view(attribute);
+    if (data.getUint32(0, true) !== 0x80 || attribute[9] !== 0) continue;
+    if (attribute[8] !== 1) throw new Error("resident seed MFT");
+    data.setBigUint64(40, BigInt(clusters * sector), true);
+    data.setBigUint64(48, BigInt(mftSize), true);
+    data.setBigUint64(56, BigInt(mftSize), true);
+    compactRun(attribute, clusters, 2);
+    found = true;
+  }
+  if (!found) throw new Error("missing seed MFT DATA");
+  const header = view(fixed);
+  let cursor = header.getUint16(20, true);
+  fixed.fill(0, cursor);
+  for (const attribute of kept) {
+    fixed.set(attribute, cursor);
+    cursor += attribute.length;
+  }
+  header.setUint32(cursor, 0xffffffff, true);
+  header.setUint32(24, cursor + 8, true);
+  protectRecord(fixed);
+  const root = fixedRecord(image.subarray(mft + 5 * recordSize, mft + 6 * recordSize));
+  if (root === null) throw new Error("invalid seed root");
+  let lcn = 32;
+  for (const attribute of attributes(root)) {
+    if (attribute[8] !== 1) continue;
+    const data = view(attribute);
+    const allocation = Number(data.getBigUint64(40, true));
+    const logical = Number(data.getBigUint64(48, true));
+    compactRun(attribute, Math.ceil(Math.max(allocation, logical) / sector), lcn);
+    lcn += 32;
+  }
+  protectRecord(root);
+  const result = new Uint8Array(2 * sector + mftSize);
+  result.set(image.subarray(0, 512));
+  const boot = view(result);
+  result[13] = 1;
+  boot.setBigUint64(48, 2n, true);
+  result.set(fixed, 2 * sector);
+  result.set(root, 2 * sector + 5 * recordSize);
+  return result;
+}
+
+async function scanCorpus(): Promise<void> {
+  const path = "crates/adamite-core/fuzz/corpus/scan";
+  const seeds: Uint8Array[] = [];
+  for (const mode of [0, 1]) {
+    for (const layout of [0, 1, 6, 15]) {
+      for (let transport = 0; transport < 16; transport++) {
+        seeds.push(scanHeader(mode, transport, layout));
+      }
+    }
+  }
+  for (const name of ["basic-4k", "frag-512", "4kn-64k"]) {
+    const root = "tests/fixtures/ntfs";
+    const manifest: Manifest = JSON.parse(await Deno.readTextFile(`${root}/${name}.json`));
+    const decoded = await new Deno.Command("zstd", {
+      args: ["-d", "--stdout", `${root}/${manifest.image}`],
+      stdout: "piped",
+      stderr: "piped",
+    }).output();
+    if (!decoded.success) throw new Error(new TextDecoder().decode(decoded.stderr));
+    if (BigInt(decoded.stdout.length) !== BigInt(manifest.image_len)) {
+      throw new Error("image length mismatch");
+    }
+    seeds.push(concatenate(scanHeader(2, 15), reducedScanImage(decoded.stdout, manifest)));
+  }
+  const total = seeds.reduce((sum, seed) => sum + seed.length, 0);
+  if (total > budget) throw new Error(`scan corpus exceeds ${budget} bytes`);
+  try {
+    await Deno.remove(path, { recursive: true });
+  } catch (error) {
+    if (!(error instanceof Deno.errors.NotFound)) throw error;
+  }
+  await Deno.mkdir(path, { recursive: true });
+  for (const seed of seeds) {
+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", seed.slice()));
+    const hash = Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
+    await Deno.writeFile(`${path}/${hash}`, seed);
+  }
+  console.log(`scan: ${seeds.length} seeds, ${total}/${budget} bytes`);
+}
+
 async function main() {
+  if (Deno.args.length === 1 && Deno.args[0] === "--core") return await scanCorpus();
+  if (Deno.args.length !== 0) throw new Error("usage: fuzz_corpus.ts [--core]");
   const selectorSource = await Deno.readTextFile(
     "crates/adamite-ntfs/fuzz/fuzz_targets/typed_values/selectors.rs",
   );

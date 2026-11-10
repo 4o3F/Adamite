@@ -162,8 +162,8 @@ Each automated milestone is one bounded Codex run targeting 15–30 minutes, inc
 
 ### M14 — Full-scan fuzz target
 
-- [ ] M14.1 Create excluded `crates/adamite-core/fuzz`, target `scan`, structured bounded input generation, protocol mutations and a size-derived termination bound; seed from synthetic valid layouts and reduced fixture fragments.
-- [ ] M14.2 Document the harness bounds and verify panic/request invariants. Verify in `crates/adamite-core`: `cargo +nightly fuzz run scan -- -max_total_time=30 -max_len=262144 -timeout=2 -rss_limit_mb=2048`.
+- [x] M14.1 Create excluded `crates/adamite-core/fuzz`, target `scan`, structured bounded input generation, protocol mutations and a size-derived termination bound; seed from synthetic valid layouts and reduced fixture fragments.
+- [x] M14.2 Document the harness bounds and verify panic/request invariants. Verify in `crates/adamite-core`: `cargo +nightly fuzz run scan -- -max_total_time=30 -max_len=262144 -timeout=2 -rss_limit_mb=2048`.
 
 ### M15 — Gate and CI integration
 
