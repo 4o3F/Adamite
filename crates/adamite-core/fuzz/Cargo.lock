@@ -7,6 +7,7 @@ name = "adamite-core"
 version = "0.1.0"
 dependencies = [
  "adamite-ntfs",
+ "crc32fast",
  "snafu",
  "tracing",
 ]
@@ -62,6 +63,15 @@ name = "cfg-if"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
+
+[[package]]
+name = "crc32fast"
+version = "1.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b929dd2a135771f40afabd1073f85eed59c800b7c61901e5c254270497dad64"
+dependencies = [
+ "cfg-if",
+]
 
 [[package]]
 name = "find-msvc-tools"

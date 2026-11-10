@@ -91,7 +91,7 @@ Each milestone ends with one reviewed commit and `deno task check` green. A mile
 
 ### P2 — Shared rules, format and encoder
 
-- [ ] Move ranking and extension extraction into `snapshot/rules.rs`, used by finalization (behaviour unchanged; existing tests pass). Add `crc32fast` (both lockfiles), `snapshot/persist/{mod,format,encode,error}.rs`, `PersistError` and public `ScanOutput::to_bytes` per D1, D2, D6. Determinism and golden-encoding tests.
+- [x] Move ranking and extension extraction into `snapshot/rules.rs`, used by finalization (behaviour unchanged; existing tests pass). Add `crc32fast` (both lockfiles), `snapshot/persist/{mod,format,encode,error}.rs`, `PersistError` and public `ScanOutput::to_bytes` per D1, D2, D6. Determinism and golden-encoding tests.
 
 ### P3 — Decoder and validation
 

@@ -1,7 +1,7 @@
 //! Public progress, phase and result types emitted by the scan driver.
 
 use super::{ReadRequest, ScanStats};
-use crate::snapshot::Snapshot;
+use crate::snapshot::{PersistError, Snapshot};
 
 /// A scan's current processing phase or terminal state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,6 +51,18 @@ pub struct ScanOutput {
     pub snapshot: Snapshot,
     /// Final record and diagnostic counters.
     pub stats: ScanStats,
+}
+
+impl ScanOutput {
+    /// Encodes the complete snapshot and scan counters in canonical `.adm` v1 format.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PersistError`] if a format width is exceeded, length arithmetic
+    /// overflows, or the output buffer cannot be allocated.
+    pub fn to_bytes(&self) -> Result<Vec<u8>, PersistError> {
+        self.snapshot.to_adm_bytes(&self.stats)
+    }
 }
 
 /// A read request, current progress or the completed scan result.

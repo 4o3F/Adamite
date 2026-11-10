@@ -4,6 +4,8 @@ mod build;
 mod error;
 mod indexes;
 mod node;
+mod persist;
+mod rules;
 mod storage;
 
 pub(crate) use build::{
@@ -12,6 +14,7 @@ pub(crate) use build::{
 pub use error::SnapshotError;
 pub use indexes::ExtensionStat;
 pub use node::{Node, NodeFlags, NodeId, NodeView};
+pub use persist::PersistError;
 pub use storage::{Snapshot, VolumeInfo};
 
 #[cfg(test)]

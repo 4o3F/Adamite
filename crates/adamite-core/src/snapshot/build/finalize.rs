@@ -1,19 +1,13 @@
 //! Bounded child sorting, top-file selection and extension summary ordering.
 
+use crate::snapshot::rules::{Extension, Metric, Ranking};
 use crate::snapshot::{
-    ExtensionStat, Node, NodeFlags, NodeId, Snapshot, SnapshotError, storage::SnapshotStorage,
+    ExtensionStat, NodeFlags, NodeId, Snapshot, SnapshotError, storage::SnapshotStorage,
 };
-use adamite_ntfs::record::reference::FileRef;
-use std::{
-    cmp::{Ordering, Reverse},
-    collections::BinaryHeap,
-    vec::IntoIter,
-};
+use std::{cmp::Reverse, collections::BinaryHeap, vec::IntoIter};
 
 /// Maximum nodes or extension groups per call; each directory sort yields immediately.
 const ITEMS_PER_STEP: usize = 256;
-/// Number of primary files retained in the allocation ranking.
-const TOP_FILES: usize = 100;
 
 #[derive(Debug, Default)]
 enum Stage {
@@ -38,63 +32,6 @@ pub(crate) struct Finalizer {
     groups: Vec<ExtensionStat>,
     pending: IntoIter<ExtensionStat>,
     heap: BinaryHeap<RankedExtension>,
-}
-
-#[derive(Clone, Copy)]
-enum Metric {
-    SelfAlloc,
-    TotalAlloc,
-}
-
-/// Construction validates all column and name ranges before sorting begins.
-struct Ranking<'a> {
-    nodes: &'a [Node],
-    names: &'a [u8],
-    refs: &'a [Option<FileRef>],
-}
-impl Ranking<'_> {
-    fn node(&self, id: NodeId) -> Option<&Node> {
-        usize::try_from(id.raw())
-            .ok()
-            .and_then(|id| self.nodes.get(id))
-    }
-    fn name(&self, id: NodeId) -> Option<&str> {
-        let node = self.node(id)?;
-        let start = usize::try_from(node.name_off).ok()?;
-        let end = start.checked_add(usize::from(node.name_len))?;
-        std::str::from_utf8(self.names.get(start..end)?).ok()
-    }
-    // Order file identities by record number, then sequence number.
-    fn reference(&self, id: NodeId) -> Option<(u64, u16)> {
-        usize::try_from(id.raw())
-            .ok()
-            .and_then(|id| self.refs.get(id))
-            .copied()
-            .flatten()
-            .map(|reference| (reference.record(), reference.sequence()))
-    }
-    fn compare(&self, left: NodeId, right: NodeId, metric: Metric) -> Ordering {
-        let alloc = |id| {
-            self.node(id).map(|node| match metric {
-                Metric::SelfAlloc => node.alloc,
-                Metric::TotalAlloc => node.total_alloc,
-            })
-        };
-        alloc(right).cmp(&alloc(left))
-            // Valid names reproduce their original UTF-16 ordering without a scratch allocation.
-            // Lossy names compare their replacement text, then stable file references and ids.
-            .then_with(|| self.name(left).into_iter().flat_map(str::encode_utf16)
-                .cmp(self.name(right).into_iter().flat_map(str::encode_utf16)))
-            .then_with(|| self.reference(left).cmp(&self.reference(right)))
-            .then_with(|| left.cmp(&right))
-    }
-}
-
-fn extension(name: &str) -> &str {
-    match name.rsplit_once('.') {
-        Some((stem, suffix)) if !stem.is_empty() && !suffix.is_empty() => suffix,
-        _ => "",
-    }
 }
 
 impl Finalizer {
@@ -159,28 +96,15 @@ impl Finalizer {
             names: &data.names,
             refs: &data.file_refs,
         };
-        let position = data
-            .top_files
-            .binary_search_by(|other| ranking.compare(*other, id, Metric::SelfAlloc))
-            .unwrap_or_else(|position| position);
-        if position < TOP_FILES {
-            if data.top_files.len() == TOP_FILES {
-                data.top_files.pop();
-            }
-            data.top_files.try_reserve(1)?;
-            data.top_files.insert(position, id);
-        }
-        let suffix = extension(
+        ranking.select_top(&mut data.top_files, id)?;
+        let suffix = Extension::from_name(
             ranking
                 .name(id)
                 .ok_or_else(|| SnapshotError::invalid("missing file name"))?,
         );
-        let group = self.groups.binary_search_by(|group| {
-            group
-                .extension
-                .bytes()
-                .cmp(suffix.bytes().map(|byte| byte.to_ascii_lowercase()))
-        });
+        let group = self
+            .groups
+            .binary_search_by(|group| suffix.compare_folded(&group.extension));
         match group {
             Ok(position) => {
                 let group = self
@@ -204,11 +128,7 @@ impl Finalizer {
                 group.total_alloc = alloc;
             }
             Err(position) => {
-                let mut key = String::new();
-                key.try_reserve_exact(suffix.len())?;
-                for character in suffix.chars() {
-                    key.push(character.to_ascii_lowercase());
-                }
+                let key = suffix.folded()?;
                 self.groups.try_reserve(1)?;
                 self.groups.insert(
                     position,
