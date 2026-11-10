@@ -123,8 +123,8 @@ Each milestone is one bounded agent run of at most 30 minutes, including verific
 
 ### M3 — Graph and intermediate model separation
 
-- [ ] Move `EntryRecord`/`EntryName` and linking to graph; put NTFS slot/contribution/patch/stream models in private `mft/model.rs`. Retarget current stages and unit tests, remove `EntryFlags`, and give link operations their D5 owners.
-- [ ] Remove the remaining `tree/` and root `entry.rs` declarations/files. Verify linking, aliases, cycles, raw-name ordering and fixture paths; finish with `deno task check` green.
+- [x] Move `EntryRecord`/`EntryName` and linking to graph; put NTFS slot/contribution/patch/stream models in private `mft/model.rs`. Retarget current stages and unit tests, remove `EntryFlags`, and give link operations their D5 owners.
+- [x] Remove the remaining `tree/` and root `entry.rs` declarations/files. Verify linking, aliases, cycles, raw-name ordering and fixture paths; finish with `deno task check` green.
 
 ### M4 — Bootstrap and discovery without protocol dependencies
 

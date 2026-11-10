@@ -4,8 +4,8 @@ use super::*;
 use crate::ScanContext;
 use crate::{
     ScanStats,
-    entry::{EntryName, EntryRecord},
-    tree::link::Linker,
+    graph::entry::{EntryName, EntryRecord},
+    graph::link::Linker,
 };
 use adamite_fixtures::builders::BootSectorBuilder;
 use adamite_ntfs::record::reference::FileRef;

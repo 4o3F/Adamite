@@ -11,10 +11,10 @@ use super::{
 };
 use crate::{
     ScanStats, Snapshot,
-    entry::EntryRecord,
     error::ScanError,
+    graph::entry::EntryRecord,
+    graph::link::Linker,
     snapshot::{Aggregator, Finalizer, ParentTree, SnapshotBuilder},
-    tree::link::Linker,
 };
 use adamite_ntfs::boot::VolumeGeometry;
 

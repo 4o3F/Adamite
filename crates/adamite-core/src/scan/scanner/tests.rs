@@ -1597,7 +1597,7 @@ fn bootstrap_accepts_complete_256k_list_with_bounded_entry_steps() -> TestResult
     Ok(())
 }
 
-use crate::entry::{RecordKind, StreamStorage};
+use crate::mft::model::{RecordKind, StreamStorage};
 use adamite_fixtures::builders::FileNameBuilder;
 
 fn assert_transport_bound(scanner: &Scanner) -> Result<usize, Box<dyn Error>> {
@@ -2243,7 +2243,7 @@ fn ingest_frag_record_4095_restores_fixup_and_name_across_extents() -> TestResul
     Ok(())
 }
 
-use crate::entry::{EntryFlags, EntryRecord};
+use crate::{graph::entry::EntryRecord, snapshot::NodeFlags};
 
 fn merge_image(image: &[u8], cap: usize, chunk: usize) -> Result<DriverOutcome, Box<dyn Error>> {
     let mut scanner = Scanner::new(ScanConfig {
@@ -2386,26 +2386,26 @@ fn merge_fixture(name: &str) -> TestResult {
         );
         let flags = [
             (
-                EntryFlags::DIRECTORY,
+                NodeFlags::DIRECTORY,
                 expected.attributes & 0x10 != 0
                     || matches!(expected.kind, adamite_fixtures::EntryKind::Directory),
             ),
             (
-                EntryFlags::REPARSE,
+                NodeFlags::REPARSE,
                 expected.attributes & 0x400 != 0 || expected.reparse_tag.is_some(),
             ),
             (
-                EntryFlags::SPARSE,
+                NodeFlags::SPARSE,
                 expected.attributes & 0x200 != 0
                     || expected.streams.iter().any(|stream| stream.sparse),
             ),
             (
-                EntryFlags::COMPRESSED,
+                NodeFlags::COMPRESSED,
                 expected.attributes & 0x800 != 0
                     || expected.streams.iter().any(|stream| stream.compressed),
             ),
-            (EntryFlags::HIDDEN, expected.attributes & 2 != 0),
-            (EntryFlags::SYSTEM, expected.attributes & 4 != 0),
+            (NodeFlags::HIDDEN, expected.attributes & 2 != 0),
+            (NodeFlags::SYSTEM, expected.attributes & 4 != 0),
         ];
         for (flag, present) in flags {
             assert_eq!(
@@ -2553,7 +2553,7 @@ fn linking_fixture(name: &str) -> TestResult {
                     .get(node.parent)
                     .ok_or("parent")?
                     .flags
-                    .contains(EntryFlags::HARDLINK_DUP),
+                    .contains(NodeFlags::HARDLINK_DUP),
                 "children attached to secondary directory"
             );
         }
@@ -2603,7 +2603,7 @@ fn linking_fixture(name: &str) -> TestResult {
         u64::try_from(
             tree.nodes
                 .iter()
-                .filter(|node| node.flags.contains(EntryFlags::HARDLINK_DUP))
+                .filter(|node| node.flags.contains(NodeFlags::HARDLINK_DUP))
                 .count()
         )?
     );
@@ -2620,7 +2620,7 @@ fn linking_fixture(name: &str) -> TestResult {
         assert_eq!(
             links
                 .iter()
-                .filter(|node| !node.flags.contains(EntryFlags::HARDLINK_DUP))
+                .filter(|node| !node.flags.contains(NodeFlags::HARDLINK_DUP))
                 .count(),
             1
         );

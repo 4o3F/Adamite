@@ -2,11 +2,10 @@
 
 use crate::{
     ScanStats,
-    entry::{
-        EntryFlags, EntryName, EntryRecord, Patch, RecordContribution, RecordKind, RecordSlot,
-        StreamSegment, StreamStorage,
-    },
     error::ScanError,
+    graph::entry::{EntryName, EntryRecord},
+    mft::model::{Patch, RecordContribution, RecordKind, RecordSlot, StreamSegment, StreamStorage},
+    snapshot::NodeFlags,
     util::{CounterExt, VecExt},
 };
 use adamite_ntfs::{
@@ -272,27 +271,27 @@ fn entry_flags(
     record_flags: RecordFlags,
     attributes: FileAttributes,
     reparse_tag: Option<u32>,
-) -> EntryFlags {
-    let mut flags = EntryFlags::default();
+) -> NodeFlags {
+    let mut flags = NodeFlags::default();
     if record_flags.contains(RecordFlags::DIRECTORY)
         || attributes.contains(FileAttributes::DIRECTORY)
     {
-        flags.insert(EntryFlags::DIRECTORY);
+        flags.insert(NodeFlags::DIRECTORY);
     }
     if reparse_tag.is_some() || attributes.contains(FileAttributes::REPARSE_POINT) {
-        flags.insert(EntryFlags::REPARSE);
+        flags.insert(NodeFlags::REPARSE);
     }
     if attributes.contains(FileAttributes::SPARSE_FILE) {
-        flags.insert(EntryFlags::SPARSE);
+        flags.insert(NodeFlags::SPARSE);
     }
     if attributes.contains(FileAttributes::COMPRESSED) {
-        flags.insert(EntryFlags::COMPRESSED);
+        flags.insert(NodeFlags::COMPRESSED);
     }
     if attributes.contains(FileAttributes::HIDDEN) {
-        flags.insert(EntryFlags::HIDDEN);
+        flags.insert(NodeFlags::HIDDEN);
     }
     if attributes.contains(FileAttributes::SYSTEM) {
-        flags.insert(EntryFlags::SYSTEM);
+        flags.insert(NodeFlags::SYSTEM);
     }
     flags
 }
@@ -372,10 +371,10 @@ fn entry(
                     .checked_add(total.alloc)
                     .ok_or_else(|| ScanError::overflow("entry allocation"))?;
                 if total.sparse {
-                    flags.insert(EntryFlags::SPARSE);
+                    flags.insert(NodeFlags::SPARSE);
                 }
                 if total.compressed {
-                    flags.insert(EntryFlags::COMPRESSED);
+                    flags.insert(NodeFlags::COMPRESSED);
                 }
                 if first.attribute_type == AttributeType::DATA {
                     if first.name.is_empty() {
@@ -401,7 +400,7 @@ fn entry(
         stats.corrupt_records.try_bump()?;
         return Ok(None);
     }
-    if base.reference.record() == ROOT && !flags.contains(EntryFlags::DIRECTORY) {
+    if base.reference.record() == ROOT && !flags.contains(NodeFlags::DIRECTORY) {
         return Err(ScanError::RequiredRecord { record: ROOT });
     }
     let mut names = Vec::new();

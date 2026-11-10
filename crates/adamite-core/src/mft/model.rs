@@ -82,27 +82,3 @@ pub(crate) struct Patch {
     // Stream attribute ids are retained for segment identity.
     pub contribution: RecordContribution,
 }
-
-pub(crate) use crate::snapshot::NodeFlags as EntryFlags;
-
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) struct EntryName {
-    pub parent: FileRef,
-    pub namespace: u8,
-    pub name: Vec<u16>,
-}
-
-/// Owned boundary consumed by generic linking and aggregation.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) struct EntryRecord {
-    pub file_ref: FileRef,
-    pub attrs: u32,
-    pub mtime: u64,
-    pub size: u64,
-    pub ads_size: u64,
-    pub alloc: u64,
-    pub names: Vec<EntryName>,
-    pub nlink: u16,
-    pub reparse_tag: Option<u32>,
-    pub flags: EntryFlags,
-}

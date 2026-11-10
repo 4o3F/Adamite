@@ -1,7 +1,7 @@
 //! Linking behavior over synthetic EntryRecord lists.
 
 use super::*;
-use crate::snapshot::SnapshotError;
+use crate::{graph::entry::EntryName, snapshot::SnapshotError};
 use std::error::Error;
 
 type TestResult = Result<(), Box<dyn Error>>;
@@ -53,7 +53,7 @@ fn linking_counter_overflow_keeps_tree_context() {
     };
     let mut pool = Vec::new();
     assert!(matches!(
-        append_name(&mut pool, [0xd800].into_iter(), &mut stats),
+        Linker::append_name(&mut pool, [0xd800].into_iter(), &mut stats),
         Err(ScanError::Overflow {
             operation: "tree linking"
         })
@@ -73,9 +73,9 @@ fn name(parent: u64, name: &str) -> EntryName {
 }
 fn entry(record: u64, parent: u64, label: &str, directory: bool) -> EntryRecord {
     let flags = if directory {
-        EntryFlags::DIRECTORY
+        NodeFlags::DIRECTORY
     } else {
-        EntryFlags::default()
+        NodeFlags::default()
     };
     EntryRecord {
         file_ref: reference(record),
@@ -233,7 +233,7 @@ fn primary(tree: &ParentTree, record: u64) -> Result<usize, Box<dyn Error>> {
         .find(|id| {
             tree.nodes
                 .get(*id)
-                .is_some_and(|node| !node.flags.contains(EntryFlags::HARDLINK_DUP))
+                .is_some_and(|node| !node.flags.contains(NodeFlags::HARDLINK_DUP))
         })
         .ok_or_else(|| format!("missing primary {record}").into())
 }
@@ -388,8 +388,8 @@ fn linking_stale_non_directory_and_missing_parents_become_orphans() -> TestResul
         (0, 0, 0)
     );
     assert!(synthetic.file_ref.is_none());
-    assert!(synthetic.flags.contains(EntryFlags::DIRECTORY));
-    assert!(synthetic.flags.contains(EntryFlags::SYNTHETIC));
+    assert!(synthetic.flags.contains(NodeFlags::DIRECTORY));
+    assert!(synthetic.flags.contains(NodeFlags::SYNTHETIC));
     assert_eq!(stats.orphans, 3);
     assert_eq!(stats.cycle_nodes, 0);
     Ok(())
@@ -406,7 +406,7 @@ fn linking_multiname_directory_children_use_only_primary() -> TestResult {
         .find(|id| {
             tree.nodes
                 .get(*id)
-                .is_some_and(|node| node.flags.contains(EntryFlags::HARDLINK_DUP))
+                .is_some_and(|node| node.flags.contains(NodeFlags::HARDLINK_DUP))
         })
         .ok_or("secondary directory")?;
     assert!(tree.nodes.iter().all(|node| node.parent != secondary));

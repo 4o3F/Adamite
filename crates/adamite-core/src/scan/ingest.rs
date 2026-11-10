@@ -5,8 +5,8 @@ mod decode;
 use super::{ReadRequest, ScanConfig, mapping::MftMapping, protocol::Requests};
 use crate::{
     ScanStats,
-    entry::{Patch, RecordKind, RecordSlot},
     error::ScanError,
+    mft::model::{Patch, RecordKind, RecordSlot},
     util::{CounterExt, VecExt},
 };
 use adamite_ntfs::record::{

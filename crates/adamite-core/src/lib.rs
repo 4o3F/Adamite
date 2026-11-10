@@ -61,11 +61,11 @@
     clippy::panic
 )]
 
-mod entry;
 mod error;
+mod graph;
+mod mft;
 mod scan;
 mod snapshot;
-mod tree;
 mod util;
 
 pub use error::ScanError;

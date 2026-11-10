@@ -1,7 +1,7 @@
 //! Merge invariants tested independently of transport.
 
 use super::*;
-use crate::entry::{NameAttribute, ReparseAttribute, StandardAttribute};
+use crate::mft::model::{NameAttribute, ReparseAttribute, StandardAttribute};
 use adamite_fixtures::builders::{AttrBuilder, NonResidentModel, RecordBuilder};
 use adamite_fixtures::runlist_encoder::{RunModel, RunlistEncoder};
 use adamite_ntfs::{
@@ -236,8 +236,8 @@ fn merge_extension_before_base_and_multisegment_stream_counted_once() -> TestRes
     assert_eq!((entry.attrs, entry.mtime, entry.nlink), (6, 123, 3));
     assert_eq!(entry.names.len(), 2);
     assert_eq!(entry.names.get(1).ok_or("extension name")?.name, vec![66]);
-    assert!(entry.flags.contains(EntryFlags::HIDDEN));
-    assert!(entry.flags.contains(EntryFlags::SYSTEM));
+    assert!(entry.flags.contains(NodeFlags::HIDDEN));
+    assert!(entry.flags.contains(NodeFlags::SYSTEM));
     assert_eq!(stats.rejected_extensions, 0);
     Ok(())
 }
@@ -328,8 +328,8 @@ fn merge_sparse_and_compressed_use_first_segment_compressed_size() -> TestResult
         let (entries, _) = finish(slots(base)?, vec![patch(6, added)])?;
         let entry = find(&entries, 6)?;
         assert_eq!((entry.size, entry.alloc), (3000, 512));
-        assert_eq!(entry.flags.contains(EntryFlags::SPARSE), flags == 0x8000);
-        assert_eq!(entry.flags.contains(EntryFlags::COMPRESSED), flags == 1);
+        assert_eq!(entry.flags.contains(NodeFlags::SPARSE), flags == 0x8000);
+        assert_eq!(entry.flags.contains(NodeFlags::COMPRESSED), flags == 1);
     }
     Ok(())
 }
@@ -402,12 +402,12 @@ fn merge_reparse_directory_and_si_flags_are_retained() -> TestResult {
     let (entries, _) = finish(slots(base)?, vec![])?;
     let entry = find(&entries, 6)?;
     for flag in [
-        EntryFlags::DIRECTORY,
-        EntryFlags::REPARSE,
-        EntryFlags::SPARSE,
-        EntryFlags::COMPRESSED,
-        EntryFlags::HIDDEN,
-        EntryFlags::SYSTEM,
+        NodeFlags::DIRECTORY,
+        NodeFlags::REPARSE,
+        NodeFlags::SPARSE,
+        NodeFlags::COMPRESSED,
+        NodeFlags::HIDDEN,
+        NodeFlags::SYSTEM,
     ] {
         assert!(entry.flags.contains(flag));
     }

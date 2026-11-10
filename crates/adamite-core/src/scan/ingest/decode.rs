@@ -2,11 +2,11 @@
 
 use crate::{
     ScanStats,
-    entry::{
+    error::ScanError,
+    mft::model::{
         NameAttribute, RecordContribution, ReparseAttribute, StandardAttribute, StreamSegment,
         StreamStorage,
     },
-    error::ScanError,
     util::{CounterExt, VecExt},
 };
 use adamite_ntfs::{
