@@ -54,7 +54,7 @@
 //!
 //! # Scope
 //!
-//! Device/image I/O belongs to future `adamite-io` adapters. Parallelism, buffer pools, bitmap skipping, general resource limits, dynamic queries, persistence, CLI, MCP, USN refresh and walkdir fallback are deferred. Core does not follow reparse targets, attempt MFT-mirror fallback or provide an atomic live-volume view. Sparse/compressed/encrypted MFT or bootstrap-list storage is rejected.
+//! Device/image I/O is implemented in `adamite-io`, with slice, image and Windows raw-volume readers and a synchronous driver. Parallelism, buffer pools, bitmap skipping, general resource limits, dynamic queries, persistence, CLI, MCP, USN refresh and walkdir fallback are deferred. Core does not follow reparse targets, attempt MFT-mirror fallback or provide an atomic live-volume view. Sparse/compressed/encrypted MFT or bootstrap-list storage is rejected.
 #![forbid(unsafe_code)]
 #![deny(
     clippy::indexing_slicing,

@@ -399,6 +399,7 @@ Deno.test("fuzz target inventory matches both Cargo manifests", async () => {
 
 type WorkflowStep = {
   run?: string;
+  if?: string;
   "working-directory"?: string;
   with?: Record<string, string>;
   env?: Record<string, string>;
@@ -443,6 +444,16 @@ Deno.test("CI covers every fuzz target, Deno tests and Windows while keeping no_
   assert(
     jobs.check.strategy?.matrix.os?.includes("windows-latest"),
     "missing Windows workspace checks",
+  );
+  equal(
+    jobs.check.steps.filter((step) =>
+      step.run === "cargo test -p adamite-io --test raw_volume --locked -- --ignored"
+    ).map((step) => ({ run: step.run, if: step.if })),
+    [{
+      run: "cargo test -p adamite-io --test raw_volume --locked -- --ignored",
+      if: "runner.os == 'Windows'",
+    }],
+    "Windows raw-volume smoke step",
   );
   equal(jobs.no_std.steps.flatMap((step) => step.run ? [step.run] : []), [
     "cargo build -p adamite-ntfs --target thumbv7em-none-eabihf",

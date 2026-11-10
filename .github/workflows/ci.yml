@@ -46,6 +46,8 @@ jobs:
         if: runner.os == 'Linux'
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
+      - run: cargo test -p adamite-io --test raw_volume --locked -- --ignored
+        if: runner.os == 'Windows'
       - run: cargo doc --workspace --no-deps
         env:
           RUSTDOCFLAGS: -D warnings

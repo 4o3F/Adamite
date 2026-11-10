@@ -1,6 +1,6 @@
 # Adamite Architecture
 
-Adamite aims to give agents a WizTree-like view of a filesystem through MCP, CLI and other front ends. The implemented libraries parse caller-supplied NTFS Master File Table (MFT) bytes and produce an immutable, size-aggregated `Snapshot` with `ScanStats`. Platform readers and front ends are planned.
+Adamite aims to give agents a WizTree-like view of a filesystem through MCP, CLI and other front ends. The implemented libraries read NTFS images and Windows raw volumes, parse Master File Table (MFT) bytes and produce an immutable, size-aggregated `Snapshot` with `ScanStats`. Front ends are planned.
 
 The project is split into two layers:
 
@@ -11,7 +11,7 @@ Implementation language: Rust (Cargo workspace).
 
 ## 1. Overall Architecture
 
-The diagram includes planned components; only the parser, single-threaded scan/snapshot implementation and fixture support exist today.
+The diagram includes planned components; the parser, single-threaded scan/snapshot implementation, synchronous volume readers/driver and fixture support exist today.
 
 ```text
 ┌──────────────────── Access layer (planned) ────────────────────┐
@@ -23,10 +23,10 @@ The diagram includes planned components; only the parser, single-threaded scan/s
 └────────────┬───────────────────────────────┬────────────────────┘
              │ Snapshot (immutable, Arc)     │ drive scans
              │ + planned Query API          ▼
-             │          ┌── Caller driver + I/O (planned) ───────┐
-             │          │ adamite-io::VolumeReader               │
-             │          │ Windows volume / raw image / Linux     │
-             │          │ block device; aligned buffers and reads│
+             │          ┌── adamite-io (implemented) ─────────────┐
+             │          │ VolumeReader + SyncDriver               │
+             │          │ SliceReader / ImageReader               │
+             │          │ RawVolumeReader (Windows)               │
              │          └────────────┬─────────────────▲──────────┘
              │             step()/feed(id, bytes)      │ Need(id,
              │                       │                 │ offset,len)
@@ -52,7 +52,7 @@ crates/
   adamite-ntfs/     # implemented: boot/record/attribute/value/utf16, no_std
   adamite-core/     # implemented: scan/mft/graph/snapshot/error/util
   adamite-fixtures/ # implemented: shared development-only fixture support
-  adamite-io/       # planned: VolumeReader + platform adapters serving requests
+  adamite-io/       # implemented: VolumeReader + slice/image/Windows + SyncDriver
   adamite-service/  # planned: snapshots, jobs, privilege and resource scheduling
   adamite-cli/      # planned
   adamite-mcp/      # planned
@@ -62,23 +62,26 @@ crates/
 |---|---|
 | `adamite-ntfs` | `no_std` byte decoding through `boot`, `record`, `attribute`, `value` and `utf16` modules; record parsing owns fixup, and attribute runlists live under `attribute::runlist` |
 | `adamite-core` | Single-threaded `std` scan driver, private NTFS reading/merge and graph resolution, snapshot construction and immutable reads |
+| `adamite-io` | Exact positional `VolumeReader`, `SliceReader`, `ImageReader`, Windows `RawVolumeReader` and synchronous `SyncDriver`; adapter-owned alignment and volume context |
 | `adamite-fixtures` | Unpublished development support: image loading, independent manifests/reference MFT reconstruction and synthetic builders |
 
 Parser operations belong to their types: `boot::VolumeGeometry::from_boot_sector` decodes volume geometry, `record::FileRecord::parse` validates headers and restores protected trailers in place, and `record::RecordClass::classify` applies streaming classification precedence. Parsing errors leave record bytes unchanged. Typed attribute decoders live under `value`; record references and system record numbers live under `record::reference` and `record::system`. Every public parser item has one module path.
 
-Core performs no file, device or network I/O. It defines no reader trait or callback, starts no threads, reads no clocks and never sleeps. The caller owns transport and scheduling; `adamite_core::scan::ScanContext` supplies optional label, scan FILETIME and free bytes. Core never acquires these values itself.
+Core performs no file, device or network I/O. It defines no reader trait or callback, starts no threads, reads no clocks and never sleeps. `adamite_io::reader::VolumeReader` defines the exact positional read contract, and `adamite_io::driver::SyncDriver` owns synchronous transport and scheduling. `adamite_core::scan::ScanContext` supplies optional label, scan FILETIME and free bytes; Windows callers obtain them through `RawVolumeReader::context()` before constructing the driver.
 
 The public core modules are `scan`, `snapshot` and `error`. `adamite_core::scan::Scanner` drives phase changes and owns request identifiers, queue capacity, waiting decisions and the shared per-call work budget. Configuration, protocol, status and `ScanStats` definitions live in private scan children and are exported directly under `scan::`. `adamite_core::snapshot::Snapshot` exposes immutable reads, and `adamite_core::error::ScanError` carries fatal stage failures. The crate root contains module declarations without item re-exports.
 
 Private `mft/` owns bootstrap, discovery, mapping, ingestion, decoding and merge. Its stages return byte ranges, planning commits and consumption progress; only the scan driver handles request slots and ids. MFT merge constructs `graph::entry::EntryRecord` values, and `graph::link::Linker` resolves their names and parents into snapshot-owned build inputs. Private `snapshot/build/` contains separate bounded builder, aggregation and finalization passes; storage and its mutable access stay within snapshot modules. `util.rs` supplies domain-free fallible collection/counter traits, while `error.rs` wraps the snapshot error leaf. Configuration and statistics remain independent leaves.
 
-Graph depends on snapshot types/build inputs; MFT depends on graph, and the scan driver orchestrates MFT, graph and snapshot build passes. NTFS contribution-to-entry conversion stays in MFT, so graph does not depend on NTFS contribution models. Pipeline operations belong to their record, mapping, contribution, linker or pass types. Future I/O, query, persistence, service, CLI, MCP and USN components are described in §4–§6.
+Graph depends on snapshot types/build inputs; MFT depends on graph, and the scan driver orchestrates MFT, graph and snapshot build passes. NTFS contribution-to-entry conversion stays in MFT, so graph does not depend on NTFS contribution models. Pipeline operations belong to their record, mapping, contribution, linker or pass types. Implemented synchronous I/O and future parallelism, query, persistence, service, CLI, MCP and USN components are described in §4–§6.
 
 ### Key decisions
 
 | Decision | Rationale |
 |---|---|
 | `adamite-ntfs` and `adamite-core` do no I/O | Caller-owned reads allow the same parsing/scan code to use memory images, platform adapters and fuzz inputs. |
+| The I/O adapter owns native alignment and volume context | Raw reads expand to complete logical sectors in physically aligned storage; the adapter queries labels/free bytes and reads the clock before callers supply core context. |
+| Unsafe code is confined to `adamite-io/src/reader/windows/ffi.rs` | Safe, typed wrappers isolate the `windows` crate's device-control and volume-query calls; opening, reads and aligned storage use safe Rust. |
 | MFT mapping comes from record 0's own runlist and attribute-list discovery, not `FSCTL_GET_RETRIEVAL_POINTERS` | Live volumes and images can use the same bootstrap algorithm. |
 | Snapshot is immutable and can be shared through `Arc` | Multiple consumers can read it without locking; cloning Snapshot itself copies its arrays. |
 | Scanning is decoupled from queries; persistence is planned | Future raw-volume scans can run elevated while saved-snapshot queries run unelevated (§4.1). |
@@ -171,7 +174,7 @@ The following privilege model, algorithms and tools are planned. Snapshot persis
 
 ### 4.1 Privilege model
 
-Scanning a Windows raw volume needs elevated device access, while an MCP process spawned by an agent host usually runs unelevated. The future I/O adapter or service owns that access.
+Scanning a Windows raw volume needs elevated device access, while an MCP process spawned by an agent host usually runs unelevated. `adamite_io::reader::RawVolumeReader` owns that access today; a future service will manage privileged scan jobs.
 
 - **Planned MVP:** run `adamite scan C: -o C.adm` elevated once to produce a snapshot file. MCP and CLI queries read the `.adm` file without elevation.
 - **Later:** an elevated `adamite-daemon` Windows service holds snapshots and keeps them fresh through the USN journal. CLI and MCP become thin clients over a named pipe.
@@ -207,9 +210,9 @@ The planned response convention includes snapshot timestamp and units in every r
 
 ## 5. Parallelism and Resource Limits (planned)
 
-`adamite-io`/`add-volume-reader` is the next change. Any `VolumeReader` abstraction belongs there. Adapters will open devices/images, perform reads, propagate host errors and feed the exact requested bytes to core. Native alignment belongs to the adapter: it may round device reads outward into aligned buffers and slice the requested range, including core's 512-byte boot request on a 4Kn source.
+`adamite-io` implements `VolumeReader` for borrowed slices, image files and Windows raw volumes, with `SyncDriver` feeding exact responses to core. The Windows reader opens volumes read-only with `FILE_FLAG_NO_BUFFERING` and performs synchronous reads at native depth 1. It expands requests to logical-sector boundaries in physically aligned storage and copies the exact requested range, including core's 512-byte boot request on a 4Kn source. `RawVolumeReader::context()` supplies host metadata and the scan timestamp.
 
-The full design below is future roadmap step 3 work. CPU, I/O, transport memory and concurrent scans each have their own cap, coordinated by a driver/service-level `ScanLimits`. Core already supports multiple outstanding requests through `ScanConfig.max_outstanding`; it still processes records on one thread. Buffer pools, native I/O depth, rate limiting and waiting belong to the adapter/driver, and core never uses a global thread pool.
+The full design below is future roadmap step 3 work. CPU, I/O, transport memory and concurrent scans will each have their own cap, coordinated by a driver/service-level `ScanLimits`. Core already supports multiple outstanding requests through `ScanConfig.max_outstanding`; `SyncDriver` batches these requests and serves them in issue order when core waits for input. Parsing remains single-threaded. Buffer pools, parallelism, native I/O depth above 1 and rate limiting remain planned adapter/driver work, and core never uses a global thread pool.
 
 ### 5.1 Resources and controls
 
@@ -292,7 +295,7 @@ core:                                  step() → consume request slot
 - Allocate the adapter's aligned buffers once and reuse them. Pool payload capacity is approximately `chunk_size × buffers`, with alignment padding; core's copied responses and growing metadata require additional memory.
 - The reader must acquire a free buffer before issuing a read. A full response queue or exhausted pool blocks the driver/reader. Core's occupied request slots independently cap accepted but unconsumed responses; the driver also stops issuing work when that cap is reached.
 - After a successful `feed`, core retains its own copy, so the adapter can return the source buffer to the pool immediately. Core neither borrows the pool nor waits on its channels.
-- On Windows, the planned raw-volume adapter uses `FILE_FLAG_NO_BUFFERING` with sector-aligned offsets, lengths and buffers. It rounds outward as needed and feeds only the exact requested range.
+- On Windows, `RawVolumeReader` already uses `FILE_FLAG_NO_BUFFERING`, expanding each nonempty request to logical-sector boundaries in a physically aligned buffer and performing one synchronous native read. It feeds only the exact requested range; a pool of aligned buffers remains planned.
 - `io_depth` caps outstanding native reads, with 1 for synchronous reads. Depth 2 is the proposed balanced starting point for sequential HDD access, subject to measurement on the device.
 - The planned rate limiter is a token bucket: acquire `chunk_len` before reading and sleep in the adapter/driver when tokens run out.
 - Low I/O priority is planned through `SetFileInformationByHandle(FileIoPriorityHintInfo, IoPriorityHintLow)` on the volume handle.
@@ -327,19 +330,19 @@ Dedicated CPU pools, parallel parse/sort, buffer-pool backpressure, `$BITMAP` sk
 
 1. Done: `adamite-ntfs`, shared fixture support and independently measured v3 manifests; parser `no_std` builds remain supported.
 2. Done: single-threaded sans-io `adamite-core`, phases 0–6, fixture oracles, property tests and bounded fuzzing. Automated WizTree/`dir /s` comparison is deferred; manual Windows comparison has not been performed.
-3. Next: `adamite-io` in `add-volume-reader`; then roadmap step 3 parallelism, buffer ownership, bitmap skipping and resource controls.
+3. Done: `adamite-io` with slice/image/Windows raw-volume readers, synchronous driving and adapter-supplied context. Next is roadmap step 3 parallelism, buffer ownership, bitmap skipping and resource controls, or `add-core-query`.
 4. Future: `add-core-query`, snapshot persistence and CLI.
 5. Future: MCP and scan-job/snapshot services.
 6. Future: USN incremental refresh and a daemon; walkdir fallback remains separate future work.
 
 ## 7. Conventions
 
-Rust crates use edition 2024 and toolchain 1.99. Keep `rust-toolchain.toml` and the workspace `rust-version` synchronized. Core forbids unsafe code and adopts the parser's panic-free Clippy denies; grow owned scan buffers fallibly and use checked arithmetic. Do not recurse through file trees.
+Rust crates use edition 2024 and toolchain 1.99. Keep `rust-toolchain.toml` and the workspace `rust-version` synchronized. Core forbids unsafe code; `adamite-io` denies it except in `reader/windows/ffi.rs`, which denies `clippy::undocumented_unsafe_blocks` and `clippy::multiple_unsafe_ops_per_block`. Non-Windows `adamite-io` builds forbid unsafe code. Both crates adopt the parser's panic-free Clippy denies; grow owned scan buffers fallibly and use checked arithmetic. Do not recurse through file trees.
 
 Production types must not carry fields, variants or hook state used only by tests; tests observe real outputs or existing production state.
 
 Library errors use snafu with source chains and documented `# Errors` sections. Core separates configuration, feed, fatal scan and snapshot errors; ordinary rejected records are counted in `ScanStats`. Workspace snafu disables default features and enables `rust_1_81`, preserving parser `no_std` support.
 
-Crates that log use workspace tracing, beginning with core's per-call phase spans; entered guards never survive a driver call. The parser does not log. Future binaries will install subscribers. Core reads no clocks; caller context supplies timestamps.
+Crates that log use workspace tracing, beginning with core's per-call phase spans and `SyncDriver`'s per-batch debug events; entered guards never survive a driver call. The parser does not log. Future binaries will install subscribers. Adapters read the clock and supply timestamps through caller context; core reads no clocks.
 
-Task automation and fixture generation use Deno TypeScript through root `deno.json`. Do not add bash, Python or just scripts; CI steps invoke only `cargo` or `deno` one-liners. Plans live in `docs/plans/`, one file per change.
+Task automation and fixture generation use Deno TypeScript through root `deno.json`. `deno task check` includes `adamite-io` Clippy for `x86_64-pc-windows-gnu`; native Windows CI also runs the ignored elevated raw-volume tests after workspace tests. Do not add bash, Python or just scripts; CI steps invoke only `cargo` or `deno` one-liners. Plans live in `docs/plans/`, one file per change.

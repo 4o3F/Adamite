@@ -150,7 +150,7 @@ Each milestone is one bounded Codex run (< 40 minutes) and one reviewed commit, 
 
 ### M5 — CI smoke, example and documentation
 
-- [ ] Add the D11 CI step with its `check_test.ts` assertion and `examples/scan.rs`. Update documentation per D12 and tick the acceptance criteria.
+- [x] Add the D11 CI step with its `check_test.ts` assertion and `examples/scan.rs`. Update documentation per D12 and tick the acceptance criteria.
 - [ ] Finish with `deno task check` green; after the commit, confirm both CI `check` matrix jobs, including the elevated raw-volume smoke step, pass.
 
 ## Acceptance criteria
