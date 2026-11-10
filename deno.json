@@ -1,7 +1,7 @@
 {
   "deno": "2.9.8",
   "tasks": {
-    "check": "deno run --frozen --allow-read=Cargo.toml,rust-toolchain.toml,crates/adamite-ntfs/fuzz/Cargo.toml,crates/adamite-ntfs/fuzz/corpus,crates/adamite-core/fuzz/Cargo.toml,crates/adamite-core/fuzz/corpus --allow-run=cargo,deno scripts/check.ts",
+    "check": "deno run --frozen --allow-read=Cargo.toml,rust-toolchain.toml,crates/adamite-ntfs/fuzz/Cargo.toml,crates/adamite-ntfs/fuzz/corpus,crates/adamite-core/fuzz/Cargo.toml,crates/adamite-core/fuzz/corpus --allow-write=target/fuzz-smoke --allow-run=cargo,deno scripts/check.ts",
     "fixtures": "deno run --frozen --allow-run=mkntfs,sudo,ntfsinfo,getfattr,setfattr,zstd,mountpoint --allow-read=tests/fixtures/ntfs,/tmp --allow-write=tests/fixtures/ntfs,/tmp scripts/fixtures/generate.ts",
     "fuzz-corpus": "deno run --frozen --allow-run=zstd --allow-read=tests/fixtures/ntfs,crates/adamite-ntfs/fuzz/fuzz_targets/typed_values/selectors.rs --allow-write=crates/adamite-ntfs/fuzz/corpus,crates/adamite-core/fuzz/corpus scripts/fuzz_corpus.ts",
     "ci-lint": "deno run --frozen --allow-read=.github/workflows scripts/ci_lint.ts"

@@ -6,6 +6,7 @@ type Step = {
   args: string[];
   cwd?: string;
   env?: Record<string, string>;
+  scratchCorpus?: string;
 };
 
 type FuzzPackage = {
@@ -25,6 +26,7 @@ export const fuzzPackages: readonly FuzzPackage[] = [
 
 async function run(step: Step): Promise<void> {
   console.log(`\nChecking ${step.name}`);
+  if (step.scratchCorpus) await resetScratchCorpus(step.scratchCorpus);
   const status = await new Deno.Command(step.command, {
     args: step.args,
     cwd: step.cwd,
@@ -36,6 +38,15 @@ async function run(step: Step): Promise<void> {
   if (!status.success) {
     throw new Error(`${step.name} failed (exit ${status.code})`);
   }
+}
+
+export async function resetScratchCorpus(path: string): Promise<void> {
+  try {
+    await Deno.remove(path, { recursive: true });
+  } catch (error) {
+    if (!(error instanceof Deno.errors.NotFound)) throw error;
+  }
+  await Deno.mkdir(path, { recursive: true });
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -166,15 +177,19 @@ export function checkSteps(options: { packages: readonly FuzzPackage[]; fuzz: bo
         args: ["+nightly", "fuzz", "build"],
       });
       for (const target of pkg.targets) {
+        const scratchCorpus = `target/fuzz-smoke/${pkg.name}/${target}`;
         steps.push({
           name: `fuzz ${pkg.name} ${target}`,
           command: "cargo",
           cwd: `crates/${pkg.name}`,
+          scratchCorpus,
           args: [
             "+nightly",
             "fuzz",
             "run",
             target,
+            // libFuzzer writes new inputs only to its first corpus directory.
+            `../../${scratchCorpus}/`,
             `fuzz/corpus/${target}/`,
             "--",
             "-max_total_time=30",

@@ -1,6 +1,12 @@
 import { parse as parseToml } from "@std/toml";
 import { parse as parseYaml } from "@std/yaml";
-import { checkSteps, fuzzPackages, requireCorpus, requireFuzzCorpora } from "./check.ts";
+import {
+  checkSteps,
+  fuzzPackages,
+  requireCorpus,
+  requireFuzzCorpora,
+  resetScratchCorpus,
+} from "./check.ts";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -186,6 +192,7 @@ Deno.test("fuzz checks build both packages and smoke every target with bounded f
         "fuzz",
         "run",
         target,
+        `../../target/fuzz-smoke/${pkg.name}/${target}/`,
         `fuzz/corpus/${target}/`,
         "--",
         "-max_total_time=30",
@@ -196,6 +203,84 @@ Deno.test("fuzz checks build both packages and smoke every target with bounded f
       assert(steps.indexOf(installs[0]) < steps.indexOf(build!), "installation must precede build");
       assert(steps.indexOf(build!) < steps.indexOf(run), "build must precede smoke");
     }
+  }
+});
+
+Deno.test("fuzz smoke writes to scratch first and reads committed seeds second", () => {
+  const root = new URL("../", import.meta.url);
+  const runs = checkSteps({ packages: fuzzPackages, fuzz: true }).filter((step) =>
+    step.args.slice(0, 3).join(" ") === "+nightly fuzz run"
+  );
+  const scratchPaths = new Set<string>();
+  for (const step of runs) {
+    const cwd = new URL(`${step.cwd}/`, root);
+    const scratch = new URL(step.args[4], cwd);
+    const seeds = new URL(step.args[5], cwd);
+    assert(step.scratchCorpus, `${step.name} must prepare a scratch directory`);
+    equal(scratch.href, new URL(`${step.scratchCorpus}/`, root).href, "prepared output path");
+    assert(
+      scratch.href.startsWith(new URL("target/fuzz-smoke/", root).href),
+      `${step.name} writes outside the ignored scratch tree`,
+    );
+    equal(seeds.href, new URL(`fuzz/corpus/${step.args[3]}/`, cwd).href, "committed seed source");
+    equal(step.args[6], "--", "exactly two corpus directories");
+    scratchPaths.add(scratch.href);
+  }
+  equal(scratchPaths.size, 6, "each smoke target has its own output directory");
+  assert(
+    checkSteps({ packages: fuzzPackages, fuzz: false }).every((step) => !step.scratchCorpus),
+    "normal checks must not reset scratch directories",
+  );
+});
+
+Deno.test("scratch corpus is removed and recreated before reuse, including its first run", async () => {
+  const original = { remove: Deno.remove, mkdir: Deno.mkdir };
+  const calls: unknown[] = [];
+  let missing = false;
+  Deno.remove = (path, options) => {
+    calls.push(["remove", path, options]);
+    return missing ? Promise.reject(new Deno.errors.NotFound()) : Promise.resolve();
+  };
+  Deno.mkdir = (path, options) => {
+    calls.push(["mkdir", path, options]);
+    return Promise.resolve();
+  };
+  const path = "target/fuzz-smoke/adamite-core/scan";
+  try {
+    for (const firstRun of [false, true]) {
+      missing = firstRun;
+      calls.length = 0;
+      await resetScratchCorpus(path);
+      equal(calls, [
+        ["remove", path, { recursive: true }],
+        ["mkdir", path, { recursive: true }],
+      ], "fresh corpus preparation");
+    }
+  } finally {
+    Object.assign(Deno, original);
+  }
+});
+
+Deno.test("scratch cleanup failures stop preparation", async () => {
+  const original = { remove: Deno.remove, mkdir: Deno.mkdir };
+  const expected = new Deno.errors.PermissionDenied("blocked");
+  let created = false;
+  Deno.remove = () => Promise.reject(expected);
+  Deno.mkdir = () => {
+    created = true;
+    return Promise.resolve();
+  };
+  try {
+    let actual: unknown;
+    try {
+      await resetScratchCorpus("target/fuzz-smoke/adamite-core/scan");
+    } catch (error) {
+      actual = error;
+    }
+    assert(actual === expected, "cleanup failure must propagate");
+    assert(!created, "failed cleanup must not proceed to directory creation");
+  } finally {
+    Object.assign(Deno, original);
   }
 });
 
@@ -396,6 +481,11 @@ Deno.test("Deno tasks permit both corpus paths without broadening executable acc
   assert(
     config.tasks.check.includes("--allow-run=cargo,deno "),
     "check executable permission changed",
+  );
+  equal(
+    config.tasks.check.split(" ").filter((arg) => arg.startsWith("--allow-write")),
+    ["--allow-write=target/fuzz-smoke"],
+    "check writes only to ignored fuzz output",
   );
   assert(
     config.tasks["fuzz-corpus"].includes("--allow-run=zstd "),
