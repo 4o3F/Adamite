@@ -1,6 +1,6 @@
 //! Boot-sector geometry and checked conversion of cluster extents to byte ranges.
 
-use core::ops::Range;
+use core::{fmt, ops::Range};
 
 use snafu::{OptionExt, Snafu, ensure};
 
@@ -9,7 +9,62 @@ use crate::util;
 /// Largest cluster supported by the NTFS geometry contract, in bytes.
 const MAX_CLUSTER_SIZE: u32 = 2_097_152;
 
-/// Validated volume geometry decoded once from the first 512 boot-sector bytes.
+/// Independent volume geometry values used to reconstruct validated geometry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GeometryFields {
+    /// Bytes per logical sector: 512, 1024, 2048 or 4096.
+    pub bytes_per_sector: u16,
+    /// Decoded sectors per cluster, a power of two from 1 through 4096.
+    pub sectors_per_cluster: u32,
+    /// File-record size in bytes, a power of two from 512 through 65536.
+    pub file_record_size: u32,
+    /// Index-record size in bytes, a power of two from 512 through 65536.
+    pub index_record_size: u32,
+    /// Total sector count, including sectors in a final incomplete cluster.
+    pub total_sectors: u64,
+    /// Starting logical cluster number of the `$MFT`.
+    pub mft_lcn: u64,
+    /// Starting logical cluster number of the `$MFTMirr`.
+    pub mftmirr_lcn: u64,
+    /// Volume serial number, preserved without restrictions.
+    pub serial: u64,
+}
+
+/// Identifies an independent geometry field checked during construction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum GeometryField {
+    /// Bytes per logical sector.
+    BytesPerSector,
+    /// Decoded sectors per cluster.
+    SectorsPerCluster,
+    /// File-record size in bytes.
+    FileRecordSize,
+    /// Index-record size in bytes.
+    IndexRecordSize,
+    /// Total sector count.
+    TotalSectors,
+    /// Starting logical cluster number of the `$MFT`.
+    MftLcn,
+    /// Starting logical cluster number of the `$MFTMirr`.
+    MftMirrLcn,
+}
+
+impl fmt::Display for GeometryField {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::BytesPerSector => "bytes_per_sector",
+            Self::SectorsPerCluster => "sectors_per_cluster",
+            Self::FileRecordSize => "file_record_size",
+            Self::IndexRecordSize => "index_record_size",
+            Self::TotalSectors => "total_sectors",
+            Self::MftLcn => "mft_lcn",
+            Self::MftMirrLcn => "mftmirr_lcn",
+        })
+    }
+}
+
+/// Validated volume geometry constructed from boot-sector bytes or independent fields.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VolumeGeometry {
     bytes_per_sector: u16,
@@ -26,6 +81,108 @@ pub struct VolumeGeometry {
 }
 
 impl VolumeGeometry {
+    /// Returns the independent values needed to reconstruct this geometry.
+    #[must_use]
+    pub const fn fields(self) -> GeometryFields {
+        GeometryFields {
+            bytes_per_sector: self.bytes_per_sector,
+            sectors_per_cluster: self.sectors_per_cluster,
+            file_record_size: self.file_record_size,
+            index_record_size: self.index_record_size,
+            total_sectors: self.total_sectors,
+            mft_lcn: self.mft_lcn,
+            mftmirr_lcn: self.mftmirr_lcn,
+            serial: self.serial,
+        }
+    }
+
+    /// Validates independent fields and recomputes cluster size, cluster count and volume bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BootError::InvalidField`] with the input field's identifier and value for
+    /// unsupported sizes, invalid sector counts or MFT locations without room for
+    /// one file record within complete clusters. Cluster-size failures identify
+    /// `sectors_per_cluster`; volume-size failures identify `total_sectors`.
+    pub fn from_fields(fields: GeometryFields) -> Result<Self, BootError> {
+        let GeometryFields {
+            bytes_per_sector,
+            sectors_per_cluster,
+            file_record_size,
+            index_record_size,
+            total_sectors,
+            mft_lcn,
+            mftmirr_lcn,
+            serial,
+        } = fields;
+        ensure!(
+            valid_sector_size(bytes_per_sector),
+            InvalidFieldSnafu {
+                field: GeometryField::BytesPerSector,
+                value: u64::from(bytes_per_sector),
+            }
+        );
+        let cluster_size = checked_cluster_size(bytes_per_sector, sectors_per_cluster).context(
+            InvalidFieldSnafu {
+                field: GeometryField::SectorsPerCluster,
+                value: u64::from(sectors_per_cluster),
+            },
+        )?;
+        for (field, size) in [
+            (GeometryField::FileRecordSize, file_record_size),
+            (GeometryField::IndexRecordSize, index_record_size),
+        ] {
+            ensure!(
+                valid_record_size(size),
+                InvalidFieldSnafu {
+                    field,
+                    value: u64::from(size),
+                }
+            );
+        }
+        let total_error = || InvalidFieldSnafu {
+            field: GeometryField::TotalSectors,
+            value: total_sectors,
+        };
+        ensure!(
+            (1..=i64::MAX as u64).contains(&total_sectors),
+            total_error()
+        );
+        let total_bytes = total_sectors
+            .checked_mul(u64::from(bytes_per_sector))
+            .with_context(total_error)?;
+        let total_clusters = total_sectors
+            .checked_div(u64::from(sectors_per_cluster))
+            .with_context(total_error)?;
+        ensure!(total_clusters > 0, total_error());
+        let complete_bytes = total_clusters
+            .checked_mul(u64::from(cluster_size))
+            .with_context(total_error)?;
+        for (field, lcn) in [
+            (GeometryField::MftLcn, mft_lcn),
+            (GeometryField::MftMirrLcn, mftmirr_lcn),
+        ] {
+            let fits_record = lcn
+                .checked_mul(u64::from(cluster_size))
+                .and_then(|start| start.checked_add(u64::from(file_record_size)))
+                .is_some_and(|end| end <= complete_bytes);
+            ensure!(fits_record, InvalidFieldSnafu { field, value: lcn });
+        }
+        Ok(Self {
+            bytes_per_sector,
+            sectors_per_cluster,
+            cluster_size,
+            file_record_size,
+            index_record_size,
+            total_sectors,
+            total_clusters,
+            total_bytes,
+            mft_lcn,
+            mftmirr_lcn,
+            serial,
+        })
+    }
+
     /// Returns bytes per sector from the u16 at boot-sector offset 0x0B.
     #[must_use]
     pub const fn bytes_per_sector(self) -> u16 {
@@ -119,7 +276,7 @@ impl VolumeGeometry {
         );
         let bytes_per_sector = util::read_u16(boot, 0x0b).context(TruncatedSnafu)?;
         ensure!(
-            matches!(bytes_per_sector, 512 | 1024 | 2048 | 4096),
+            valid_sector_size(bytes_per_sector),
             InvalidSectorSizeSnafu {
                 size: bytes_per_sector
             }
@@ -136,13 +293,13 @@ impl VolumeGeometry {
                 .context(InvalidClusterEncodingSnafu { encoding: encoded })?,
             _ => return InvalidClusterEncodingSnafu { encoding: encoded }.fail(),
         };
-        let cluster_size = u32::from(bytes_per_sector)
-            .checked_mul(sectors_per_cluster)
-            .context(InvalidClusterEncodingSnafu { encoding: encoded })?;
-        ensure!(
-            cluster_size <= MAX_CLUSTER_SIZE,
-            ClusterTooLargeSnafu { size: cluster_size }
-        );
+        let cluster_size =
+            checked_cluster_size(bytes_per_sector, sectors_per_cluster).ok_or_else(|| {
+                match u32::from(bytes_per_sector).checked_mul(sectors_per_cluster) {
+                    Some(size) => BootError::ClusterTooLarge { size },
+                    None => BootError::InvalidClusterEncoding { encoding: encoded },
+                }
+            })?;
         let file_encoding = util::read_i8(boot, 0x40).context(TruncatedSnafu)?;
         let index_encoding = util::read_i8(boot, 0x44).context(TruncatedSnafu)?;
         let file_record_size = decode_record_size(file_encoding, cluster_size).context(
@@ -156,59 +313,50 @@ impl VolumeGeometry {
             },
         )?;
         let total_sectors = util::read_u64(boot, 0x28).context(TruncatedSnafu)?;
-        ensure!(
-            (1..=i64::MAX as u64).contains(&total_sectors),
-            InvalidTotalSectorsSnafu {
-                sectors: total_sectors
-            }
-        );
-        let total_bytes = total_sectors
-            .checked_mul(u64::from(bytes_per_sector))
-            .context(InvalidTotalSectorsSnafu {
-                sectors: total_sectors,
-            })?;
-        let total_clusters = total_sectors
-            .checked_div(u64::from(sectors_per_cluster))
-            .context(InvalidTotalSectorsSnafu {
-                sectors: total_sectors,
-            })?;
-        ensure!(
-            total_clusters > 0,
-            InvalidTotalSectorsSnafu {
-                sectors: total_sectors
-            }
-        );
         let mft_lcn = util::read_u64(boot, 0x30).context(TruncatedSnafu)?;
         let mftmirr_lcn = util::read_u64(boot, 0x38).context(TruncatedSnafu)?;
-        let complete_bytes = total_clusters
-            .checked_mul(u64::from(cluster_size))
-            .context(InvalidTotalSectorsSnafu {
-                sectors: total_sectors,
-            })?;
-        let fits_record = |lcn: u64| {
-            lcn.checked_mul(u64::from(cluster_size))
-                .and_then(|start| start.checked_add(u64::from(file_record_size)))
-                .is_some_and(|end| end <= complete_bytes)
-        };
-        ensure!(fits_record(mft_lcn), MftOutOfVolumeSnafu { lcn: mft_lcn });
-        ensure!(
-            fits_record(mftmirr_lcn),
-            MftMirrorOutOfVolumeSnafu { lcn: mftmirr_lcn }
-        );
-        Ok(Self {
+        Self::from_fields(GeometryFields {
             bytes_per_sector,
             sectors_per_cluster,
-            cluster_size,
             file_record_size,
             index_record_size,
             total_sectors,
-            total_clusters,
-            total_bytes,
             mft_lcn,
             mftmirr_lcn,
             serial: util::read_u64(boot, 0x48).context(TruncatedSnafu)?,
         })
+        .map_err(|error| match error {
+            BootError::InvalidField {
+                field: GeometryField::TotalSectors,
+                value,
+            } => BootError::InvalidTotalSectors { sectors: value },
+            BootError::InvalidField {
+                field: GeometryField::MftLcn,
+                value,
+            } => BootError::MftOutOfVolume { lcn: value },
+            BootError::InvalidField {
+                field: GeometryField::MftMirrLcn,
+                value,
+            } => BootError::MftMirrorOutOfVolume { lcn: value },
+            other => other,
+        })
     }
+}
+
+fn valid_sector_size(size: u16) -> bool {
+    matches!(size, 512 | 1024 | 2048 | 4096)
+}
+
+fn checked_cluster_size(bytes_per_sector: u16, sectors_per_cluster: u32) -> Option<u32> {
+    if !sectors_per_cluster.is_power_of_two() || !(1..=4096).contains(&sectors_per_cluster) {
+        return None;
+    }
+    let size = u32::from(bytes_per_sector).checked_mul(sectors_per_cluster)?;
+    (size <= MAX_CLUSTER_SIZE).then_some(size)
+}
+
+fn valid_record_size(size: u32) -> bool {
+    size.is_power_of_two() && (512..=65536).contains(&size)
 }
 
 fn decode_record_size(encoding: i8, cluster_size: u32) -> Option<u32> {
@@ -219,7 +367,7 @@ fn decode_record_size(encoding: i8, cluster_size: u32) -> Option<u32> {
     } else {
         return None;
     };
-    (size.is_power_of_two() && (512..=65536).contains(&size)).then_some(size)
+    valid_record_size(size).then_some(size)
 }
 
 /// Boot-sector or cluster-range validation failure.
@@ -227,6 +375,14 @@ fn decode_record_size(encoding: i8, cluster_size: u32) -> Option<u32> {
 #[snafu(visibility(pub(crate)))]
 #[non_exhaustive]
 pub enum BootError {
+    /// An independent geometry field violates a size, count or location constraint.
+    #[snafu(display("invalid geometry field {field}: {value}"))]
+    InvalidField {
+        /// Invalid input field in [`GeometryFields`].
+        field: GeometryField,
+        /// Supplied value of the invalid field.
+        value: u64,
+    },
     /// Fewer than 512 boot-sector bytes were supplied.
     #[snafu(display("boot sector is shorter than 512 bytes"))]
     Truncated,

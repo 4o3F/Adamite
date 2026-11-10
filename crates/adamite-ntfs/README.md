@@ -8,7 +8,7 @@ Each public item has one path under its owning module:
 
 | Module | Contents and entry points |
 |---|---|
-| `boot` | `VolumeGeometry::from_boot_sector` and `BootError` |
+| `boot` | `GeometryField`, `GeometryFields`, `VolumeGeometry::{from_boot_sector, from_fields, fields}` and `BootError` |
 | `record` | `RecordHeader::peek`, `FileRecord::parse` and `RecordClass::classify`; `reference` contains `FileRef`, `system` contains `u64` record numbers such as `MFT` and `ROOT`, and `fixup` exposes `FixupError` |
 | `attribute` | Attribute types, flags and header parsing; `iter::AttributeIter`, `non_resident::{NonResident, StreamSizes}` and `runlist::{Runlist, Run, VcnRange}` |
 | `value` | `ValueError` and the `standard_information`, `file_name`, `attribute_list`, `data`, `index_allocation`, `reparse_point` and `bitmap` decoders |
@@ -25,6 +25,8 @@ Record parsing owns in-place update-sequence fixup. Typed decoders use their ass
 5. Drop borrowed views before returning the buffer to its pool. For direct parsing, `FileRecord::parse(&mut buffer)` validates the header and applies fixup, preserving the buffer on every error. Protection uses 512-byte strides even on 4Kn volumes.
 
 Decode volume geometry with `VolumeGeometry::from_boot_sector(&bytes)` before locating records.
+
+Use `geometry.fields()` to extract its eight independent values and `VolumeGeometry::from_fields(fields)` to reconstruct it. Both constructors share size and volume-bound validation; derived cluster size, cluster count and volume bytes are recomputed. Invalid field inputs return `BootError::InvalidField` with a `GeometryField` identifier and the supplied value. The identifier displays the field's snake_case name.
 
 The callback below copies each name into the caller's chosen storage. Its lifetime bound prevents retaining a borrowed name after the call. The example uses snafu to preserve each parser error category.
 
@@ -89,7 +91,7 @@ Parser errors are non-exhaustive snafu enums implementing `core::error::Error`, 
 
 | Error path | Validation failures |
 |---|---|
-| `boot::BootError` | Boot identification, sector/cluster/record sizes, volume bounds and requested cluster ranges |
+| `boot::BootError` | Boot identification, independent geometry fields, sector/cluster/record sizes, volume bounds and requested cluster ranges |
 | `record::reference::FileRefError` | Record number outside the 48-bit reference field |
 | `record::fixup::FixupError` | Update-sequence metadata or a protected-trailer mismatch |
 | `record::RecordError` | Record size, signature or header; `Fixup { source }` preserves the nested repair error |
