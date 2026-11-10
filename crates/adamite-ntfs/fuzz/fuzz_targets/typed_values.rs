@@ -50,27 +50,23 @@ fuzz_target!(|data: &[u8]| {
             }
         }
         selectors::DATA | selectors::INDEX_ALLOCATION => {
-            for attribute in AttributeIter::from_region(bytes) {
-                if let Ok(value) = attribute {
-                    if selector == selectors::DATA {
-                        if let Ok(data) = Data::from_attribute(value) {
-                            support::name(data.name());
-                            std::hint::black_box((
-                                data.flags().raw(),
-                                data.resident_value(),
-                                data.logical_size(),
-                            ));
-                            if let Some(descriptor) = data.non_resident() {
-                                support::descriptor(descriptor);
-                            }
-                        }
-                    } else {
-                        if let Ok(index) = IndexAllocation::from_attribute(value) {
-                            support::name(index.name());
-                            std::hint::black_box(index.flags().raw());
-                            support::descriptor(index.descriptor());
+            for value in AttributeIter::from_region(bytes).flatten() {
+                if selector == selectors::DATA {
+                    if let Ok(data) = Data::from_attribute(value) {
+                        support::name(data.name());
+                        std::hint::black_box((
+                            data.flags().raw(),
+                            data.resident_value(),
+                            data.logical_size(),
+                        ));
+                        if let Some(descriptor) = data.non_resident() {
+                            support::descriptor(descriptor);
                         }
                     }
+                } else if let Ok(index) = IndexAllocation::from_attribute(value) {
+                    support::name(index.name());
+                    std::hint::black_box(index.flags().raw());
+                    support::descriptor(index.descriptor());
                 }
             }
         }

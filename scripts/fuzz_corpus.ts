@@ -407,6 +407,7 @@ async function main() {
     if (count === 0) throw new Error(`no seeds for ${target}`);
     console.log(`${target}: ${count} seeds, ${total}/${budget} bytes`);
   }
+  await scanCorpus();
 }
 
 if (import.meta.main) await main();

@@ -167,8 +167,8 @@ Each automated milestone is one bounded Codex run targeting 15–30 minutes, inc
 
 ### M15 — Gate and CI integration
 
-- [ ] M15.1 Extend scripts/check.ts and deno permissions for both fuzz packages, core corpus generation/checks and Deno fixture tests; update script tests and Linux fuzz CI while retaining Windows workspace and parser no_std coverage.
-- [ ] M15.2 Keep normal checks free of sudo/system NTFS tools. Verify: `deno test --allow-read --allow-write scripts/check_test.ts`; `deno task ci-lint`; `deno task check --fuzz`.
+- [x] M15.1 Extend scripts/check.ts and deno permissions for both fuzz packages, core corpus generation/checks and Deno fixture tests; update script tests and Linux fuzz CI while retaining Windows workspace and parser no_std coverage.
+- [x] M15.2 Keep normal checks free of sudo/system NTFS tools. Verify: `deno test --allow-read --allow-write scripts/check_test.ts`; `deno task ci-lint`; `deno task check --fuzz`.
 
 ### M16 — Architecture documentation and final acceptance
 

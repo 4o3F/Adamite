@@ -11,10 +11,8 @@ fuzz_target!(|data: &[u8]| {
         RecordClass::Base(record) | RecordClass::Extension(record) => {
             support::header(record.header());
             std::hint::black_box(record.as_bytes());
-            for attribute in record.attributes() {
-                if let Ok(value) = attribute {
-                    support::attribute(value);
-                }
+            for value in record.attributes().flatten() {
+                support::attribute(value);
             }
         }
         RecordClass::NotInUse(value) => support::header(value),

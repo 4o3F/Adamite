@@ -8,6 +8,21 @@ type Step = {
   env?: Record<string, string>;
 };
 
+type FuzzPackage = {
+  name: string;
+  targets: readonly string[];
+  tests: readonly string[];
+};
+
+export const fuzzPackages: readonly FuzzPackage[] = [
+  {
+    name: "adamite-ntfs",
+    targets: ["boot_sector", "file_record", "attributes", "runlist", "typed_values"],
+    tests: [],
+  },
+  { name: "adamite-core", targets: ["scan"], tests: ["harness"] },
+];
+
 async function run(step: Step): Promise<void> {
   console.log(`\nChecking ${step.name}`);
   const status = await new Deno.Command(step.command, {
@@ -45,34 +60,50 @@ export async function requireCorpus(path: string): Promise<void> {
   throw new Error(`empty fuzz corpus: ${path}; run deno task fuzz-corpus`);
 }
 
-async function main(): Promise<void> {
-  if (Deno.args.some((arg) => arg !== "--fuzz") || Deno.args.length > 1) {
-    throw new Error("usage: deno task check [--fuzz]");
+export async function requireFuzzCorpora(packages: readonly FuzzPackage[]): Promise<void> {
+  for (const pkg of packages) {
+    for (const target of pkg.targets) {
+      await requireCorpus(`crates/${pkg.name}/fuzz/corpus/${target}`);
+    }
   }
+}
 
-  const toolchain = parse(await Deno.readTextFile("rust-toolchain.toml"));
-  const manifest = parse(await Deno.readTextFile("Cargo.toml"));
-  const channel = (toolchain.toolchain as Record<string, unknown>)?.channel;
-  const workspacePackage = (manifest.workspace as Record<string, unknown>)?.package;
-  const rustVersion = (workspacePackage as Record<string, unknown>)?.["rust-version"];
-  if (typeof channel !== "string" || channel !== rustVersion) {
-    throw new Error("rust-toolchain.toml channel and workspace rust-version must agree");
-  }
-  console.log(`Toolchain and rust-version agree: ${channel}`);
-
-  const fuzzManifest = "crates/adamite-ntfs/fuzz/Cargo.toml";
-  const hasFuzz = await exists(fuzzManifest);
+export function checkSteps(options: { packages: readonly FuzzPackage[]; fuzz: boolean }): Step[] {
   const steps: Step[] = [
     { name: "Rust formatting", command: "cargo", args: ["fmt", "--all", "--check"] },
   ];
-  if (hasFuzz) {
-    steps.push({
-      name: "fuzz formatting",
-      command: "cargo",
-      args: ["fmt", "--manifest-path", fuzzManifest, "--check"],
-    });
-  } else {
-    console.log(`Skipping fuzz steps: ${fuzzManifest} does not exist`);
+  for (const pkg of options.packages) {
+    const manifest = `crates/${pkg.name}/fuzz/Cargo.toml`;
+    steps.push(
+      {
+        name: `fuzz formatting ${pkg.name}`,
+        command: "cargo",
+        args: ["fmt", "--manifest-path", manifest, "--check"],
+      },
+      {
+        name: `fuzz Clippy ${pkg.name}`,
+        command: "cargo",
+        args: [
+          "clippy",
+          "--manifest-path",
+          manifest,
+          "--all-targets",
+          "--locked",
+          "--",
+          "-D",
+          "warnings",
+        ],
+        // The parser exposes its attribute-region constructor only in fuzz builds.
+        env: { RUSTFLAGS: "--cfg fuzzing" },
+      },
+    );
+    for (const target of pkg.tests) {
+      steps.push({
+        name: `fuzz tests ${pkg.name} ${target}`,
+        command: "cargo",
+        args: ["test", "--manifest-path", manifest, "--test", target, "--locked"],
+      });
+    }
   }
 
   for (const feature of ["--no-default-features", "--all-features"]) {
@@ -117,44 +148,84 @@ async function main(): Promise<void> {
     { name: "Deno formatting", command: "deno", args: ["fmt", "--check"] },
     { name: "Deno lint", command: "deno", args: ["lint"] },
     { name: "Deno type check", command: "deno", args: ["check", "scripts/"] },
+    {
+      name: "Deno fixture tests",
+      command: "deno",
+      args: ["test", "--frozen", "--allow-read=scripts/fixtures/testdata", "scripts/fixtures/"],
+    },
+    {
+      name: "check script tests",
+      command: "deno",
+      args: [
+        "test",
+        "--frozen",
+        "--allow-read=deno.json,.github/workflows/ci.yml,crates/adamite-ntfs/fuzz/Cargo.toml,crates/adamite-core/fuzz/Cargo.toml",
+        "scripts/check_test.ts",
+      ],
+    },
     { name: "workflow syntax", command: "deno", args: ["task", "ci-lint"] },
   );
-  if (Deno.args.includes("--fuzz") && hasFuzz) {
+  if (options.fuzz && options.packages.length > 0) {
     steps.push({
       name: "install cargo-fuzz",
       command: "cargo",
       args: ["install", "cargo-fuzz", "--locked"],
     });
-    steps.push({
-      name: "fuzz build",
-      command: "cargo",
-      cwd: "crates/adamite-ntfs",
-      args: ["+nightly", "fuzz", "build"],
-    });
-    const targets = ["boot_sector", "file_record", "attributes", "runlist", "typed_values"];
-    for (const target of targets) {
-      await requireCorpus(`crates/adamite-ntfs/fuzz/corpus/${target}`);
-    }
-    for (const target of targets) {
+    for (const pkg of options.packages) {
       steps.push({
-        name: `fuzz ${target}`,
+        name: `fuzz build ${pkg.name}`,
         command: "cargo",
-        cwd: "crates/adamite-ntfs",
-        args: [
-          "+nightly",
-          "fuzz",
-          "run",
-          target,
-          `fuzz/corpus/${target}/`,
-          "--",
-          "-max_total_time=30",
-          "-max_len=262144",
-          "-timeout=2",
-          "-rss_limit_mb=2048",
-        ],
+        cwd: `crates/${pkg.name}`,
+        args: ["+nightly", "fuzz", "build"],
       });
+      for (const target of pkg.targets) {
+        steps.push({
+          name: `fuzz ${pkg.name} ${target}`,
+          command: "cargo",
+          cwd: `crates/${pkg.name}`,
+          args: [
+            "+nightly",
+            "fuzz",
+            "run",
+            target,
+            `fuzz/corpus/${target}/`,
+            "--",
+            "-max_total_time=30",
+            "-max_len=262144",
+            "-timeout=2",
+            "-rss_limit_mb=2048",
+          ],
+        });
+      }
     }
   }
+  return steps;
+}
+
+async function main(): Promise<void> {
+  if (Deno.args.some((arg) => arg !== "--fuzz") || Deno.args.length > 1) {
+    throw new Error("usage: deno task check [--fuzz]");
+  }
+
+  const toolchain = parse(await Deno.readTextFile("rust-toolchain.toml"));
+  const manifest = parse(await Deno.readTextFile("Cargo.toml"));
+  const channel = (toolchain.toolchain as Record<string, unknown>)?.channel;
+  const workspacePackage = (manifest.workspace as Record<string, unknown>)?.package;
+  const rustVersion = (workspacePackage as Record<string, unknown>)?.["rust-version"];
+  if (typeof channel !== "string" || channel !== rustVersion) {
+    throw new Error("rust-toolchain.toml channel and workspace rust-version must agree");
+  }
+  console.log(`Toolchain and rust-version agree: ${channel}`);
+
+  const packages: FuzzPackage[] = [];
+  for (const pkg of fuzzPackages) {
+    const path = `crates/${pkg.name}/fuzz/Cargo.toml`;
+    if (await exists(path)) packages.push(pkg);
+    else console.log(`Skipping fuzz steps: ${path} does not exist`);
+  }
+  const fuzz = Deno.args.includes("--fuzz");
+  if (fuzz) await requireFuzzCorpora(packages);
+  const steps = checkSteps({ packages, fuzz });
   for (const step of steps) await run(step);
   console.log("\nAll checks passed");
 }

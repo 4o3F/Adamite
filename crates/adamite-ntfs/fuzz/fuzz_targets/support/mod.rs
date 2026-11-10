@@ -79,12 +79,10 @@ pub fn runs(mut value: Runlist<'_>) {
     boot[68] = 0xf6;
     boot[510..].copy_from_slice(&[0x55, 0xaa]);
     let geometry = adamite_ntfs::parse_boot_sector(&boot).ok();
-    for run in value.by_ref() {
-        if let Ok(run) = run {
-            black_box((run.vcn(), run.length(), run.lcn()));
-            if let Some(geometry) = geometry {
-                black_box(run.validate_geometry(&geometry)).ok();
-            }
+    for run in value.by_ref().flatten() {
+        black_box((run.vcn(), run.length(), run.lcn()));
+        if let Some(geometry) = geometry {
+            black_box(run.validate_geometry(&geometry)).ok();
         }
     }
     black_box(value.next());
@@ -201,16 +199,14 @@ pub fn file_name(value: FileName<'_>) {
     name(value.name());
 }
 pub fn list_entries(mut value: AttributeList<'_>) {
-    for entry in value.by_ref() {
-        if let Ok(entry) = entry {
-            black_box((
-                entry.attribute_type().raw(),
-                entry.lowest_vcn(),
-                entry.segment_reference().raw(),
-                entry.attribute_id(),
-            ));
-            name(entry.name());
-        }
+    for entry in value.by_ref().flatten() {
+        black_box((
+            entry.attribute_type().raw(),
+            entry.lowest_vcn(),
+            entry.segment_reference().raw(),
+            entry.attribute_id(),
+        ));
+        name(entry.name());
     }
     black_box(value.next());
 }

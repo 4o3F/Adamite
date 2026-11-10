@@ -32,6 +32,18 @@ jobs:
         if: runner.os == 'Linux'
       - run: cargo fmt --manifest-path crates/adamite-ntfs/fuzz/Cargo.toml --check
         if: runner.os == 'Linux'
+      - run: cargo fmt --manifest-path crates/adamite-core/fuzz/Cargo.toml --check
+        if: runner.os == 'Linux'
+      - run: cargo clippy --manifest-path crates/adamite-ntfs/fuzz/Cargo.toml --all-targets --locked -- -D warnings
+        if: runner.os == 'Linux'
+        env:
+          RUSTFLAGS: --cfg fuzzing
+      - run: cargo clippy --manifest-path crates/adamite-core/fuzz/Cargo.toml --all-targets --locked -- -D warnings
+        if: runner.os == 'Linux'
+        env:
+          RUSTFLAGS: --cfg fuzzing
+      - run: cargo test --manifest-path crates/adamite-core/fuzz/Cargo.toml --test harness --locked
+        if: runner.os == 'Linux'
       - run: cargo clippy --workspace --all-targets --locked --no-default-features -- -D warnings
       - run: cargo clippy --workspace --all-targets --locked --all-features -- -D warnings
       - run: cargo test --workspace --locked --no-default-features
@@ -77,6 +89,8 @@ jobs:
       - run: deno fmt --check
       - run: deno lint
       - run: deno check scripts/
+      - run: deno test --frozen --allow-read=scripts/fixtures/testdata scripts/fixtures/
+      - run: deno test --frozen --allow-read=deno.json,.github/workflows/ci.yml,crates/adamite-ntfs/fuzz/Cargo.toml,crates/adamite-core/fuzz/Cargo.toml scripts/check_test.ts
       - run: deno task ci-lint
 
   fuzz:
@@ -84,7 +98,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [boot_sector, file_record, attributes, runlist, typed_values]
+        include:
+          - package: adamite-ntfs
+            target: boot_sector
+          - package: adamite-ntfs
+            target: file_record
+          - package: adamite-ntfs
+            target: attributes
+          - package: adamite-ntfs
+            target: runlist
+          - package: adamite-ntfs
+            target: typed_values
+          - package: adamite-core
+            target: scan
     steps:
       - uses: actions/checkout@v6
       - uses: actions-rust-lang/setup-rust-toolchain@v2
@@ -94,8 +120,8 @@ jobs:
           build-warnings: ""
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: crates/adamite-ntfs/fuzz
+          workspaces: crates/${{ matrix.package }}/fuzz
           cache-bin: true
       - run: cargo install cargo-fuzz --locked
       - run: cargo +nightly fuzz run ${{ matrix.target }} fuzz/corpus/${{ matrix.target }}/ -- -max_total_time=30 -max_len=262144 -timeout=2 -rss_limit_mb=2048
-        working-directory: crates/adamite-ntfs
+        working-directory: crates/${{ matrix.package }}
