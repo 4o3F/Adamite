@@ -239,12 +239,7 @@ impl Ingest {
                             return Err(ScanError::FileRef { source });
                         }
                     };
-                    match decode::contribution(
-                        &record,
-                        reference,
-                        mapping.geometry,
-                        &mut self.stats,
-                    ) {
+                    match decode::contribution(&record, reference, mapping.geometry) {
                         Ok(contribution) if base => slot.base = Some(contribution),
                         Ok(contribution) => push(
                             &mut self.patches,

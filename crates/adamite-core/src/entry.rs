@@ -95,6 +95,8 @@ impl EntryFlags {
     pub const COMPRESSED: Self = Self(1 << 3);
     pub const HIDDEN: Self = Self(1 << 4);
     pub const SYSTEM: Self = Self(1 << 5);
+    pub const HARDLINK_DUP: Self = Self(1 << 6);
+    pub const SYNTHETIC: Self = Self(1 << 7);
 
     pub fn insert(&mut self, flag: Self) {
         self.0 |= flag.0;

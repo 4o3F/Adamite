@@ -1,3 +1,3 @@
 //! Iterative subtree totals and deterministic final ordering.
 
-// TODO(M11): aggregate the linked tree and finalize derived indexes.
+// TODO(M11): aggregate the flat parent-index array and finalize derived indexes.

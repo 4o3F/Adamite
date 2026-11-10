@@ -137,12 +137,12 @@ Each automated milestone is one bounded Codex run targeting 15–30 minutes, inc
 
 ### M9 — Links, aliases and damaged parent graphs
 
-- [ ] M9.1 Implement root handling, raw-name ordering, DOS suppression, all hard-link nodes and deterministic primary choice; add orphan/cycle repair and metadata grouping.
-- [ ] M9.2 Test same-parent links, stale/non-directory parents, multi-name directories, self/cyclic references and synthetic groups. Verify: `cargo test -p adamite-core --locked linking`.
+- [x] M9.1 Implement root handling, raw-name ordering, DOS suppression, all hard-link nodes and deterministic primary choice; add orphan/cycle repair and metadata grouping.
+- [x] M9.2 Test same-parent links, stale/non-directory parents, multi-name directories, self/cyclic references and synthetic groups. Verify: `cargo test -p adamite-core --locked linking`.
 
 ### M10 — Snapshot arena and CSR
 
-- [ ] M10.1 Implement the exact Node layout/assertion, checked name arena and cold columns, deterministic ids and CSR construction; add immutable node/children/name/path accessors and Send + Sync checks.
+- [ ] M10.1 Implement the exact Node layout/assertion, checked shared name pool, cold columns, deterministic ids and CSR. Link appends names directly to the pool; nodes keep (offset, len), with no per-node `Vec<u16>`/`Vec<u8>`; raw UTF-16 is transient for ordering/comparison. Add immutable node/children/name/path accessors and Send + Sync checks.
 - [ ] M10.2 Test root, invalid ids, Unicode, deep paths and representational bounds. Verify: `cargo test -p adamite-core --locked snapshot`; `cargo doc -p adamite-core --no-deps`.
 
 ### M11 — Aggregation and finalization

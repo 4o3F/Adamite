@@ -38,12 +38,7 @@ pub(super) fn value_counter(error: ValueError, stats: &mut ScanStats) -> Result<
     }
 }
 
-fn name(value: Utf16Le<'_>, stats: &mut ScanStats) -> Result<Vec<u16>, ScanError> {
-    for character in value.decode_strict() {
-        if character.is_err() {
-            bump(&mut stats.invalid_utf16)?;
-        }
-    }
+fn name(value: Utf16Le<'_>) -> Result<Vec<u16>, ScanError> {
     let mut units = Vec::new();
     units
         .try_reserve_exact(value.len_units())
@@ -56,7 +51,6 @@ pub(super) fn contribution(
     record: &FileRecord<'_>,
     reference: FileRef,
     geometry: VolumeGeometry,
-    stats: &mut ScanStats,
 ) -> Result<RecordContribution, DecodeError> {
     let mut owned = RecordContribution {
         reference,
@@ -77,7 +71,7 @@ pub(super) fn contribution(
                         attribute_id: attribute.id(),
                         parent: value.parent(),
                         namespace: value.namespace(),
-                        name: name(value.name(), stats)?,
+                        name: name(value.name())?,
                     },
                 )?;
             }
@@ -144,7 +138,7 @@ pub(super) fn contribution(
                 StreamSegment {
                     source: reference,
                     attribute_type: attribute.attribute_type(),
-                    name: name(attribute.name(), stats)?,
+                    name: name(attribute.name())?,
                     attribute_id: attribute.id(),
                     flags: attribute.flags(),
                     storage,

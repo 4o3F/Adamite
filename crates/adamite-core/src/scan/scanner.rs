@@ -9,7 +9,11 @@ use super::{
     mapping::{MftMapping, RecordAssembly, overflow},
     merge::Merge,
 };
-use crate::{ScanStats, Snapshot, entry::EntryRecord};
+use crate::{
+    ScanStats, Snapshot,
+    entry::EntryRecord,
+    tree::link::{Linker, ParentTree},
+};
 use adamite_ntfs::{
     AttributeError, AttributeListError, FileRefError, GeometryError, RecordError, RunlistError,
     fixup::FixupError, parse_boot_sector,
@@ -33,6 +37,8 @@ pub enum ScanPhase {
     Merge,
     /// Resolve parent and hard-link edges.
     Link,
+    /// Build immutable snapshot storage from the flat parent-index array.
+    Snapshot,
     /// Compute subtree totals.
     Aggregate,
     /// Freeze and order the completed tree.
@@ -159,6 +165,12 @@ pub enum ScanError {
         /// Parser reference construction failure.
         source: FileRefError,
     },
+    /// A resolved entry or parent-index array invariant is invalid.
+    #[snafu(display("invalid tree links: {reason}"))]
+    Link {
+        /// Rejected entry or parent-graph invariant.
+        reason: &'static str,
+    },
     /// A required filesystem record was absent or corrupt.
     #[snafu(display("required MFT record {record} is missing or corrupt"))]
     RequiredRecord {
@@ -207,7 +219,7 @@ pub enum ScanError {
 
 /// Bootstraps the complete MFT mapping from caller-supplied bytes.
 ///
-/// Stops explicitly before tree linking, implemented in M9.
+/// Stops explicitly before snapshot storage construction, implemented in M10.
 #[derive(Debug)]
 pub struct Scanner {
     config: ScanConfig,
@@ -220,6 +232,8 @@ pub struct Scanner {
     ingest: Option<Ingest>,
     merge: Option<Merge>,
     entries: Vec<EntryRecord>,
+    linker: Option<Linker>,
+    parent_tree: Option<ParentTree>,
 }
 
 impl Scanner {
@@ -241,6 +255,8 @@ impl Scanner {
             ingest: None,
             merge: None,
             entries: Vec::new(),
+            linker: None,
+            parent_tree: None,
         })
     }
 
@@ -254,8 +270,8 @@ impl Scanner {
     /// # Errors
     ///
     /// Invalid geometry, bootstrap data, arithmetic overflow or allocation failure
-    /// terminates the scan. Successful record merge currently terminates with
-    /// [`ScanError::PhaseNotImplemented`] for Link. Further calls return Inactive.
+    /// terminates the scan. Successful tree linking currently terminates with
+    /// [`ScanError::PhaseNotImplemented`] for Snapshot. Further calls return Inactive.
     pub fn step(&mut self) -> Result<ScanStep, ScanError> {
         let span = tracing::info_span!("scan_phase", phase = ?self.phase);
         let _entered = span.enter();
@@ -296,6 +312,7 @@ impl Scanner {
             ScanPhase::Discover => self.discover(),
             ScanPhase::Stream => self.stream(),
             ScanPhase::Merge => self.merge(),
+            ScanPhase::Link => self.link(),
             phase => Err(ScanError::PhaseNotImplemented { phase }),
         }
     }
@@ -412,6 +429,29 @@ impl Scanner {
         Ok(self.progress(false))
     }
 
+    fn link(&mut self) -> Result<ScanStep, ScanError> {
+        if self.linker.is_none() {
+            self.linker = Some(Linker::new(std::mem::take(&mut self.entries))?);
+            return Ok(self.progress(false));
+        }
+        let stats = &mut self
+            .ingest
+            .as_mut()
+            .ok_or(ScanError::Link {
+                reason: "missing scan statistics",
+            })?
+            .stats;
+        let linker = self.linker.as_mut().ok_or(ScanError::Link {
+            reason: "missing linker state",
+        })?;
+        if linker.step(stats)? {
+            self.parent_tree = Some(std::mem::take(&mut linker.result));
+            self.linker = None;
+            self.phase = ScanPhase::Snapshot;
+        }
+        Ok(self.progress(false))
+    }
+
     fn progress(&self, waiting_for_input: bool) -> ScanStep {
         ScanStep::Progress(ScanProgress {
             phase: self.phase,
@@ -443,6 +483,7 @@ impl Scanner {
         self.record_read = None;
         self.discovery = None;
         self.merge = None;
+        self.linker = None;
     }
 }
 
