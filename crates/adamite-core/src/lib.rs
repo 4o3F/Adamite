@@ -62,19 +62,21 @@
 )]
 
 mod entry;
+mod error;
 mod scan;
 mod snapshot;
-mod stats;
 mod tree;
+mod util;
 
+pub use error::ScanError;
+pub use scan::ScanStats;
 pub use scan::{
-    ConfigError, FeedError, ReadRequest, RequestId, ScanConfig, ScanContext, ScanError, ScanOutput,
-    ScanPhase, ScanProgress, ScanStep, Scanner,
+    ConfigError, FeedError, ReadRequest, RequestId, ScanConfig, ScanContext, ScanOutput, ScanPhase,
+    ScanProgress, ScanStep, Scanner,
 };
 pub use snapshot::{
     ExtensionStat, Node, NodeFlags, NodeId, NodeView, Snapshot, SnapshotError, VolumeInfo,
 };
-pub use stats::ScanStats;
 
 const _: fn() = || {
     fn assert_send<T: Send>() {}

@@ -6,6 +6,7 @@ use super::{
 use crate::{
     ScanContext,
     tree::link::{ParentTree, ResolvedNode},
+    util::VecExt,
 };
 use adamite_ntfs::boot::VolumeGeometry;
 use std::vec::IntoIter;
@@ -32,20 +33,6 @@ pub(crate) struct SnapshotBuilder {
     cursors: Vec<u32>,
 }
 
-fn invalid(reason: &'static str) -> SnapshotError {
-    SnapshotError::InvalidTree { reason }
-}
-fn index(value: u32) -> Result<usize, SnapshotError> {
-    usize::try_from(value).map_err(|_| SnapshotError::Overflow {
-        field: "host index",
-    })
-}
-fn reserve<T>(items: &mut Vec<T>, len: usize) -> Result<(), SnapshotError> {
-    items
-        .try_reserve_exact(len)
-        .map_err(|source| SnapshotError::Allocation { source })
-}
-
 impl SnapshotBuilder {
     pub(crate) fn new(
         tree: ParentTree,
@@ -56,16 +43,14 @@ impl SnapshotBuilder {
         checked_u32(len, "node count")?;
         checked_u32(tree.names.len(), "name pool length")?;
         if len == 0 {
-            return Err(invalid("missing root"));
+            return Err(SnapshotError::invalid("missing root"));
         }
         let label = context
             .label
             .as_ref()
             .map(|label| {
                 let mut owned = String::new();
-                owned
-                    .try_reserve_exact(label.len())
-                    .map_err(|source| SnapshotError::Allocation { source })?;
+                owned.try_reserve_exact(label.len())?;
                 owned.push_str(label);
                 Ok::<_, SnapshotError>(owned)
             })
@@ -90,17 +75,19 @@ impl SnapshotBuilder {
                 },
             },
         };
-        reserve(&mut snapshot.nodes, len)?;
-        reserve(&mut snapshot.ads_size, len)?;
-        reserve(&mut snapshot.file_refs, len)?;
-        reserve(&mut snapshot.attrs, len)?;
-        reserve(&mut snapshot.nlink, len)?;
-        reserve(&mut snapshot.reparse_tags, len)?;
-        let child_len = len.checked_sub(1).ok_or_else(|| invalid("missing root"))?;
-        reserve(&mut snapshot.children, child_len)?;
+        VecExt::try_reserve_exact(&mut snapshot.nodes, len)?;
+        VecExt::try_reserve_exact(&mut snapshot.ads_size, len)?;
+        VecExt::try_reserve_exact(&mut snapshot.file_refs, len)?;
+        VecExt::try_reserve_exact(&mut snapshot.attrs, len)?;
+        VecExt::try_reserve_exact(&mut snapshot.nlink, len)?;
+        VecExt::try_reserve_exact(&mut snapshot.reparse_tags, len)?;
+        let child_len = len
+            .checked_sub(1)
+            .ok_or_else(|| SnapshotError::invalid("missing root"))?;
+        VecExt::try_reserve_exact(&mut snapshot.children, child_len)?;
         snapshot.children.resize(child_len, NodeId::ROOT);
         let mut cursors = Vec::new();
-        reserve(&mut cursors, len)?;
+        VecExt::try_reserve_exact(&mut cursors, len)?;
         cursors.resize(len, 0);
         Ok(Self {
             source: tree.nodes.into_iter(),
@@ -123,9 +110,10 @@ impl SnapshotBuilder {
                     if let Some(source) = self.source.next() {
                         let id = snapshot.nodes.len();
                         if source.parent >= self.cursors.len() || (id == 0 && source.parent != 0) {
-                            return Err(invalid("parent outside arena"));
+                            return Err(SnapshotError::invalid("parent outside arena"));
                         }
-                        let start = index(source.name_off)?;
+                        let start = usize::try_from(source.name_off)
+                            .map_err(|_| SnapshotError::overflow("host index"))?;
                         let (_, len) = name_range(start, usize::from(source.name_len))?;
                         let end = start
                             .checked_add(usize::from(len))
@@ -134,9 +122,9 @@ impl SnapshotBuilder {
                             .names
                             .get(start..end)
                             .and_then(|bytes| std::str::from_utf8(bytes).ok())
-                            .ok_or_else(|| invalid("invalid UTF-8 name range"))?;
+                            .ok_or_else(|| SnapshotError::invalid("invalid UTF-8 name range"))?;
                         if id == 0 && name != "/" {
-                            return Err(invalid("invalid root name"));
+                            return Err(SnapshotError::invalid("invalid root name"));
                         }
                         snapshot.nodes.push(Node {
                             size: source.size,
@@ -164,11 +152,12 @@ impl SnapshotBuilder {
                 }
                 Stage::Counts => {
                     if let Some(node) = snapshot.nodes.get(self.cursor) {
-                        let parent = index(node.parent)?;
+                        let parent = usize::try_from(node.parent)
+                            .map_err(|_| SnapshotError::overflow("host index"))?;
                         let node = snapshot
                             .nodes
                             .get_mut(parent)
-                            .ok_or_else(|| invalid("missing parent"))?;
+                            .ok_or_else(|| SnapshotError::invalid("missing parent"))?;
                         node.child_len =
                             node.child_len
                                 .checked_add(1)
@@ -190,10 +179,14 @@ impl SnapshotBuilder {
                         *self
                             .cursors
                             .get_mut(self.cursor)
-                            .ok_or_else(|| invalid("missing CSR cursor"))? = node.child_start;
+                            .ok_or_else(|| SnapshotError::invalid("missing CSR cursor"))? =
+                            node.child_start;
                         self.child_start = self
                             .child_start
-                            .checked_add(index(node.child_len)?)
+                            .checked_add(
+                                usize::try_from(node.child_len)
+                                    .map_err(|_| SnapshotError::overflow("host index"))?,
+                            )
                             .ok_or(SnapshotError::Overflow {
                                 field: "child range end",
                             })?;
@@ -204,7 +197,9 @@ impl SnapshotBuilder {
                             })?;
                     } else {
                         if self.child_start != snapshot.children.len() {
-                            return Err(invalid("CSR ranges do not partition edges"));
+                            return Err(SnapshotError::invalid(
+                                "CSR ranges do not partition edges",
+                            ));
                         }
                         self.stage = Stage::Children;
                         self.cursor = 1;
@@ -214,12 +209,18 @@ impl SnapshotBuilder {
                     if let Some(node) = snapshot.nodes.get(self.cursor) {
                         let cursor = self
                             .cursors
-                            .get_mut(index(node.parent)?)
-                            .ok_or_else(|| invalid("missing parent CSR cursor"))?;
+                            .get_mut(
+                                usize::try_from(node.parent)
+                                    .map_err(|_| SnapshotError::overflow("host index"))?,
+                            )
+                            .ok_or_else(|| SnapshotError::invalid("missing parent CSR cursor"))?;
                         *snapshot
                             .children
-                            .get_mut(index(*cursor)?)
-                            .ok_or_else(|| invalid("child range outside CSR"))? =
+                            .get_mut(
+                                usize::try_from(*cursor)
+                                    .map_err(|_| SnapshotError::overflow("host index"))?,
+                            )
+                            .ok_or_else(|| SnapshotError::invalid("child range outside CSR"))? =
                             NodeId::from_raw(checked_u32(self.cursor, "child id")?);
                         *cursor = cursor.checked_add(1).ok_or(SnapshotError::Overflow {
                             field: "CSR cursor",

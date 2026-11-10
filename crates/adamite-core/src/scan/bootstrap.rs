@@ -1,8 +1,9 @@
 //! Validated record-zero and extension contributions for MFT discovery.
 
-use super::{
-    mapping::{MftMapping, OwnedRun, overflow},
-    scanner::ScanError,
+use super::mapping::{MftMapping, OwnedRun};
+use crate::{
+    error::ScanError,
+    util::{SliceExt, VecExt},
 };
 use adamite_ntfs::{
     attribute::{
@@ -58,34 +59,13 @@ pub(super) struct Record0 {
     pub segments: Vec<DataSegment>,
 }
 
-pub(super) fn copy_slice<T: Copy>(input: &[T]) -> Result<Vec<T>, ScanError> {
-    let mut owned = Vec::new();
-    owned
-        .try_reserve_exact(input.len())
-        .map_err(|source| ScanError::Allocation { source })?;
-    owned.extend_from_slice(input);
-    Ok(owned)
-}
-
-pub(super) fn push<T>(items: &mut Vec<T>, item: T) -> Result<(), ScanError> {
-    items
-        .try_reserve(1)
-        .map_err(|source| ScanError::Allocation { source })?;
-    items.push(item);
-    Ok(())
-}
-
-pub(super) fn unsupported(reason: &'static str) -> ScanError {
-    ScanError::Bootstrap { reason }
-}
-
 pub(super) fn check_storage(flags: AttributeFlags, compression_unit: u8) -> Result<(), ScanError> {
     if flags.compression_format() != 0
         || flags.contains(AttributeFlags::SPARSE)
         || flags.contains(AttributeFlags::ENCRYPTED)
         || compression_unit != 0
     {
-        return Err(unsupported(
+        return Err(ScanError::bootstrap(
             "sparse, compressed or encrypted bootstrap storage",
         ));
     }
@@ -109,38 +89,34 @@ pub(super) fn collect_mapping(
         let run = run.map_err(|source| ScanError::Runlist { source })?;
         let lcn = run
             .lcn()
-            .ok_or_else(|| unsupported("sparse bootstrap run"))?;
-        push(
-            &mut owned,
-            OwnedRun {
-                vcn: run.vcn(),
-                lcn,
-                clusters: run.length(),
-            },
-        )?;
+            .ok_or_else(|| ScanError::bootstrap("sparse bootstrap run"))?;
+        owned.try_push(OwnedRun {
+            vcn: run.vcn(),
+            lcn,
+            clusters: run.length(),
+        })?;
     }
     MftMapping::new(geometry, owned)
 }
 
 fn list_descriptor(attribute: Attribute<'_>) -> Result<AttributeListDescriptor, ScanError> {
     let storage = match attribute.resident_value() {
-        Some(value) => ListStorage::Resident(copy_slice(value)?),
+        Some(value) => ListStorage::Resident(value.try_copy()?),
         None => {
             let segment = attribute
                 .non_resident()
-                .ok_or_else(|| unsupported("missing attribute-list descriptor"))?;
+                .ok_or_else(|| ScanError::bootstrap("missing attribute-list descriptor"))?;
             ListStorage::NonResident {
                 lowest_vcn: segment.lowest_vcn(),
                 highest_vcn: segment.highest_vcn(),
                 compression_unit: segment.compression_unit(),
                 sizes: segment.sizes(),
-                mapping_pairs: copy_slice(segment.mapping_pairs())?,
+                mapping_pairs: segment.mapping_pairs().try_copy()?,
             }
         }
     };
     let mut name = Vec::new();
-    name.try_reserve_exact(attribute.name().len_units())
-        .map_err(|source| ScanError::Allocation { source })?;
+    name.try_reserve_exact(attribute.name().len_units())?;
     name.extend(attribute.name().units());
     Ok(AttributeListDescriptor {
         id: attribute.id(),
@@ -162,20 +138,17 @@ fn parts(
         if attribute.attribute_type() == AttributeType::DATA && attribute.name().len_units() == 0 {
             let segment = attribute
                 .non_resident()
-                .ok_or_else(|| unsupported("resident MFT DATA"))?;
+                .ok_or_else(|| ScanError::bootstrap("resident MFT DATA"))?;
             check_storage(attribute.flags(), segment.compression_unit())?;
             let mapping = collect_runs(segment, geometry)?;
-            push(
-                &mut segments,
-                DataSegment {
-                    id: attribute.id(),
-                    lowest_vcn: segment.lowest_vcn(),
-                    sizes: segment.sizes(),
-                    runs: mapping.runs,
-                },
-            )?;
+            segments.try_push(DataSegment {
+                id: attribute.id(),
+                lowest_vcn: segment.lowest_vcn(),
+                sizes: segment.sizes(),
+                runs: mapping.runs,
+            })?;
         } else if attribute.attribute_type() == AttributeType::ATTRIBUTE_LIST {
-            push(&mut lists, list_descriptor(attribute)?)?;
+            lists.try_push(list_descriptor(attribute)?)?;
         }
     }
     Ok(RecordParts {
@@ -203,7 +176,7 @@ pub(super) fn parse_record0(
         || header.sequence() == 0
         || header.record_number().is_some_and(|ordinal| ordinal != 0)
     {
-        return Err(unsupported(
+        return Err(ScanError::bootstrap(
             "record zero must be an in-use base with its own identity and nonzero sequence",
         ));
     }
@@ -215,27 +188,29 @@ pub(super) fn parse_record0(
         .filter(|segment| segment.lowest_vcn == 0);
     let segment = first
         .next()
-        .ok_or_else(|| unsupported("missing unnamed MFT DATA first segment"))?;
+        .ok_or_else(|| ScanError::bootstrap("missing unnamed MFT DATA first segment"))?;
     if first.next().is_some() {
-        return Err(unsupported("duplicate first MFT DATA segment"));
+        return Err(ScanError::bootstrap("duplicate first MFT DATA segment"));
     }
     let data_size = segment
         .sizes
-        .ok_or_else(|| unsupported("missing MFT stream sizes"))?
+        .ok_or_else(|| ScanError::bootstrap("missing MFT stream sizes"))?
         .data();
     if data_size == 0 || !data_size.is_multiple_of(u64::from(geometry.file_record_size())) {
-        return Err(unsupported(
+        return Err(ScanError::bootstrap(
             "MFT data size must be positive and record aligned",
         ));
     }
     let data_id = segment.id;
-    let mapping = MftMapping::new(geometry, copy_slice(&segment.runs)?)?;
+    let mapping = MftMapping::new(geometry, segment.runs.try_copy()?)?;
     let boot_start = geometry
         .mft_lcn()
         .checked_mul(u64::from(geometry.cluster_size()))
-        .ok_or_else(|| overflow("record-zero offset"))?;
+        .ok_or_else(|| ScanError::overflow("record-zero offset"))?;
     if mapping.virtual_offset(boot_start)? != 0 {
-        return Err(unsupported("MFT first run disagrees with boot location"));
+        return Err(ScanError::bootstrap(
+            "MFT first run disagrees with boot location",
+        ));
     }
     let mut cursor = 0u64;
     let record_len = u64::from(geometry.file_record_size());
@@ -243,18 +218,20 @@ pub(super) fn parse_record0(
         let remaining = usize::try_from(
             record_len
                 .checked_sub(cursor)
-                .ok_or_else(|| overflow("record-zero remainder"))?,
+                .ok_or_else(|| ScanError::overflow("record-zero remainder"))?,
         )
-        .map_err(|_| overflow("record-zero length"))?;
+        .map_err(|_| ScanError::overflow("record-zero length"))?;
         let piece = mapping.read_piece(cursor, remaining)?;
         if boot_start.checked_add(cursor) != Some(piece.offset) {
-            return Err(unsupported(
+            return Err(ScanError::bootstrap(
                 "record zero is not contiguous at the boot location",
             ));
         }
         cursor = cursor
-            .checked_add(u64::try_from(piece.len).map_err(|_| overflow("record-zero piece"))?)
-            .ok_or_else(|| overflow("record-zero cursor"))?;
+            .checked_add(
+                u64::try_from(piece.len).map_err(|_| ScanError::overflow("record-zero piece"))?,
+            )
+            .ok_or_else(|| ScanError::overflow("record-zero cursor"))?;
     }
     Ok(Record0 {
         reference,
@@ -281,7 +258,7 @@ pub(super) fn parse_extension(
             .record_number()
             .is_some_and(|ordinal| u64::from(ordinal) != reference.record())
     {
-        return Err(unsupported(
+        return Err(ScanError::bootstrap(
             "stale or invalid MFT extension identity or base reference",
         ));
     }

@@ -1,9 +1,11 @@
 //! Resolve EntryRecord names and parents into a flat parent-index array.
 
 use crate::{
-    ScanError, ScanStats,
+    ScanStats,
     entry::{EntryFlags, EntryName, EntryRecord},
+    error::ScanError,
     snapshot::{checked_u32, name_range},
+    util::{CounterExt, VecExt},
 };
 use adamite_ntfs::record::{
     reference::FileRef,
@@ -89,36 +91,12 @@ pub(crate) struct Linker {
     pub result: ParentTree,
 }
 
-fn invalid(reason: &'static str) -> ScanError {
-    ScanError::Link { reason }
-}
-fn overflow() -> ScanError {
-    ScanError::Overflow {
-        operation: "tree linking",
-    }
-}
-fn increment(counter: &mut u64) -> Result<(), ScanError> {
-    *counter = counter.checked_add(1).ok_or_else(overflow)?;
-    Ok(())
-}
-fn push<T>(items: &mut Vec<T>, item: T) -> Result<(), ScanError> {
-    checked_u32(
-        items.len().checked_add(1).ok_or_else(overflow)?,
-        "link storage length",
-    )?;
-    items
-        .try_reserve(1)
-        .map_err(|source| ScanError::Allocation { source })?;
-    items.push(item);
-    Ok(())
-}
 fn unnamed(record: u64) -> Result<String, ScanError> {
     let mut text = String::new();
     // A 48-bit ordinal needs at most 15 digits, plus the ASCII label and delimiters.
-    text.try_reserve_exact(32)
-        .map_err(|source| ScanError::Allocation { source })?;
+    text.try_reserve_exact(32)?;
     write!(&mut text, "<record {record}>")
-        .map_err(|_| invalid("could not format unnamed record"))?;
+        .map_err(|_| ScanError::link("could not format unnamed record"))?;
     Ok(text)
 }
 fn synthetic() -> ResolvedNode {
@@ -216,16 +194,18 @@ fn append_name(
 ) -> Result<(u32, u16), ScanError> {
     let len = char::decode_utf16(units.clone()).try_fold(0usize, |len, item| {
         len.checked_add(item.unwrap_or(char::REPLACEMENT_CHARACTER).len_utf8())
-            .ok_or_else(overflow)
+            .ok_or_else(ScanError::link_overflow)
     })?;
     let range = name_range(pool.len(), len)?;
-    pool.try_reserve(len)
-        .map_err(|source| ScanError::Allocation { source })?;
+    pool.try_reserve(len)?;
     for decoded in char::decode_utf16(units) {
         let character = match decoded {
             Ok(character) => character,
             Err(_) => {
-                increment(&mut stats.invalid_utf16)?;
+                stats
+                    .invalid_utf16
+                    .try_bump()
+                    .map_err(|_| ScanError::link_overflow())?;
                 char::REPLACEMENT_CHARACTER
             }
         };
@@ -236,9 +216,21 @@ fn append_name(
 }
 
 impl Linker {
+    fn push_bounded<T>(items: &mut Vec<T>, item: T) -> Result<(), ScanError> {
+        checked_u32(
+            items
+                .len()
+                .checked_add(1)
+                .ok_or_else(ScanError::link_overflow)?,
+            "link storage length",
+        )?;
+        items.try_push(item)?;
+        Ok(())
+    }
+
     pub(crate) fn new(entries: Vec<EntryRecord>) -> Result<Self, ScanError> {
         let mut nodes = Vec::new();
-        push(&mut nodes, synthetic())?;
+        Self::push_bounded(&mut nodes, synthetic())?;
         Ok(Self {
             entries: entries.into_iter(),
             records: Vec::new(),
@@ -278,12 +270,10 @@ impl Linker {
             Ok(_) if ordinal == ROOT => {
                 return Err(ScanError::RequiredRecord { record: ROOT });
             }
-            Ok(_) => return Err(invalid("duplicate entry record identity")),
+            Ok(_) => return Err(ScanError::link("duplicate entry record identity")),
             Err(index) => index,
         };
-        self.records
-            .try_reserve(1)
-            .map_err(|source| ScanError::Allocation { source })?;
+        self.records.try_reserve(1)?;
         let (primary, len) = if ordinal == ROOT {
             if !entry.flags.contains(EntryFlags::DIRECTORY) {
                 return Err(ScanError::RequiredRecord { record: ROOT });
@@ -291,7 +281,7 @@ impl Linker {
             *self
                 .nodes
                 .get_mut(0)
-                .ok_or_else(|| invalid("missing root placeholder"))? = node(&entry, None);
+                .ok_or_else(|| ScanError::link("missing root placeholder"))? = node(&entry, None);
             self.root_seen = true;
             (0, 1)
         } else {
@@ -299,7 +289,7 @@ impl Linker {
             let names = &entry.names;
             let primary = self.nodes.len();
             if names.is_empty() {
-                push(&mut self.nodes, node(&entry, None))?;
+                Self::push_bounded(&mut self.nodes, node(&entry, None))?;
                 (primary, 1)
             } else {
                 let len = names.len();
@@ -307,9 +297,12 @@ impl Linker {
                     let mut pending = node(&entry, Some(name.parent));
                     if index != 0 {
                         pending.flags.insert(EntryFlags::HARDLINK_DUP);
-                        increment(&mut stats.hardlink_duplicates)?;
+                        stats
+                            .hardlink_duplicates
+                            .try_bump()
+                            .map_err(|_| ScanError::link_overflow())?;
                     }
-                    push(&mut self.nodes, pending)?;
+                    Self::push_bounded(&mut self.nodes, pending)?;
                 }
                 (primary, len)
             }
@@ -325,7 +318,7 @@ impl Linker {
                 source: self.sources.len(),
             },
         );
-        push(&mut self.sources, entry)?;
+        Self::push_bounded(&mut self.sources, entry)?;
         Ok(())
     }
 
@@ -334,7 +327,7 @@ impl Linker {
             return Ok(id);
         }
         let id = self.nodes.len();
-        push(&mut self.nodes, synthetic())?;
+        Self::push_bounded(&mut self.nodes, synthetic())?;
         self.metadata = Some(id);
         Ok(id)
     }
@@ -346,14 +339,10 @@ impl Linker {
         let id = self.nodes.len();
         // Cycle detection may discover the first orphan after its state arrays exist.
         if !self.marks.is_empty() {
-            self.marks
-                .try_reserve(1)
-                .map_err(|source| ScanError::Allocation { source })?;
-            self.positions
-                .try_reserve(1)
-                .map_err(|source| ScanError::Allocation { source })?;
+            self.marks.try_reserve(1)?;
+            self.positions.try_reserve(1)?;
         }
-        push(&mut self.nodes, synthetic())?;
+        Self::push_bounded(&mut self.nodes, synthetic())?;
         if !self.marks.is_empty() {
             self.marks.push(2);
             self.positions.push(None);
@@ -363,7 +352,11 @@ impl Linker {
     }
 
     fn mark_metadata(&mut self, index: usize, stats: &mut ScanStats) -> Result<(), ScanError> {
-        let record = self.records.get(index).copied().ok_or_else(overflow)?;
+        let record = self
+            .records
+            .get(index)
+            .copied()
+            .ok_or_else(ScanError::link_overflow)?;
         if record.reference.record() == ROOT {
             return Ok(());
         }
@@ -374,19 +367,25 @@ impl Linker {
         let end = record
             .primary
             .checked_add(record.len)
-            .ok_or_else(overflow)?;
+            .ok_or_else(ScanError::link_overflow)?;
         let direct = self
             .nodes
             .get(record.primary..end)
-            .ok_or_else(overflow)?
+            .ok_or_else(ScanError::link_overflow)?
             .iter()
             .any(|node| {
                 extend.is_some_and(|extend| node.original_parent == Some(extend.reference))
             });
         if reserved || direct {
             self.ensure_metadata()?;
-            self.records.get_mut(index).ok_or_else(overflow)?.metadata = true;
-            increment(&mut stats.metafiles)?;
+            self.records
+                .get_mut(index)
+                .ok_or_else(ScanError::link_overflow)?
+                .metadata = true;
+            stats
+                .metafiles
+                .try_bump()
+                .map_err(|_| ScanError::link_overflow())?;
         }
         Ok(())
     }
@@ -395,16 +394,16 @@ impl Linker {
         if index == 0 {
             return Ok(());
         }
-        let node = self.nodes.get(index).ok_or_else(overflow)?;
+        let node = self.nodes.get(index).ok_or_else(ScanError::link_overflow)?;
         let Some(reference) = node.file_ref else {
             return Ok(());
         };
         let owner = self
             .record(reference.record())
-            .ok_or_else(|| invalid("node has no owning entry"))?;
+            .ok_or_else(|| ScanError::link("node has no owning entry"))?;
         let parent = if owner.metadata {
             self.metadata
-                .ok_or_else(|| invalid("metadata directory was not created"))?
+                .ok_or_else(|| ScanError::link("metadata directory was not created"))?
         } else if let Some(parent) = node.original_parent.and_then(|reference| {
             self.record(reference.record()).filter(|parent| {
                 parent.reference == reference && parent.flags.contains(EntryFlags::DIRECTORY)
@@ -412,23 +411,25 @@ impl Linker {
         }) {
             parent.primary
         } else {
-            increment(&mut stats.orphans)?;
+            stats
+                .orphans
+                .try_bump()
+                .map_err(|_| ScanError::link_overflow())?;
             self.ensure_orphaned()?
         };
-        self.nodes.get_mut(index).ok_or_else(overflow)?.parent = parent;
+        self.nodes
+            .get_mut(index)
+            .ok_or_else(ScanError::link_overflow)?
+            .parent = parent;
         Ok(())
     }
 
     fn start_cycles(&mut self) -> Result<(), ScanError> {
-        self.marks
-            .try_reserve_exact(self.nodes.len())
-            .map_err(|source| ScanError::Allocation { source })?;
-        self.positions
-            .try_reserve_exact(self.nodes.len())
-            .map_err(|source| ScanError::Allocation { source })?;
+        self.marks.try_reserve_exact(self.nodes.len())?;
+        self.positions.try_reserve_exact(self.nodes.len())?;
         self.marks.resize(self.nodes.len(), 0);
         self.positions.resize(self.nodes.len(), None);
-        *self.marks.get_mut(0).ok_or_else(overflow)? = 2;
+        *self.marks.get_mut(0).ok_or_else(ScanError::link_overflow)? = 2;
         self.cursor = 1;
         self.stage = Stage::Cycles;
         Ok(())
@@ -436,9 +437,15 @@ impl Linker {
 
     fn visit(&mut self, id: usize) -> Result<(), ScanError> {
         let position = self.path.len();
-        push(&mut self.path, id)?;
-        *self.marks.get_mut(id).ok_or_else(overflow)? = 1;
-        *self.positions.get_mut(id).ok_or_else(overflow)? = Some(position);
+        Self::push_bounded(&mut self.path, id)?;
+        *self
+            .marks
+            .get_mut(id)
+            .ok_or_else(ScanError::link_overflow)? = 1;
+        *self
+            .positions
+            .get_mut(id)
+            .ok_or_else(ScanError::link_overflow)? = Some(position);
         Ok(())
     }
 
@@ -446,9 +453,7 @@ impl Linker {
         match self.cycle_work {
             CycleWork::Start => {
                 if self.cursor == self.marks.len() {
-                    self.remap
-                        .try_reserve_exact(self.nodes.len())
-                        .map_err(|source| ScanError::Allocation { source })?;
+                    self.remap.try_reserve_exact(self.nodes.len())?;
                     self.remap.resize(self.nodes.len(), 0);
                     self.stage = Stage::Convert;
                     self.cursor = 0;
@@ -458,7 +463,10 @@ impl Linker {
                     self.visit(self.cursor)?;
                     self.cycle_work = CycleWork::Walk;
                 } else {
-                    self.cursor = self.cursor.checked_add(1).ok_or_else(overflow)?;
+                    self.cursor = self
+                        .cursor
+                        .checked_add(1)
+                        .ok_or_else(ScanError::link_overflow)?;
                 }
             }
             CycleWork::Walk => {
@@ -466,19 +474,26 @@ impl Linker {
                     .path
                     .last()
                     .copied()
-                    .ok_or_else(|| invalid("empty cycle walk"))?;
-                let parent = self.nodes.get(id).ok_or_else(overflow)?.parent;
-                match self.marks.get(parent).copied().ok_or_else(overflow)? {
+                    .ok_or_else(|| ScanError::link("empty cycle walk"))?;
+                let parent = self
+                    .nodes
+                    .get(id)
+                    .ok_or_else(ScanError::link_overflow)?
+                    .parent;
+                match self
+                    .marks
+                    .get(parent)
+                    .copied()
+                    .ok_or_else(ScanError::link_overflow)?
+                {
                     0 => self.visit(parent)?,
                     1 => {
-                        self.cycle_work = CycleWork::Break {
-                            cursor: self
-                                .positions
-                                .get(parent)
-                                .copied()
-                                .flatten()
-                                .ok_or_else(|| invalid("cycle has no stack position"))?,
-                        }
+                        self.cycle_work =
+                            CycleWork::Break {
+                                cursor: self.positions.get(parent).copied().flatten().ok_or_else(
+                                    || ScanError::link("cycle has no stack position"),
+                                )?,
+                            }
                     }
                     _ => self.cycle_work = CycleWork::Unwind,
                 }
@@ -486,15 +501,24 @@ impl Linker {
             CycleWork::Break { cursor } => {
                 if let Some(id) = self.path.get(cursor).copied() {
                     let orphaned = self.ensure_orphaned()?;
-                    let node = self.nodes.get_mut(id).ok_or_else(overflow)?;
+                    let node = self
+                        .nodes
+                        .get_mut(id)
+                        .ok_or_else(ScanError::link_overflow)?;
                     if !node.flags.contains(EntryFlags::DIRECTORY) {
-                        return Err(invalid("non-directory node in parent cycle"));
+                        return Err(ScanError::link("non-directory node in parent cycle"));
                     }
                     node.parent = orphaned;
-                    increment(&mut stats.cycle_nodes)?;
-                    increment(&mut stats.orphans)?;
+                    stats
+                        .cycle_nodes
+                        .try_bump()
+                        .map_err(|_| ScanError::link_overflow())?;
+                    stats
+                        .orphans
+                        .try_bump()
+                        .map_err(|_| ScanError::link_overflow())?;
                     self.cycle_work = CycleWork::Break {
-                        cursor: cursor.checked_add(1).ok_or_else(overflow)?,
+                        cursor: cursor.checked_add(1).ok_or_else(ScanError::link_overflow)?,
                     };
                 } else {
                     self.cycle_work = CycleWork::Unwind;
@@ -502,10 +526,19 @@ impl Linker {
             }
             CycleWork::Unwind => {
                 if let Some(id) = self.path.pop() {
-                    *self.marks.get_mut(id).ok_or_else(overflow)? = 2;
-                    *self.positions.get_mut(id).ok_or_else(overflow)? = None;
+                    *self
+                        .marks
+                        .get_mut(id)
+                        .ok_or_else(ScanError::link_overflow)? = 2;
+                    *self
+                        .positions
+                        .get_mut(id)
+                        .ok_or_else(ScanError::link_overflow)? = None;
                 } else {
-                    self.cursor = self.cursor.checked_add(1).ok_or_else(overflow)?;
+                    self.cursor = self
+                        .cursor
+                        .checked_add(1)
+                        .ok_or_else(ScanError::link_overflow)?;
                     self.cycle_work = CycleWork::Start;
                 }
             }
@@ -517,42 +550,68 @@ impl Linker {
         let synthetic_count = 1usize
             .checked_add(usize::from(self.metadata.is_some()))
             .and_then(|n| n.checked_add(usize::from(self.orphaned.is_some())))
-            .ok_or_else(overflow)?;
+            .ok_or_else(ScanError::link_overflow)?;
         let old = if self.cursor == 0 {
             0
         } else if self.cursor < synthetic_count {
             if self.cursor == 1 {
-                self.metadata.or(self.orphaned).ok_or_else(overflow)?
+                self.metadata
+                    .or(self.orphaned)
+                    .ok_or_else(ScanError::link_overflow)?
             } else {
-                self.orphaned.ok_or_else(overflow)?
+                self.orphaned.ok_or_else(ScanError::link_overflow)?
             }
         } else {
             // Records are already indexed in ascending ordinal order.
-            let mut record = self.records.get(self.order_record).ok_or_else(overflow)?;
+            let mut record = self
+                .records
+                .get(self.order_record)
+                .ok_or_else(ScanError::link_overflow)?;
             if record.reference.record() == ROOT {
-                self.order_record = self.order_record.checked_add(1).ok_or_else(overflow)?;
-                record = self.records.get(self.order_record).ok_or_else(overflow)?;
+                self.order_record = self
+                    .order_record
+                    .checked_add(1)
+                    .ok_or_else(ScanError::link_overflow)?;
+                record = self
+                    .records
+                    .get(self.order_record)
+                    .ok_or_else(ScanError::link_overflow)?;
             }
             let old = record
                 .primary
                 .checked_add(self.order_link)
-                .ok_or_else(overflow)?;
-            self.order_link = self.order_link.checked_add(1).ok_or_else(overflow)?;
+                .ok_or_else(ScanError::link_overflow)?;
+            self.order_link = self
+                .order_link
+                .checked_add(1)
+                .ok_or_else(ScanError::link_overflow)?;
             if self.order_link == record.len {
-                self.order_record = self.order_record.checked_add(1).ok_or_else(overflow)?;
+                self.order_record = self
+                    .order_record
+                    .checked_add(1)
+                    .ok_or_else(ScanError::link_overflow)?;
                 self.order_link = 0;
             }
             old
         };
-        *self.remap.get_mut(old).ok_or_else(overflow)? = checked_u32(self.cursor, "node id")?;
-        push(&mut self.order, old)?;
-        self.cursor = self.cursor.checked_add(1).ok_or_else(overflow)?;
+        *self
+            .remap
+            .get_mut(old)
+            .ok_or_else(ScanError::link_overflow)? = checked_u32(self.cursor, "node id")?;
+        Self::push_bounded(&mut self.order, old)?;
+        self.cursor = self
+            .cursor
+            .checked_add(1)
+            .ok_or_else(ScanError::link_overflow)?;
         Ok(())
     }
 
     fn emit(&mut self, stats: &mut ScanStats) -> Result<(), ScanError> {
-        let old = *self.order.get(self.cursor).ok_or_else(overflow)?;
-        let mut node = *self.nodes.get(old).ok_or_else(overflow)?;
+        let old = *self
+            .order
+            .get(self.cursor)
+            .ok_or_else(ScanError::link_overflow)?;
+        let mut node = *self.nodes.get(old).ok_or_else(ScanError::link_overflow)?;
         let range = if old == 0 {
             append_name(&mut self.result.names, "/".encode_utf16(), stats)?
         } else if Some(old) == self.metadata {
@@ -565,9 +624,12 @@ impl Linker {
             append_name(&mut self.result.names, "<orphaned>".encode_utf16(), stats)?
         } else {
             let record = self
-                .record(node.file_ref.ok_or_else(overflow)?.record())
-                .ok_or_else(overflow)?;
-            let source = self.sources.get(record.source).ok_or_else(overflow)?;
+                .record(node.file_ref.ok_or_else(ScanError::link_overflow)?.record())
+                .ok_or_else(ScanError::link_overflow)?;
+            let source = self
+                .sources
+                .get(record.source)
+                .ok_or_else(ScanError::link_overflow)?;
             if source.names.is_empty() {
                 append_name(
                     &mut self.result.names,
@@ -575,31 +637,46 @@ impl Linker {
                     stats,
                 )?
             } else {
-                let index = old.checked_sub(record.primary).ok_or_else(overflow)?;
-                let name = source.names.get(index).ok_or_else(overflow)?;
+                let index = old
+                    .checked_sub(record.primary)
+                    .ok_or_else(ScanError::link_overflow)?;
+                let name = source
+                    .names
+                    .get(index)
+                    .ok_or_else(ScanError::link_overflow)?;
                 append_name(&mut self.result.names, name.name.iter().copied(), stats)?
             }
         };
         if let Some(reference) = node.file_ref {
-            let record = self.record(reference.record()).ok_or_else(overflow)?;
-            if old.checked_add(1).ok_or_else(overflow)?
+            let record = self
+                .record(reference.record())
+                .ok_or_else(ScanError::link_overflow)?;
+            if old.checked_add(1).ok_or_else(ScanError::link_overflow)?
                 == record
                     .primary
                     .checked_add(record.len)
-                    .ok_or_else(overflow)?
+                    .ok_or_else(ScanError::link_overflow)?
             {
                 self.sources
                     .get_mut(record.source)
-                    .ok_or_else(overflow)?
+                    .ok_or_else(ScanError::link_overflow)?
                     .names = Vec::new();
             }
         }
         node.name_off = range.0;
         node.name_len = range.1;
-        node.parent = usize::try_from(*self.remap.get(node.parent).ok_or_else(overflow)?)
-            .map_err(|_| overflow())?;
-        push(&mut self.result.nodes, node)?;
-        self.cursor = self.cursor.checked_add(1).ok_or_else(overflow)?;
+        node.parent = usize::try_from(
+            *self
+                .remap
+                .get(node.parent)
+                .ok_or_else(ScanError::link_overflow)?,
+        )
+        .map_err(|_| ScanError::link_overflow())?;
+        Self::push_bounded(&mut self.result.nodes, node)?;
+        self.cursor = self
+            .cursor
+            .checked_add(1)
+            .ok_or_else(ScanError::link_overflow)?;
         Ok(())
     }
 
@@ -620,7 +697,10 @@ impl Linker {
                 Stage::Metadata => {
                     if self.cursor < self.records.len() {
                         self.mark_metadata(self.cursor, stats)?;
-                        self.cursor = self.cursor.checked_add(1).ok_or_else(overflow)?;
+                        self.cursor = self
+                            .cursor
+                            .checked_add(1)
+                            .ok_or_else(ScanError::link_overflow)?;
                     } else {
                         self.stage = Stage::Resolve;
                         self.cursor = 0;
@@ -629,7 +709,10 @@ impl Linker {
                 Stage::Resolve => {
                     if self.cursor < self.nodes.len() {
                         self.resolve(self.cursor, stats)?;
-                        self.cursor = self.cursor.checked_add(1).ok_or_else(overflow)?;
+                        self.cursor = self
+                            .cursor
+                            .checked_add(1)
+                            .ok_or_else(ScanError::link_overflow)?;
                     } else {
                         self.start_cycles()?;
                     }

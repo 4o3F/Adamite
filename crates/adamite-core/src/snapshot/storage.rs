@@ -1,36 +1,9 @@
 //! Frozen node arena, shared names and compressed sparse row child storage.
 
-use super::{ExtensionStat, Node, NodeId, NodeView};
+use super::{ExtensionStat, Node, NodeId, NodeView, SnapshotError};
 
 use crate::ScanContext;
 use adamite_ntfs::{boot::VolumeGeometry, record::reference::FileRef};
-use snafu::Snafu;
-use std::collections::TryReserveError;
-
-/// Allocation, representational bounds or tree validation prevented snapshot access or construction.
-#[must_use]
-#[derive(Debug, Snafu)]
-#[non_exhaustive]
-pub enum SnapshotError {
-    /// A stored index or length cannot fit the arena representation.
-    #[snafu(display("snapshot {field} exceeds its representational bound"))]
-    Overflow {
-        /// Index or length being represented.
-        field: &'static str,
-    },
-    /// Fallible storage reservation failed.
-    #[snafu(display("snapshot allocation failed: {source}"))]
-    Allocation {
-        /// Underlying allocation failure.
-        source: TryReserveError,
-    },
-    /// Parent or CSR invariants are invalid.
-    #[snafu(display("invalid snapshot tree: {reason}"))]
-    InvalidTree {
-        /// Invariant that failed.
-        reason: &'static str,
-    },
-}
 
 pub(crate) fn checked_u32(value: usize, field: &'static str) -> Result<u32, SnapshotError> {
     u32::try_from(value).map_err(|_| SnapshotError::Overflow { field })
@@ -99,9 +72,7 @@ impl Snapshot {
     pub(crate) fn from_storage(storage: SnapshotStorage) -> Result<Self, SnapshotError> {
         // Indirection keeps ScanStep small; reserve the single storage allocation fallibly.
         let mut owned = Vec::new();
-        owned
-            .try_reserve_exact(1)
-            .map_err(|source| SnapshotError::Allocation { source })?;
+        owned.try_reserve_exact(1)?;
         owned.push(storage);
         let storage =
             owned
@@ -206,15 +177,12 @@ impl Snapshot {
                 .ok_or(SnapshotError::Overflow {
                     field: "path length",
                 })?;
-            ancestors
-                .try_reserve(1)
-                .map_err(|source| SnapshotError::Allocation { source })?;
+            ancestors.try_reserve(1)?;
             ancestors.push(current);
             current = node.parent();
         }
         let mut path = String::new();
-        path.try_reserve_exact(len.max(1))
-            .map_err(|source| SnapshotError::Allocation { source })?;
+        path.try_reserve_exact(len.max(1))?;
         for ancestor in ancestors.into_iter().rev() {
             path.push('/');
             path.push_str(self.name(ancestor).ok_or(SnapshotError::InvalidTree {

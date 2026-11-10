@@ -12,6 +12,23 @@ use std::error::Error;
 
 type TestResult = Result<(), Box<dyn Error>>;
 
+#[test]
+fn merge_reservation_prechecks_precede_allocation_and_preserve_contents() {
+    let mut items = vec![7u8];
+    assert!(matches!(
+        Merge::reserve_contribution(&mut items, usize::MAX),
+        Err(ScanError::Overflow {
+            operation: "merged contribution length"
+        })
+    ));
+    assert_eq!(items, [7]);
+    assert!(matches!(
+        Merge::reserve_contribution(&mut items, usize::MAX - 1),
+        Err(ScanError::Allocation { .. })
+    ));
+    assert_eq!(items, [7]);
+}
+
 fn reference(record: u64) -> FileRef {
     FileRef::from_raw((7u64 << 48) | record)
 }
@@ -102,7 +119,7 @@ fn nonresident(
     let mut run_count = 0u64;
     for run in segment.runs() {
         run?;
-        bump(&mut run_count)?;
+        run_count.try_bump().map_err(ScanError::from)?;
     }
     Ok(StreamSegment {
         source: reference(source),
@@ -174,15 +191,15 @@ fn finish(
         let patches = before
             .0
             .checked_sub(merge.patches.len())
-            .ok_or_else(|| overflow("test patch progress"))?;
+            .ok_or_else(|| ScanError::overflow("test patch progress"))?;
         let slots = merge
             .cursor
             .checked_sub(before.1)
-            .ok_or_else(|| overflow("test slot progress"))?;
+            .ok_or_else(|| ScanError::overflow("test slot progress"))?;
         assert!(
             patches
                 .checked_add(slots)
-                .ok_or_else(|| overflow("test batch size"))?
+                .ok_or_else(|| ScanError::overflow("test batch size"))?
                 <= 256
         );
         if done {

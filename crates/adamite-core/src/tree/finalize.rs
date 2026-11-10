@@ -1,8 +1,9 @@
 //! Bounded child sorting, top-file selection and extension summary ordering.
 
-use super::aggregate::{has, invalid, overflow, primary_file};
+use super::aggregate::{has, primary_file};
 use crate::{
-    ExtensionStat, Node, NodeFlags, NodeId, Snapshot, SnapshotError, snapshot::SnapshotStorage,
+    ExtensionStat, Node, NodeFlags, NodeId, Snapshot,
+    snapshot::{SnapshotError, SnapshotStorage},
 };
 use adamite_ntfs::record::reference::FileRef;
 use std::{
@@ -111,11 +112,14 @@ impl Finalizer {
         };
         let directory = has(node, NodeFlags::DIRECTORY) || has(node, NodeFlags::SYNTHETIC);
         if directory {
-            let start =
-                usize::try_from(node.child_start).map_err(|_| overflow("child range start"))?;
+            let start = usize::try_from(node.child_start)
+                .map_err(|_| SnapshotError::overflow("child range start"))?;
             let end = start
-                .checked_add(usize::try_from(node.child_len).map_err(|_| overflow("child count"))?)
-                .ok_or_else(|| overflow("child range end"))?;
+                .checked_add(
+                    usize::try_from(node.child_len)
+                        .map_err(|_| SnapshotError::overflow("child count"))?,
+                )
+                .ok_or_else(|| SnapshotError::overflow("child range end"))?;
             let ranking = Ranking {
                 nodes: &data.nodes,
                 names: &data.names,
@@ -123,34 +127,32 @@ impl Finalizer {
             };
             data.children
                 .get_mut(start..end)
-                .ok_or_else(|| invalid("invalid child sort range"))?
+                .ok_or_else(|| SnapshotError::invalid("invalid child sort range"))?
                 .sort_unstable_by(|left, right| ranking.compare(*left, *right, Metric::TotalAlloc));
         }
         self.cursor = self
             .cursor
             .checked_add(1)
-            .ok_or_else(|| overflow("directory sort cursor"))?;
+            .ok_or_else(|| SnapshotError::overflow("directory sort cursor"))?;
         Ok(directory)
     }
 
     fn collect(&mut self, data: &mut SnapshotStorage) -> Result<(), SnapshotError> {
         let Some(node) = data.nodes.get(self.cursor) else {
             let count = self.groups.len();
-            self.heap
-                .try_reserve(count)
-                .map_err(|source| SnapshotError::Allocation { source })?;
-            data.ext_stats
-                .try_reserve_exact(count)
-                .map_err(|source| SnapshotError::Allocation { source })?;
+            self.heap.try_reserve(count)?;
+            data.ext_stats.try_reserve_exact(count)?;
             self.pending = std::mem::take(&mut self.groups).into_iter();
             self.stage = Stage::HeapBuild;
             return Ok(());
         };
-        let id = NodeId::from_raw(u32::try_from(self.cursor).map_err(|_| overflow("file id"))?);
+        let id = NodeId::from_raw(
+            u32::try_from(self.cursor).map_err(|_| SnapshotError::overflow("file id"))?,
+        );
         self.cursor = self
             .cursor
             .checked_add(1)
-            .ok_or_else(|| overflow("file cursor"))?;
+            .ok_or_else(|| SnapshotError::overflow("file cursor"))?;
         if !primary_file(node) {
             return Ok(());
         }
@@ -167,15 +169,13 @@ impl Finalizer {
             if data.top_files.len() == TOP_FILES {
                 data.top_files.pop();
             }
-            data.top_files
-                .try_reserve(1)
-                .map_err(|source| SnapshotError::Allocation { source })?;
+            data.top_files.try_reserve(1)?;
             data.top_files.insert(position, id);
         }
         let suffix = extension(
             ranking
                 .name(id)
-                .ok_or_else(|| invalid("missing file name"))?,
+                .ok_or_else(|| SnapshotError::invalid("missing file name"))?,
         );
         let group = self.groups.binary_search_by(|group| {
             group
@@ -188,33 +188,30 @@ impl Finalizer {
                 let group = self
                     .groups
                     .get_mut(position)
-                    .ok_or_else(|| invalid("missing extension group"))?;
+                    .ok_or_else(|| SnapshotError::invalid("missing extension group"))?;
                 let count = group
                     .count
                     .checked_add(1)
-                    .ok_or_else(|| overflow("extension count"))?;
+                    .ok_or_else(|| SnapshotError::overflow("extension count"))?;
                 let size = group
                     .total_size
                     .checked_add(node.size)
-                    .ok_or_else(|| overflow("extension logical bytes"))?;
+                    .ok_or_else(|| SnapshotError::overflow("extension logical bytes"))?;
                 let alloc = group
                     .total_alloc
                     .checked_add(node.alloc)
-                    .ok_or_else(|| overflow("extension allocation"))?;
+                    .ok_or_else(|| SnapshotError::overflow("extension allocation"))?;
                 group.count = count;
                 group.total_size = size;
                 group.total_alloc = alloc;
             }
             Err(position) => {
                 let mut key = String::new();
-                key.try_reserve_exact(suffix.len())
-                    .map_err(|source| SnapshotError::Allocation { source })?;
+                key.try_reserve_exact(suffix.len())?;
                 for character in suffix.chars() {
                     key.push(character.to_ascii_lowercase());
                 }
-                self.groups
-                    .try_reserve(1)
-                    .map_err(|source| SnapshotError::Allocation { source })?;
+                self.groups.try_reserve(1)?;
                 self.groups.insert(
                     position,
                     ExtensionStat {

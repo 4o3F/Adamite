@@ -1,6 +1,6 @@
 //! Checked MFT cluster mappings and bounded record assembly.
 
-use super::scanner::ScanError;
+use crate::error::ScanError;
 use adamite_ntfs::boot::VolumeGeometry;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,10 +22,6 @@ pub(super) struct ReadPiece {
     pub len: usize,
 }
 
-pub(super) fn overflow(operation: &'static str) -> ScanError {
-    ScanError::Overflow { operation }
-}
-
 impl MftMapping {
     pub(super) fn new(geometry: VolumeGeometry, runs: Vec<OwnedRun>) -> Result<Self, ScanError> {
         let cluster = u64::from(geometry.cluster_size());
@@ -34,14 +30,14 @@ impl MftMapping {
             let virtual_end = run
                 .vcn
                 .checked_add(run.clusters)
-                .ok_or_else(|| overflow("virtual run end"))?;
+                .ok_or_else(|| ScanError::overflow("virtual run end"))?;
             virtual_end
                 .checked_mul(cluster)
-                .ok_or_else(|| overflow("virtual run bytes"))?;
+                .ok_or_else(|| ScanError::overflow("virtual run bytes"))?;
             let physical_end = run
                 .lcn
                 .checked_add(run.clusters)
-                .ok_or_else(|| overflow("physical run end"))?;
+                .ok_or_else(|| ScanError::overflow("physical run end"))?;
             if run.clusters == 0 || physical_end > geometry.total_clusters() {
                 return Err(ScanError::OutOfVolume {
                     lcn: run.lcn,
@@ -58,7 +54,7 @@ impl MftMapping {
                 let other_end = other
                     .lcn
                     .checked_add(other.clusters)
-                    .ok_or_else(|| overflow("physical run end"))?;
+                    .ok_or_else(|| ScanError::overflow("physical run end"))?;
                 if run.lcn < other_end && other.lcn < physical_end {
                     return Err(ScanError::Bootstrap {
                         reason: "overlapping physical MFT runs",
@@ -76,9 +72,8 @@ impl MftMapping {
             .runs
             .len()
             .checked_add(additional.len())
-            .ok_or_else(|| overflow("mapping run count"))?;
-        runs.try_reserve_exact(count)
-            .map_err(|source| ScanError::Allocation { source })?;
+            .ok_or_else(|| ScanError::overflow("mapping run count"))?;
+        runs.try_reserve_exact(count)?;
         runs.extend_from_slice(&self.runs);
         runs.extend_from_slice(additional);
         runs.sort_unstable_by_key(|run| run.vcn);
@@ -88,22 +83,22 @@ impl MftMapping {
     pub(super) fn covers(&self, start: u64, len: u64) -> Result<bool, ScanError> {
         let end = start
             .checked_add(len)
-            .ok_or_else(|| overflow("mapped range end"))?;
+            .ok_or_else(|| ScanError::overflow("mapped range end"))?;
         let mut cursor = start;
         while cursor < end {
             let remaining = end
                 .checked_sub(cursor)
-                .ok_or_else(|| overflow("mapped range remainder"))?;
+                .ok_or_else(|| ScanError::overflow("mapped range remainder"))?;
             let chunk = usize::try_from(remaining.min(16_777_216))
-                .map_err(|_| overflow("mapped range length"))?;
+                .map_err(|_| ScanError::overflow("mapped range length"))?;
             match self.read_piece(cursor, chunk) {
                 Ok(piece) => {
                     cursor = cursor
                         .checked_add(
                             u64::try_from(piece.len)
-                                .map_err(|_| overflow("mapped piece length"))?,
+                                .map_err(|_| ScanError::overflow("mapped piece length"))?,
                         )
-                        .ok_or_else(|| overflow("mapped range cursor"))?
+                        .ok_or_else(|| ScanError::overflow("mapped range cursor"))?
                 }
                 Err(ScanError::UnmappedRange { .. }) => return Ok(false),
                 Err(error) => return Err(error),
@@ -117,8 +112,7 @@ impl MftMapping {
         let cluster = u64::from(geometry.cluster_size());
         let clusters = u64::from(geometry.file_record_size()).div_ceil(cluster);
         let mut runs = Vec::new();
-        runs.try_reserve_exact(1)
-            .map_err(|source| ScanError::Allocation { source })?;
+        runs.try_reserve_exact(1)?;
         runs.push(OwnedRun {
             vcn: 0,
             lcn: geometry.mft_lcn(),
@@ -133,10 +127,10 @@ impl MftMapping {
         virtual_offset: u64,
         max_len: usize,
     ) -> Result<ReadPiece, ScanError> {
-        let length = u64::try_from(max_len).map_err(|_| overflow("request length"))?;
+        let length = u64::try_from(max_len).map_err(|_| ScanError::overflow("request length"))?;
         virtual_offset
             .checked_add(length)
-            .ok_or_else(|| overflow("virtual request end"))?;
+            .ok_or_else(|| ScanError::overflow("virtual request end"))?;
         if max_len == 0 {
             return Err(ScanError::InvalidReadRange {
                 offset: virtual_offset,
@@ -148,26 +142,26 @@ impl MftMapping {
             let start = run
                 .vcn
                 .checked_mul(cluster)
-                .ok_or_else(|| overflow("virtual run start"))?;
+                .ok_or_else(|| ScanError::overflow("virtual run start"))?;
             let end = run
                 .vcn
                 .checked_add(run.clusters)
                 .and_then(|end| end.checked_mul(cluster))
-                .ok_or_else(|| overflow("virtual run end"))?;
+                .ok_or_else(|| ScanError::overflow("virtual run end"))?;
             if (start..end).contains(&virtual_offset) {
                 let within = virtual_offset
                     .checked_sub(start)
-                    .ok_or_else(|| overflow("run displacement"))?;
+                    .ok_or_else(|| ScanError::overflow("run displacement"))?;
                 let offset = run
                     .lcn
                     .checked_mul(cluster)
                     .and_then(|start| start.checked_add(within))
-                    .ok_or_else(|| overflow("physical request start"))?;
+                    .ok_or_else(|| ScanError::overflow("physical request start"))?;
                 let available = end
                     .checked_sub(virtual_offset)
-                    .ok_or_else(|| overflow("remaining run bytes"))?;
+                    .ok_or_else(|| ScanError::overflow("remaining run bytes"))?;
                 let len = usize::try_from(length.min(available))
-                    .map_err(|_| overflow("request length"))?;
+                    .map_err(|_| ScanError::overflow("request length"))?;
                 return Ok(ReadPiece { offset, len });
             }
         }
@@ -182,21 +176,21 @@ impl MftMapping {
             let start = run
                 .lcn
                 .checked_mul(cluster)
-                .ok_or_else(|| overflow("physical run start"))?;
+                .ok_or_else(|| ScanError::overflow("physical run start"))?;
             let end = run
                 .lcn
                 .checked_add(run.clusters)
                 .and_then(|end| end.checked_mul(cluster))
-                .ok_or_else(|| overflow("physical run end"))?;
+                .ok_or_else(|| ScanError::overflow("physical run end"))?;
             if (start..end).contains(&physical_offset) {
                 let within = physical_offset
                     .checked_sub(start)
-                    .ok_or_else(|| overflow("run displacement"))?;
+                    .ok_or_else(|| ScanError::overflow("run displacement"))?;
                 return run
                     .vcn
                     .checked_mul(cluster)
                     .and_then(|start| start.checked_add(within))
-                    .ok_or_else(|| overflow("virtual byte offset"));
+                    .ok_or_else(|| ScanError::overflow("virtual byte offset"));
             }
         }
         Err(ScanError::UnmappedRange {
@@ -217,12 +211,10 @@ pub(super) struct RecordAssembly {
 impl RecordAssembly {
     pub(super) fn new(start: u64, len: usize) -> Result<Self, ScanError> {
         start
-            .checked_add(u64::try_from(len).map_err(|_| overflow("record length"))?)
-            .ok_or_else(|| overflow("record end"))?;
+            .checked_add(u64::try_from(len).map_err(|_| ScanError::overflow("record length"))?)
+            .ok_or_else(|| ScanError::overflow("record end"))?;
         let mut bytes = Vec::new();
-        bytes
-            .try_reserve_exact(len)
-            .map_err(|source| ScanError::Allocation { source })?;
+        bytes.try_reserve_exact(len)?;
         Ok(Self {
             start,
             len,
@@ -239,14 +231,16 @@ impl RecordAssembly {
         let remaining = self
             .len
             .checked_sub(self.planned)
-            .ok_or_else(|| overflow("unplanned record bytes"))?;
+            .ok_or_else(|| ScanError::overflow("unplanned record bytes"))?;
         if remaining == 0 {
             return Ok(None);
         }
         let offset = self
             .start
-            .checked_add(u64::try_from(self.planned).map_err(|_| overflow("record cursor"))?)
-            .ok_or_else(|| overflow("record cursor"))?;
+            .checked_add(
+                u64::try_from(self.planned).map_err(|_| ScanError::overflow("record cursor"))?,
+            )
+            .ok_or_else(|| ScanError::overflow("record cursor"))?;
         mapping.read_piece(offset, remaining.min(chunk)).map(Some)
     }
 
@@ -254,7 +248,7 @@ impl RecordAssembly {
         let end = self
             .planned
             .checked_add(len)
-            .ok_or_else(|| overflow("planned record bytes"))?;
+            .ok_or_else(|| ScanError::overflow("planned record bytes"))?;
         if end > self.len {
             return Err(ScanError::Bootstrap {
                 reason: "record request exceeds assembly",
@@ -269,7 +263,7 @@ impl RecordAssembly {
             .bytes
             .len()
             .checked_add(bytes.len())
-            .ok_or_else(|| overflow("assembled record bytes"))?;
+            .ok_or_else(|| ScanError::overflow("assembled record bytes"))?;
         if end > self.planned {
             return Err(ScanError::Bootstrap {
                 reason: "response exceeds planned record bytes",

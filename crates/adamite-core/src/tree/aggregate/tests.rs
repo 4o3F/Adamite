@@ -95,14 +95,14 @@ fn aggregate(snapshot: &mut Snapshot) -> Result<(), SnapshotError> {
     let mut aggregate = Aggregator::new(snapshot)?;
     for _ in 0..100_000 {
         let before = observed_work(&aggregate, snapshot.len())
-            .map_err(|_| invalid("test work calculation"))?;
+            .map_err(|_| SnapshotError::invalid("test work calculation"))?;
         let done = aggregate.step(snapshot)?;
         let after = observed_work(&aggregate, snapshot.len())
-            .map_err(|_| invalid("test work calculation"))?;
+            .map_err(|_| SnapshotError::invalid("test work calculation"))?;
         assert!(
             after
                 .checked_sub(before)
-                .ok_or_else(|| invalid("work moved backwards"))?
+                .ok_or_else(|| SnapshotError::invalid("work moved backwards"))?
                 <= 256
         );
         if done {
@@ -110,7 +110,7 @@ fn aggregate(snapshot: &mut Snapshot) -> Result<(), SnapshotError> {
             return Ok(());
         }
     }
-    Err(invalid("aggregator did not terminate"))
+    Err(SnapshotError::invalid("aggregator did not terminate"))
 }
 fn finish(entries: Vec<EntryRecord>) -> Result<Snapshot, Box<dyn Error>> {
     let mut snapshot = build(entries)?;

@@ -2,13 +2,13 @@
 
 use super::{
     ReadRequest, ScanConfig,
-    bootstrap::{
-        self, AttributeListDescriptor, ListStorage, Record0, RecordParts, check_storage,
-        copy_slice, push, unsupported,
-    },
-    mapping::{MftMapping, RecordAssembly, overflow},
+    bootstrap::{self, AttributeListDescriptor, ListStorage, Record0, RecordParts, check_storage},
+    mapping::{MftMapping, RecordAssembly},
     protocol::Requests,
-    scanner::ScanError,
+};
+use crate::{
+    error::ScanError,
+    util::{SliceExt, VecExt},
 };
 use adamite_ntfs::{
     attribute::{
@@ -112,24 +112,20 @@ impl Discovery {
             if segment.lowest_vcn != 0 {
                 base.mapping = base.mapping.with_runs(&segment.runs)?;
             }
-            push(
-                &mut state.committed,
-                (base.reference, segment.id, segment.lowest_vcn),
-            )?;
+            state
+                .committed
+                .try_push((base.reference, segment.id, segment.lowest_vcn))?;
         }
         state.add_lists(
             base.reference,
             std::mem::take(&mut base.attribute_lists),
             &base.mapping,
         )?;
-        push(
-            &mut state.records,
-            RecordParts {
-                reference: base.reference,
-                segments,
-                lists: Vec::new(),
-            },
-        )?;
+        state.records.try_push(RecordParts {
+            reference: base.reference,
+            segments,
+            lists: Vec::new(),
+        })?;
         Ok(state)
     }
 
@@ -148,7 +144,7 @@ impl Discovery {
                 if seen == &descriptor {
                     continue;
                 }
-                return Err(unsupported(
+                return Err(ScanError::bootstrap(
                     "conflicting attribute-list descriptor identity",
                 ));
             }
@@ -158,7 +154,7 @@ impl Discovery {
                     // Check the value bound here; entries are parsed in bounded steps later.
                     let _ = AttributeList::new(bytes)
                         .map_err(|source| ScanError::AttributeList { source })?;
-                    ListValue::Resident(Some(copy_slice(bytes)?))
+                    ListValue::Resident(Some(bytes.try_copy()?))
                 }
                 ListStorage::NonResident {
                     lowest_vcn,
@@ -169,7 +165,7 @@ impl Discovery {
                 } => {
                     check_storage(descriptor.flags, *compression_unit)?;
                     let lowest = i64::try_from(*lowest_vcn)
-                        .map_err(|_| overflow("attribute-list lowest VCN"))?;
+                        .map_err(|_| ScanError::overflow("attribute-list lowest VCN"))?;
                     let range = VcnRange::new(lowest, *highest_vcn)
                         .map_err(|source| ScanError::Runlist { source })?;
                     let mapping = bootstrap::collect_mapping(
@@ -197,7 +193,9 @@ impl Discovery {
                         },
                     ) => {
                         if len.is_some() && added_len.is_some() {
-                            return Err(unsupported("duplicate attribute-list first segment"));
+                            return Err(ScanError::bootstrap(
+                                "duplicate attribute-list first segment",
+                            ));
                         }
                         let merged = mapping.with_runs(&added.runs)?;
                         *mapping = merged;
@@ -205,19 +203,20 @@ impl Discovery {
                             *len = added_len;
                         }
                     }
-                    _ => return Err(unsupported("conflicting resident attribute-list streams")),
+                    _ => {
+                        return Err(ScanError::bootstrap(
+                            "conflicting resident attribute-list streams",
+                        ));
+                    }
                 }
             } else {
-                push(
-                    &mut self.lists,
-                    ListStream {
-                        name: copy_slice(&descriptor.name)?,
-                        value,
-                        parsed: false,
-                    },
-                )?;
+                self.lists.try_push(ListStream {
+                    name: descriptor.name.try_copy()?,
+                    value,
+                    parsed: false,
+                })?;
             }
-            push(&mut self.descriptors, (source, descriptor))?;
+            self.descriptors.try_push((source, descriptor))?;
         }
         Ok(())
     }
@@ -232,9 +231,12 @@ impl Discovery {
                 && pending.key.name == key.name
                 && pending.key.id == key.id
         }) {
-            return Err(unsupported("conflicting attribute-list segment reference"));
+            return Err(ScanError::bootstrap(
+                "conflicting attribute-list segment reference",
+            ));
         }
-        push(&mut self.pending, Pending { key, done: false })
+        self.pending.try_push(Pending { key, done: false })?;
+        Ok(())
     }
 
     fn parse_list(&mut self) -> Result<(), ScanError> {
@@ -245,13 +247,13 @@ impl Discovery {
             let suffix = parsing
                 .bytes
                 .get(parsing.cursor..)
-                .ok_or_else(|| overflow("list parser cursor"))?;
+                .ok_or_else(|| ScanError::overflow("list parser cursor"))?;
             let mut entries =
                 AttributeList::new(suffix).map_err(|source| ScanError::AttributeList { source })?;
             let Some(entry) = entries.next() else {
                 self.lists
                     .get_mut(parsing.list)
-                    .ok_or_else(|| overflow("list index"))?
+                    .ok_or_else(|| ScanError::overflow("list index"))?
                     .parsed = true;
                 return Ok(());
             };
@@ -260,8 +262,7 @@ impl Discovery {
                 || entry.attribute_type() == AttributeType::ATTRIBUTE_LIST
             {
                 let mut name = Vec::new();
-                name.try_reserve_exact(entry.name().len_units())
-                    .map_err(|source| ScanError::Allocation { source })?;
+                name.try_reserve_exact(entry.name().len_units())?;
                 name.extend(entry.name().units());
                 self.add_reference(SegmentRef {
                     source: entry.segment_reference(),
@@ -276,11 +277,11 @@ impl Discovery {
                 .get(4..6)
                 .and_then(|bytes| <[u8; 2]>::try_from(bytes).ok())
                 .map(u16::from_le_bytes)
-                .ok_or_else(|| overflow("list entry length"))?;
+                .ok_or_else(|| ScanError::overflow("list entry length"))?;
             parsing.cursor = parsing
                 .cursor
                 .checked_add(usize::from(length))
-                .ok_or_else(|| overflow("list parser cursor"))?;
+                .ok_or_else(|| ScanError::overflow("list parser cursor"))?;
         }
         self.parsing = Some(parsing);
         Ok(())
@@ -311,7 +312,7 @@ impl Discovery {
         let pending = self
             .pending
             .get(index)
-            .ok_or_else(|| overflow("pending reference index"))?;
+            .ok_or_else(|| ScanError::overflow("pending reference index"))?;
         let key = &pending.key;
         let Some(record) = self
             .records
@@ -321,10 +322,10 @@ impl Discovery {
             return Ok(false);
         };
         if record.reference != key.source {
-            return Err(unsupported("stale cached extension sequence"));
+            return Err(ScanError::bootstrap("stale cached extension sequence"));
         }
         if !self.has_target(record, key) {
-            return Err(unsupported(
+            return Err(ScanError::bootstrap(
                 "missing referenced bootstrap attribute segment",
             ));
         }
@@ -335,14 +336,14 @@ impl Discovery {
                 .segments
                 .iter()
                 .find(|segment| segment.id == key.id && segment.lowest_vcn == key.lowest)
-                .ok_or_else(|| unsupported("missing MFT DATA segment"))?;
+                .ok_or_else(|| ScanError::bootstrap("missing MFT DATA segment"))?;
             let mapping = base.mapping.with_runs(&segment.runs)?;
-            push(&mut self.committed, (key.source, key.id, key.lowest))?;
+            self.committed.try_push((key.source, key.id, key.lowest))?;
             base.mapping = mapping;
         }
         self.pending
             .get_mut(index)
-            .ok_or_else(|| overflow("pending reference index"))?
+            .ok_or_else(|| ScanError::overflow("pending reference index"))?
             .done = true;
         Ok(true)
     }
@@ -356,7 +357,7 @@ impl Discovery {
         let active = self
             .active
             .as_mut()
-            .ok_or_else(|| unsupported("missing discovery read"))?;
+            .ok_or_else(|| ScanError::bootstrap("missing discovery read"))?;
         if let Some((_, bytes)) = requests.take_ready() {
             active.assembly.append(&bytes)?;
         }
@@ -364,7 +365,7 @@ impl Discovery {
             let active = self
                 .active
                 .take()
-                .ok_or_else(|| unsupported("missing completed discovery read"))?;
+                .ok_or_else(|| ScanError::bootstrap("missing completed discovery read"))?;
             let bytes = active.assembly.into_bytes();
             match active.target {
                 ReadTarget::List(list) => {
@@ -378,7 +379,7 @@ impl Discovery {
                     let key = &self
                         .pending
                         .get(index)
-                        .ok_or_else(|| overflow("pending reference index"))?
+                        .ok_or_else(|| ScanError::overflow("pending reference index"))?
                         .key;
                     let mut record = bootstrap::parse_extension(
                         bytes,
@@ -387,7 +388,7 @@ impl Discovery {
                         base.mapping.geometry,
                     )?;
                     if !self.has_target(&record, key) {
-                        return Err(unsupported(
+                        return Err(ScanError::bootstrap(
                             "missing referenced bootstrap attribute segment",
                         ));
                     }
@@ -396,7 +397,7 @@ impl Discovery {
                         std::mem::take(&mut record.lists),
                         &base.mapping,
                     )?;
-                    push(&mut self.records, record)?;
+                    self.records.try_push(record)?;
                     self.commit_cached(index, base)?;
                 }
             }
@@ -407,11 +408,11 @@ impl Discovery {
             ReadTarget::List(index) => match &self
                 .lists
                 .get(index)
-                .ok_or_else(|| overflow("list index"))?
+                .ok_or_else(|| ScanError::overflow("list index"))?
                 .value
             {
                 ListValue::NonResident { mapping, .. } => mapping,
-                _ => return Err(unsupported("resident list scheduled for I/O")),
+                _ => return Err(ScanError::bootstrap("resident list scheduled for I/O")),
             },
         };
         if requests.len() < config.max_outstanding
@@ -447,9 +448,9 @@ impl Discovery {
                 ListValue::Resident(value) => {
                     self.parsing = Some(Parsing {
                         list: index,
-                        bytes: value
-                            .take()
-                            .ok_or_else(|| unsupported("resident list already consumed"))?,
+                        bytes: value.take().ok_or_else(|| {
+                            ScanError::bootstrap("resident list already consumed")
+                        })?,
                         cursor: 0,
                     });
                     return Ok(DiscoveryStep::Progress { waiting: false });
@@ -462,7 +463,8 @@ impl Discovery {
                         target: ReadTarget::List(index),
                         assembly: RecordAssembly::new(
                             0,
-                            usize::try_from(*len).map_err(|_| overflow("attribute-list length"))?,
+                            usize::try_from(*len)
+                                .map_err(|_| ScanError::overflow("attribute-list length"))?,
                         )?,
                     });
                     return Ok(DiscoveryStep::Progress { waiting: false });
@@ -473,18 +475,18 @@ impl Discovery {
         let end = self
             .pending_cursor
             .checked_add(ENTRIES_PER_STEP)
-            .ok_or_else(|| overflow("pending reference batch"))?
+            .ok_or_else(|| ScanError::overflow("pending reference batch"))?
             .min(self.pending.len());
         while self.pending_cursor < end {
             let index = self.pending_cursor;
             self.pending_cursor = self
                 .pending_cursor
                 .checked_add(1)
-                .ok_or_else(|| overflow("pending reference cursor"))?;
+                .ok_or_else(|| ScanError::overflow("pending reference cursor"))?;
             let pending = self
                 .pending
                 .get(index)
-                .ok_or_else(|| overflow("pending reference index"))?;
+                .ok_or_else(|| ScanError::overflow("pending reference index"))?;
             if pending.done {
                 continue;
             }
@@ -493,14 +495,16 @@ impl Discovery {
                 .source
                 .record()
                 .checked_mul(u64::from(base.mapping.geometry.file_record_size()))
-                .ok_or_else(|| overflow("extension byte offset"))?;
+                .ok_or_else(|| ScanError::overflow("extension byte offset"))?;
             let len = u64::from(base.mapping.geometry.file_record_size());
             if start
                 .checked_add(len)
-                .ok_or_else(|| overflow("extension byte end"))?
+                .ok_or_else(|| ScanError::overflow("extension byte end"))?
                 > base.data_size
             {
-                return Err(unsupported("extension record exceeds logical MFT size"));
+                return Err(ScanError::bootstrap(
+                    "extension record exceeds logical MFT size",
+                ));
             }
             if self.commit_cached(index, base)? {
                 self.pending_cursor = 0;
@@ -512,7 +516,8 @@ impl Discovery {
                     target: ReadTarget::Extension(index),
                     assembly: RecordAssembly::new(
                         start,
-                        usize::try_from(len).map_err(|_| overflow("extension record length"))?,
+                        usize::try_from(len)
+                            .map_err(|_| ScanError::overflow("extension record length"))?,
                     )?,
                 });
                 self.pending_cursor = 0;

@@ -1,4 +1,5 @@
 use super::*;
+use adamite_ntfs::record::{RecordError, fixup::FixupError};
 use std::error::Error;
 
 #[test]

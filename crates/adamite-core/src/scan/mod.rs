@@ -8,7 +8,9 @@ mod mapping;
 mod merge;
 mod protocol;
 mod scanner;
+mod stats;
 
 pub use config::{ConfigError, ScanConfig, ScanContext};
 pub use protocol::{FeedError, ReadRequest, RequestId};
-pub use scanner::{ScanError, ScanOutput, ScanPhase, ScanProgress, ScanStep, Scanner};
+pub use scanner::{ScanOutput, ScanPhase, ScanProgress, ScanStep, Scanner};
+pub use stats::ScanStats;

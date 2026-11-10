@@ -1,9 +1,66 @@
 //! Linking behavior over synthetic EntryRecord lists.
 
 use super::*;
+use crate::snapshot::SnapshotError;
 use std::error::Error;
 
 type TestResult = Result<(), Box<dyn Error>>;
+
+#[test]
+fn linking_bounded_push_preserves_limits_and_precheck_errors() -> TestResult {
+    let limit = usize::try_from(u32::MAX)?;
+    let mut items = vec![(); limit.checked_sub(1).ok_or("invalid node limit")?];
+    Linker::push_bounded(&mut items, ())?;
+    assert_eq!(items.len(), limit);
+    let error = Linker::push_bounded(&mut items, ())
+        .err()
+        .ok_or("link storage bound was ignored")?;
+    if limit < usize::MAX {
+        assert!(matches!(
+            error,
+            ScanError::Snapshot {
+                source: SnapshotError::Overflow {
+                    field: "link storage length"
+                }
+            }
+        ));
+    } else {
+        assert!(matches!(
+            error,
+            ScanError::Overflow {
+                operation: "tree linking"
+            }
+        ));
+    }
+    assert_eq!(items.len(), limit);
+
+    let mut items = vec![(); usize::MAX];
+    assert!(matches!(
+        Linker::push_bounded(&mut items, ()),
+        Err(ScanError::Overflow {
+            operation: "tree linking"
+        })
+    ));
+    assert_eq!(items.len(), usize::MAX);
+    Ok(())
+}
+
+#[test]
+fn linking_counter_overflow_keeps_tree_context() {
+    let mut stats = ScanStats {
+        invalid_utf16: u64::MAX,
+        ..ScanStats::default()
+    };
+    let mut pool = Vec::new();
+    assert!(matches!(
+        append_name(&mut pool, [0xd800].into_iter(), &mut stats),
+        Err(ScanError::Overflow {
+            operation: "tree linking"
+        })
+    ));
+    assert_eq!(stats.invalid_utf16, u64::MAX);
+    assert!(pool.is_empty());
+}
 fn reference(record: u64) -> FileRef {
     FileRef::from_raw((7u64 << 48) | record)
 }

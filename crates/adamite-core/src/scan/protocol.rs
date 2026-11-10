@@ -1,6 +1,6 @@
 //! Identified request slots consumed in the planner's virtual order.
 
-use super::scanner::ScanError;
+use crate::error::ScanError;
 use snafu::Snafu;
 use std::collections::{TryReserveError, VecDeque};
 
@@ -125,9 +125,7 @@ impl Requests {
             return Err(ScanError::InvalidReadRange { offset, len });
         }
         let id = self.next_id.ok_or(ScanError::RequestIdExhausted)?;
-        self.slots
-            .try_reserve(1)
-            .map_err(|source| ScanError::Allocation { source })?;
+        self.slots.try_reserve(1)?;
         let request = ReadRequest {
             id: RequestId(id),
             offset,

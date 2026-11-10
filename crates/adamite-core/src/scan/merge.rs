@@ -1,12 +1,13 @@
 //! Transactional patch application and per-stream accounting before generic linking.
 
-use super::{bootstrap::push, ingest::bump, mapping::overflow, scanner::ScanError};
 use crate::{
     ScanStats,
     entry::{
         EntryFlags, EntryName, EntryRecord, Patch, RecordContribution, RecordKind, RecordSlot,
         StreamSegment, StreamStorage,
     },
+    error::ScanError,
+    util::{CounterExt, VecExt},
 };
 use adamite_ntfs::{
     attribute::{AttributeFlags, AttributeType},
@@ -41,6 +42,15 @@ pub(super) struct Merge {
 }
 
 impl Merge {
+    fn reserve_contribution<T>(target: &mut Vec<T>, additional: usize) -> Result<(), ScanError> {
+        target
+            .len()
+            .checked_add(additional)
+            .ok_or_else(|| ScanError::overflow("merged contribution length"))?;
+        VecExt::try_reserve(target, additional)?;
+        Ok(())
+    }
+
     pub(super) fn new(slots: Vec<RecordSlot>, patches: Vec<Patch>, cluster_size: u32) -> Self {
         Self {
             slots,
@@ -71,12 +81,12 @@ impl Merge {
                         }
                         return Ok(true);
                     };
-                    let ordinal =
-                        u64::try_from(self.cursor).map_err(|_| overflow("merge record ordinal"))?;
+                    let ordinal = u64::try_from(self.cursor)
+                        .map_err(|_| ScanError::overflow("merge record ordinal"))?;
                     self.cursor = self
                         .cursor
                         .checked_add(1)
-                        .ok_or_else(|| overflow("merge slot cursor"))?;
+                        .ok_or_else(|| ScanError::overflow("merge slot cursor"))?;
                     if slot.classification == RecordKind::Base
                         && let Some(base) = slot.base.take()
                     {
@@ -85,7 +95,7 @@ impl Merge {
                         })?;
                         if let Some(entry) = entry(base, flags, self.cluster_size, stats)? {
                             let is_root = entry.file_ref.record() == ROOT;
-                            push(&mut self.entries, entry)?;
+                            self.entries.try_push(entry)?;
                             self.root_emitted |= is_root;
                         } else if ordinal == ROOT {
                             return Err(ScanError::RequiredRecord { record: ROOT });
@@ -96,16 +106,6 @@ impl Merge {
         }
         Ok(false)
     }
-}
-
-fn reserve<T>(target: &mut Vec<T>, additional: usize) -> Result<(), ScanError> {
-    target
-        .len()
-        .checked_add(additional)
-        .ok_or_else(|| overflow("merged contribution length"))?;
-    target
-        .try_reserve(additional)
-        .map_err(|source| ScanError::Allocation { source })
 }
 
 fn apply_patch(
@@ -134,8 +134,8 @@ fn apply_patch(
             .iter()
             .all(|segment| segment.source == patch.source);
     if !valid {
-        bump(&mut stats.rejected_extensions)?;
-        bump(&mut stats.invalid_file_refs)?;
+        stats.rejected_extensions.try_bump()?;
+        stats.invalid_file_refs.try_bump()?;
         return Ok(());
     }
     let base = index
@@ -146,13 +146,13 @@ fn apply_patch(
         })?;
     let mut added = patch.contribution;
     // Reserve every destination before changing any logical contents.
-    reserve(&mut base.names, added.names.len())?;
-    reserve(
+    Merge::reserve_contribution(&mut base.names, added.names.len())?;
+    Merge::reserve_contribution(
         &mut base.standard_information,
         added.standard_information.len(),
     )?;
-    reserve(&mut base.streams, added.streams.len())?;
-    reserve(&mut base.reparse_tags, added.reparse_tags.len())?;
+    Merge::reserve_contribution(&mut base.streams, added.streams.len())?;
+    Merge::reserve_contribution(&mut base.reparse_tags, added.reparse_tags.len())?;
     base.names.append(&mut added.names);
     base.standard_information
         .append(&mut added.standard_information);
@@ -251,7 +251,7 @@ fn stream(segments: &[StreamSegment], cluster_size: u32) -> Result<StreamTotals,
     }
     let coverage = expected
         .checked_mul(u64::from(cluster_size))
-        .ok_or_else(|| overflow("merged stream coverage"))?;
+        .ok_or_else(|| ScanError::overflow("merged stream coverage"))?;
     if coverage < sizes.data() {
         return Err(StreamError::Invalid);
     }
@@ -336,8 +336,8 @@ fn entry(
                 .is_some_and(|first| first.tag != tag.tag)
         })
     {
-        bump(&mut stats.corrupt_values)?;
-        bump(&mut stats.corrupt_records)?;
+        stats.corrupt_values.try_bump()?;
+        stats.corrupt_records.try_bump()?;
         return Ok(None);
     }
     // Absent SI has zero attributes and time; a valid extension may supply it.
@@ -354,23 +354,23 @@ fn entry(
     while let Some(first) = base.streams.get(start) {
         let mut end = start
             .checked_add(1)
-            .ok_or_else(|| overflow("stream group cursor"))?;
+            .ok_or_else(|| ScanError::overflow("stream group cursor"))?;
         while base.streams.get(end).is_some_and(|segment| {
             segment.attribute_type == first.attribute_type && segment.name == first.name
         }) {
             end = end
                 .checked_add(1)
-                .ok_or_else(|| overflow("stream group cursor"))?;
+                .ok_or_else(|| ScanError::overflow("stream group cursor"))?;
         }
         let group = base
             .streams
             .get(start..end)
-            .ok_or_else(|| overflow("stream group range"))?;
+            .ok_or_else(|| ScanError::overflow("stream group range"))?;
         match stream(group, cluster_size) {
             Ok(total) => {
                 alloc = alloc
                     .checked_add(total.alloc)
-                    .ok_or_else(|| overflow("entry allocation"))?;
+                    .ok_or_else(|| ScanError::overflow("entry allocation"))?;
                 if total.sparse {
                     flags.insert(EntryFlags::SPARSE);
                 }
@@ -385,12 +385,12 @@ fn entry(
                     {
                         ads_size = ads_size
                             .checked_add(total.logical)
-                            .ok_or_else(|| overflow("entry ADS size"))?;
+                            .ok_or_else(|| ScanError::overflow("entry ADS size"))?;
                     }
                 }
             }
             Err(StreamError::Invalid) => {
-                bump(&mut stats.corrupt_streams)?;
+                stats.corrupt_streams.try_bump()?;
                 rejected = true;
             }
             Err(StreamError::Fatal(error)) => return Err(error),
@@ -398,16 +398,14 @@ fn entry(
         start = end;
     }
     if rejected {
-        bump(&mut stats.corrupt_records)?;
+        stats.corrupt_records.try_bump()?;
         return Ok(None);
     }
     if base.reference.record() == ROOT && !flags.contains(EntryFlags::DIRECTORY) {
         return Err(ScanError::RequiredRecord { record: ROOT });
     }
     let mut names = Vec::new();
-    names
-        .try_reserve_exact(base.names.len())
-        .map_err(|source| ScanError::Allocation { source })?;
+    names.try_reserve_exact(base.names.len())?;
     names.extend(base.names.into_iter().map(|name| EntryName {
         parent: name.parent,
         namespace: name.namespace,
