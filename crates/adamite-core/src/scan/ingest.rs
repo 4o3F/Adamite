@@ -190,9 +190,10 @@ impl Ingest {
                 slot.classification = RecordKind::Deleted;
                 set_header(&mut slot, header);
                 bump(&mut self.stats.deleted)?;
+                // Unallocated FILE slots can leave the stored record number unset.
                 if header
                     .record_number()
-                    .is_some_and(|number| u64::from(number) != ordinal)
+                    .is_some_and(|number| number != 0 && u64::from(number) != ordinal)
                 {
                     bump(&mut self.stats.corrupt_records)?;
                     bump(&mut self.stats.corrupt_headers)?;

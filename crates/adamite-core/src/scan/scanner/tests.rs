@@ -2829,3 +2829,53 @@ fn aggregation_fixture_frag_512_done_and_fill_totals() -> TestResult {
 fn aggregation_fixture_native_4kn_64k_done_and_independent_totals() -> TestResult {
     aggregation_fixture("4kn-64k")
 }
+
+#[test]
+fn ingest_unallocated_zero_record_number_is_not_corruption() -> TestResult {
+    let unallocated = RecordBuilder {
+        flags: 0,
+        record_number: 0,
+        ..RecordBuilder::default()
+    };
+    let mismatched_deleted = RecordBuilder {
+        flags: 0,
+        record_number: 99,
+        ..RecordBuilder::default()
+    };
+    let mismatched_live = RecordBuilder {
+        flags: 1,
+        record_number: 0,
+        ..RecordBuilder::default()
+    };
+    let volume = ingest_volume(
+        16,
+        vec![
+            (6, unallocated.build()),
+            (7, mismatched_deleted.build()),
+            (8, mismatched_live.build()),
+        ],
+    )?;
+    let (scanner, _, outcome) = ingest_image(&volume, 3, 512)?;
+    outcome?;
+    let state = scanner.ingest.as_ref().ok_or("ingestion state")?;
+    assert_eq!(
+        state.slots.get(6).ok_or("unallocated slot")?.classification,
+        RecordKind::Deleted
+    );
+    assert!(state.slots.get(6).ok_or("unallocated slot")?.base.is_none());
+    assert!(
+        state
+            .slots
+            .get(8)
+            .ok_or("mismatched live slot")?
+            .base
+            .is_none()
+    );
+    assert_eq!(state.stats.deleted, 2);
+    assert_eq!(
+        state.stats.corrupt_records, 2,
+        "only nonzero deleted mismatches and live mismatches are corrupt"
+    );
+    assert_eq!(state.stats.corrupt_headers, 2);
+    Ok(())
+}

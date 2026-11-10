@@ -152,8 +152,8 @@ Each automated milestone is one bounded Codex run targeting 15–30 minutes, inc
 
 ### M12 — Independent fixture end-to-end oracles
 
-- [ ] M12.1 Drive Scanner from each decompressed image and compare all D20 outputs against v3 entries, metafiles and fill totals; independently compute expected subtree totals and final indexes.
-- [ ] M12.2 Require fragmented bootstrap, record 4095 reassembly, same-parent hard links and 4Kn coverage. Verify: `cargo test -p adamite-core --test fixtures --locked`; `cargo test -p adamite-ntfs --locked`.
+- [x] M12.1 Drive Scanner from each decompressed image and compare all D20 outputs against v3 entries, metafiles and fill totals; independently compute expected subtree totals and final indexes.
+- [x] M12.2 Require fragmented bootstrap, record 4095 reassembly, same-parent hard links and 4Kn coverage. Verify: `cargo test -p adamite-core --test fixtures --locked`; `cargo test -p adamite-ntfs --locked`.
 
 ### M13 — Chunk and response-order properties
 
