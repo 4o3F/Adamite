@@ -39,7 +39,8 @@ fn snapshot(files: u32) -> Result<Snapshot, Box<dyn Error>> {
             reparse_tag: None,
         });
     }
-    let geometry = adamite_ntfs::parse_boot_sector(&BootSectorBuilder::default().build())?;
+    let geometry =
+        adamite_ntfs::VolumeGeometry::from_boot_sector(&BootSectorBuilder::default().build())?;
     let mut builder = SnapshotBuilder::new(tree, geometry, &ScanContext::default())?;
     for _ in 0..1000 {
         if let Some(snapshot) = builder.step()? {

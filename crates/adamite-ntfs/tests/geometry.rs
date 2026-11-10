@@ -11,7 +11,7 @@
 mod support;
 
 use adamite_fixtures::builders::BootSectorBuilder;
-use adamite_ntfs::{GeometryError, parse_boot_sector};
+use adamite_ntfs::{GeometryError, VolumeGeometry};
 use proptest::prelude::*;
 
 fn cluster_model(sector: u16, encoding: u8) -> Option<u128> {
@@ -88,7 +88,7 @@ proptest! {
     #![proptest_config(support::proptest_config("proptest-regressions/geometry.txt"))]
     #[test]
     fn valid_geometry_round_trips(model in valid_geometry()) {
-        let geometry = parse_boot_sector(&model.build()).unwrap();
+        let geometry = VolumeGeometry::from_boot_sector(&model.build()).unwrap();
         let cluster = cluster_model(model.sector, model.cluster_encoding).unwrap();
         prop_assert_eq!(geometry.bytes_per_sector(), model.sector);
         prop_assert_eq!(u128::from(geometry.cluster_size()), cluster);
@@ -106,7 +106,7 @@ proptest! {
     #[test]
     fn suffix_and_ignored_bytes_do_not_change_geometry(model in valid_geometry(), suffix in prop::collection::vec(any::<u8>(), 0..=256), ignored in prop::collection::vec(any::<u8>(), 512)) {
         let boot = model.build();
-        let expected = parse_boot_sector(&boot).unwrap();
+        let expected = VolumeGeometry::from_boot_sector(&boot).unwrap();
         let mut changed = boot.to_vec();
         for index in 0..512 {
             if !matches!(index, 3..=13 | 0x28..=0x40 | 0x44 | 0x48..=0x4f | 510..=511) {
@@ -114,12 +114,12 @@ proptest! {
             }
         }
         changed.extend(suffix);
-        prop_assert_eq!(parse_boot_sector(&changed), Ok(expected));
+        prop_assert_eq!(VolumeGeometry::from_boot_sector(&changed), Ok(expected));
     }
 
     #[test]
     fn cluster_ranges_match_u128_model(model in valid_geometry(), random_lcn in any::<u64>(), random_count in any::<u64>()) {
-        let geometry = parse_boot_sector(&model.build()).unwrap();
+        let geometry = VolumeGeometry::from_boot_sector(&model.build()).unwrap();
         let total = geometry.total_clusters();
         for lcn in [0, 1, total - 1, total, total + 1, u64::MAX, random_lcn] {
             for count in [0, 1, total - 1, total, total + 1, u64::MAX, random_count] {
@@ -137,7 +137,7 @@ proptest! {
 
     #[test]
     fn arbitrary_boot_bytes_are_total(bytes in prop::collection::vec(any::<u8>(), 0..=65536)) {
-        let _ = parse_boot_sector(&bytes);
+        let _ = VolumeGeometry::from_boot_sector(&bytes);
     }
 }
 
@@ -157,7 +157,7 @@ fn documented_windows_and_real_mkntfs_golden_sectors() {
             3816218020381368311,
         ),
     ] {
-        let geometry = parse_boot_sector(bytes).unwrap();
+        let geometry = VolumeGeometry::from_boot_sector(bytes).unwrap();
         assert_eq!(geometry.bytes_per_sector(), 512);
         assert_eq!(geometry.sectors_per_cluster(), 8);
         assert_eq!(geometry.cluster_size(), 4096);
@@ -175,7 +175,7 @@ fn every_short_input_is_truncated_and_every_identification_byte_is_checked() {
     let boot = BootSectorBuilder::default().build();
     for length in 0..512 {
         assert_eq!(
-            parse_boot_sector(&boot[..length]),
+            VolumeGeometry::from_boot_sector(&boot[..length]),
             Err(GeometryError::Truncated)
         );
     }
@@ -183,7 +183,7 @@ fn every_short_input_is_truncated_and_every_identification_byte_is_checked() {
         let mut changed = boot;
         changed[offset] ^= 1;
         assert_eq!(
-            parse_boot_sector(&changed),
+            VolumeGeometry::from_boot_sector(&changed),
             Err(GeometryError::Identification)
         );
     }
@@ -198,7 +198,7 @@ fn exhaustive_sector_cluster_and_record_encodings() {
                 cluster_encoding: encoding,
                 ..Default::default()
             };
-            let result = parse_boot_sector(&model.build());
+            let result = VolumeGeometry::from_boot_sector(&model.build());
             assert_eq!(
                 result.is_ok(),
                 cluster_model(sector, encoding).is_some(),
@@ -216,7 +216,7 @@ fn exhaustive_sector_cluster_and_record_encodings() {
                         }
                         let valid =
                             record_model(u128::from(geometry.cluster_size()), record).is_some();
-                        let parsed = parse_boot_sector(&changed.build());
+                        let parsed = VolumeGeometry::from_boot_sector(&changed.build());
                         assert_eq!(
                             parsed.is_ok(),
                             valid,
@@ -237,7 +237,7 @@ fn exhaustive_sector_cluster_and_record_encodings() {
     }
     for sector in [0, 1, 511, 513, 8192, u16::MAX] {
         assert_eq!(
-            parse_boot_sector(
+            VolumeGeometry::from_boot_sector(
                 &BootSectorBuilder {
                     sector,
                     ..Default::default()
@@ -257,7 +257,12 @@ fn exponent_golden_cases_and_positive_record_encoding() {
             ..Default::default()
         }
         .build();
-        assert_eq!(parse_boot_sector(&boot).unwrap().cluster_size(), size);
+        assert_eq!(
+            VolumeGeometry::from_boot_sector(&boot)
+                .unwrap()
+                .cluster_size(),
+            size
+        );
     }
     let oversized = BootSectorBuilder {
         sector: 4096,
@@ -265,7 +270,7 @@ fn exponent_golden_cases_and_positive_record_encoding() {
         ..Default::default()
     };
     assert_eq!(
-        parse_boot_sector(&oversized.build()),
+        VolumeGeometry::from_boot_sector(&oversized.build()),
         Err(GeometryError::ClusterTooLarge { size: 16_777_216 })
     );
     let positive = BootSectorBuilder {
@@ -274,7 +279,7 @@ fn exponent_golden_cases_and_positive_record_encoding() {
         ..Default::default()
     };
     assert_eq!(
-        parse_boot_sector(&positive.build())
+        VolumeGeometry::from_boot_sector(&positive.build())
             .unwrap()
             .file_record_size(),
         1024
@@ -285,7 +290,7 @@ fn exponent_golden_cases_and_positive_record_encoding() {
 fn sector_counts_and_mft_locations_are_bounded_by_complete_clusters() {
     for sectors in [0, 1, 7, 1 << 63, u64::MAX, u64::MAX / 512 + 1] {
         assert_eq!(
-            parse_boot_sector(
+            VolumeGeometry::from_boot_sector(
                 &BootSectorBuilder {
                     sectors,
                     ..Default::default()
@@ -300,7 +305,7 @@ fn sector_counts_and_mft_locations_are_bounded_by_complete_clusters() {
         sectors: max_sectors,
         ..Default::default()
     };
-    assert!(parse_boot_sector(&maximum.build()).is_ok());
+    assert!(VolumeGeometry::from_boot_sector(&maximum.build()).is_ok());
     let base = BootSectorBuilder {
         cluster_encoding: 1,
         sectors: 17,
@@ -308,18 +313,18 @@ fn sector_counts_and_mft_locations_are_bounded_by_complete_clusters() {
         mirror: 15,
         ..Default::default()
     };
-    assert!(parse_boot_sector(&base.build()).is_ok());
+    assert!(VolumeGeometry::from_boot_sector(&base.build()).is_ok());
     for lcn in [16, 17, 18, u64::MAX] {
         let mut changed = base.clone();
         changed.mft = lcn;
         assert_eq!(
-            parse_boot_sector(&changed.build()),
+            VolumeGeometry::from_boot_sector(&changed.build()),
             Err(GeometryError::MftOutOfVolume { lcn })
         );
         let mut changed = base.clone();
         changed.mirror = lcn;
         assert_eq!(
-            parse_boot_sector(&changed.build()),
+            VolumeGeometry::from_boot_sector(&changed.build()),
             Err(GeometryError::MftMirrorOutOfVolume { lcn })
         );
     }
@@ -329,7 +334,7 @@ fn sector_counts_and_mft_locations_are_bounded_by_complete_clusters() {
         mirror: 0,
         ..Default::default()
     };
-    let geometry = parse_boot_sector(&partial.build()).unwrap();
+    let geometry = VolumeGeometry::from_boot_sector(&partial.build()).unwrap();
     assert_eq!(geometry.total_clusters(), 1);
     assert_eq!(geometry.total_bytes(), 15 * 512);
     assert_eq!(geometry.cluster_byte_range(0, 1).unwrap(), 0..4096);
@@ -345,10 +350,13 @@ fn validation_order_is_stable() {
     }
     .build();
     boot[3] = 0;
-    assert_eq!(parse_boot_sector(&boot), Err(GeometryError::Identification));
+    assert_eq!(
+        VolumeGeometry::from_boot_sector(&boot),
+        Err(GeometryError::Identification)
+    );
     boot[3] = b'N';
     assert_eq!(
-        parse_boot_sector(&boot),
+        VolumeGeometry::from_boot_sector(&boot),
         Err(GeometryError::InvalidSectorSize { size: 0 })
     );
 }

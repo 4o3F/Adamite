@@ -291,11 +291,11 @@ impl RecordAssembly {
 mod tests {
     use super::*;
     use adamite_fixtures::builders::BootSectorBuilder;
-    use adamite_ntfs::parse_boot_sector;
+    use adamite_ntfs::VolumeGeometry;
     use std::error::Error;
 
     fn geometry() -> Result<VolumeGeometry, ScanError> {
-        parse_boot_sector(
+        VolumeGeometry::from_boot_sector(
             &BootSectorBuilder {
                 cluster_encoding: 1,
                 sectors: 256,

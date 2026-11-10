@@ -5,8 +5,8 @@ use super::{
     scanner::ScanError,
 };
 use adamite_ntfs::{
-    Attribute, AttributeFlags, AttributeType, FileRecord, FileRef, NonResident, RecordFlags,
-    StreamSizes, VolumeGeometry, fixup,
+    Attribute, AttributeFlags, AttributeType, FileRecord, FileRef, NonResident, RecordError,
+    RecordFlags, StreamSizes, VolumeGeometry,
 };
 
 #[derive(Debug, PartialEq, Eq)]
@@ -181,12 +181,18 @@ fn parts(
     })
 }
 
+fn record_error(error: RecordError) -> ScanError {
+    match error {
+        RecordError::Fixup { source } => ScanError::Fixup { source },
+        source => ScanError::Record { source },
+    }
+}
+
 pub(super) fn parse_record0(
     mut bytes: Vec<u8>,
     geometry: VolumeGeometry,
 ) -> Result<Record0, ScanError> {
-    let fixed = fixup::apply(&mut bytes).map_err(|source| ScanError::Fixup { source })?;
-    let record = FileRecord::parse(fixed).map_err(|source| ScanError::Record { source })?;
+    let record = FileRecord::parse(&mut bytes).map_err(record_error)?;
     let header = record.header();
     if !header.flags().contains(RecordFlags::IN_USE)
         || !header.base_reference().is_null()
@@ -262,8 +268,7 @@ pub(super) fn parse_extension(
     base: FileRef,
     geometry: VolumeGeometry,
 ) -> Result<RecordParts, ScanError> {
-    let fixed = fixup::apply(&mut bytes).map_err(|source| ScanError::Fixup { source })?;
-    let record = FileRecord::parse(fixed).map_err(|source| ScanError::Record { source })?;
+    let record = FileRecord::parse(&mut bytes).map_err(record_error)?;
     let header = record.header();
     if !header.flags().contains(RecordFlags::IN_USE)
         || header.sequence() != reference.sequence()

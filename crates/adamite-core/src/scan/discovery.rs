@@ -545,7 +545,7 @@ mod tests {
     #[test]
     fn bootstrap_pending_references_yield_before_no_progress_failure() -> Result<(), Box<dyn Error>>
     {
-        let geometry = adamite_ntfs::parse_boot_sector(
+        let geometry = adamite_ntfs::VolumeGeometry::from_boot_sector(
             &BootSectorBuilder {
                 cluster_encoding: 1,
                 sectors: 4096,

@@ -6,7 +6,7 @@ pub mod system;
 
 use snafu::{OptionExt, ResultExt, Snafu, ensure};
 
-use self::fixup::{FixedRecord, FixupError};
+use self::fixup::FixupError;
 use self::reference::FileRef;
 use crate::util;
 
@@ -221,22 +221,13 @@ fn validate_size(len: usize) -> Result<(), RecordError> {
 /// A live record view prevents mutating its backing buffer:
 ///
 /// ```compile_fail,E0499
-/// use adamite_ntfs::{FileRecord, fixup};
+/// use adamite_ntfs::FileRecord;
 ///
 /// let mut buffer = [0u8; 1024];
-/// let fixed = fixup::apply(&mut buffer)?;
-/// let record = FileRecord::parse(fixed)?;
+/// let record = FileRecord::parse(&mut buffer)?;
 /// buffer.fill(0);
 /// let header = record.header();
 /// # Ok::<(), Box<dyn std::error::Error>>(())
-/// ```
-///
-/// Raw bytes cannot replace the fixup token:
-///
-/// ```compile_fail,E0308
-/// use adamite_ntfs::FileRecord;
-/// let buffer = [0u8; 1024];
-/// let record = FileRecord::parse(&buffer);
 /// ```
 #[derive(Debug)]
 pub struct FileRecord<'a> {
@@ -245,20 +236,50 @@ pub struct FileRecord<'a> {
 }
 
 impl<'a> FileRecord<'a> {
-    /// Consumes a fixup token and validates the FILE header.
+    /// Validates the FILE header, restores protected trailers, and borrows the record.
+    ///
+    /// The buffer remains unchanged on every error. Valid headers are accepted
+    /// regardless of IN_USE; successful parsing applies fixup once.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use adamite_ntfs::{FileRecord, RecordError};
+    ///
+    /// let mut buffer = [0u8; 1024];
+    /// let before = buffer;
+    /// assert!(matches!(FileRecord::parse(&mut buffer), Err(RecordError::InvalidSignature { .. })));
+    /// assert_eq!(buffer, before);
+    /// ```
     ///
     /// # Errors
     ///
     /// Returns [`RecordError`] in order of input size, signature, declared byte
-    /// counts, attribute offset, then update-sequence offset.
+    /// counts, attribute offset, update-sequence offset, then fixup metadata and
+    /// protected trailers. Fixup failures are wrapped in [`RecordError::Fixup`].
     /// The shared size and USA-offset rules report [`RecordError::InvalidRecordSize`]
     /// and [`RecordError::InvalidUsaOffset`], respectively.
-    pub fn parse(fixed: FixedRecord<'a>) -> Result<Self, RecordError> {
-        let bytes = fixed.as_bytes();
-        validate_size(bytes.len())?;
-        let header = RecordHeader::peek(bytes)?;
-        header.validate(bytes.len())?;
-        Ok(Self { bytes, header })
+    pub fn parse(input: &'a mut [u8]) -> Result<Self, RecordError> {
+        validate_size(input.len())?;
+        let header = Self::validate_header(input)?;
+        Self::from_validated_header(input, header)
+    }
+
+    fn validate_header(input: &[u8]) -> Result<RecordHeader, RecordError> {
+        let header = RecordHeader::peek(input)?;
+        header.validate(input.len())?;
+        Ok(header)
+    }
+
+    fn from_validated_header(
+        input: &'a mut [u8],
+        header: RecordHeader,
+    ) -> Result<Self, RecordError> {
+        let fixed = fixup::apply(input).context(FixupSnafu)?;
+        Ok(Self {
+            bytes: fixed.as_bytes(),
+            header,
+        })
     }
 
     /// Returns the fixed header decoded when this view was created.
@@ -306,41 +327,38 @@ pub enum RecordClass<'a> {
     Corrupt(RecordError),
 }
 
-/// Classifies a buffer and fixes up only valid in-use FILE records.
-///
-/// Precedence is size, uniform fill, BAAD, FILE signature, header validity,
-/// IN_USE, fixup, then null/non-null base reference. Every result other than
-/// `Base` or `Extension` leaves the buffer byte-for-byte unchanged.
-pub fn classify(input: &mut [u8]) -> RecordClass<'_> {
-    match classify_inner(input) {
-        Ok(class) => class,
-        Err(error) => RecordClass::Corrupt(error),
+impl<'a> RecordClass<'a> {
+    /// Classifies a buffer and fixes up only valid in-use FILE records.
+    ///
+    /// Precedence is size, uniform fill, BAAD, FILE signature, header validity,
+    /// IN_USE, fixup, then null/non-null base reference. Every result other than
+    /// `Base` or `Extension` leaves the buffer byte-for-byte unchanged.
+    pub fn classify(input: &'a mut [u8]) -> Self {
+        match Self::classify_inner(input) {
+            Ok(class) => class,
+            Err(error) => Self::Corrupt(error),
+        }
     }
-}
 
-fn classify_inner(input: &mut [u8]) -> Result<RecordClass<'_>, RecordError> {
-    validate_size(input.len())?;
-    if input.iter().all(|&byte| byte == 0) || input.iter().all(|&byte| byte == 0xff) {
-        return Ok(RecordClass::Unused);
+    fn classify_inner(input: &'a mut [u8]) -> Result<Self, RecordError> {
+        validate_size(input.len())?;
+        if input.iter().all(|&byte| byte == 0) || input.iter().all(|&byte| byte == 0xff) {
+            return Ok(Self::Unused);
+        }
+        if input.get(..4) == Some(b"BAAD") {
+            return Ok(Self::Baad);
+        }
+        let header = FileRecord::validate_header(input)?;
+        if !header.flags.contains(RecordFlags::IN_USE) {
+            return Ok(Self::NotInUse(header));
+        }
+        let record = FileRecord::from_validated_header(input, header)?;
+        Ok(if header.base_reference.is_null() {
+            Self::Base(record)
+        } else {
+            Self::Extension(record)
+        })
     }
-    if input.get(..4) == Some(b"BAAD") {
-        return Ok(RecordClass::Baad);
-    }
-    let header = RecordHeader::peek(input)?;
-    header.validate(input.len())?;
-    if !header.flags.contains(RecordFlags::IN_USE) {
-        return Ok(RecordClass::NotInUse(header));
-    }
-    let fixed = fixup::apply(input).context(FixupSnafu)?;
-    let record = FileRecord {
-        bytes: fixed.as_bytes(),
-        header,
-    };
-    Ok(if header.base_reference.is_null() {
-        RecordClass::Base(record)
-    } else {
-        RecordClass::Extension(record)
-    })
 }
 
 /// FILE header or classification failure.

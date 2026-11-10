@@ -76,7 +76,7 @@ pub fn runs(mut value: Runlist<'_>) {
     boot[64] = 0xf6;
     boot[68] = 0xf6;
     boot[510..].copy_from_slice(&[0x55, 0xaa]);
-    let geometry = adamite_ntfs::parse_boot_sector(&boot).ok();
+    let geometry = adamite_ntfs::VolumeGeometry::from_boot_sector(&boot).ok();
     for run in value.by_ref().flatten() {
         black_box((run.vcn(), run.length(), run.lcn()));
         if let Some(geometry) = geometry {

@@ -11,7 +11,7 @@ mod support;
 use adamite_fixtures::builders::{AttrBuilder, FileNameBuilder, NonResidentModel, RecordBuilder};
 use adamite_ntfs::{
     Attribute, AttributeList, Bitmap, BitmapError, Data, FileAttributes, FileName, FileRecord,
-    IndexAllocation, ReparsePoint, StandardInformation, ValueError, fixup,
+    IndexAllocation, ReparsePoint, StandardInformation, ValueError,
 };
 use proptest::prelude::*;
 
@@ -41,7 +41,7 @@ fn cached_file_name_size_and_data_size_remain_independent() {
         ..Default::default()
     }
     .build();
-    let record = FileRecord::parse(fixup::apply(&mut bytes).unwrap()).unwrap();
+    let record = FileRecord::parse(&mut bytes).unwrap();
     let mut attrs = record.attributes();
     let file_name = FileName::from_attribute(attrs.next().unwrap().unwrap()).unwrap();
     let data = Data::from_attribute(attrs.next().unwrap().unwrap()).unwrap();
@@ -242,7 +242,7 @@ fn data_streams_are_reported_separately_with_resident_lengths() {
     named.name = "meta".encode_utf16().collect();
     named.flags = 0x4100;
     let mut bytes = record(vec![unnamed.build(), named.build()]);
-    let record = FileRecord::parse(fixup::apply(&mut bytes).unwrap()).unwrap();
+    let record = FileRecord::parse(&mut bytes).unwrap();
     let streams: Vec<_> = record
         .attributes()
         .map(|attr| Data::from_attribute(attr.unwrap()).unwrap())
@@ -276,7 +276,7 @@ fn nonresident_data_and_directory_index_preserve_segment_descriptors() {
         index.name = "$I30".encode_utf16().collect();
         index.flags = 0x4000;
         let mut bytes = record(vec![data.build(), index.build()]);
-        let record = FileRecord::parse(fixup::apply(&mut bytes).unwrap()).unwrap();
+        let record = FileRecord::parse(&mut bytes).unwrap();
         let mut attrs = record.attributes();
         let data = Data::from_attribute(attrs.next().unwrap().unwrap()).unwrap();
         assert!(data.resident_value().is_none());
@@ -320,7 +320,7 @@ fn nonresident_data_and_directory_index_preserve_segment_descriptors() {
     );
 }
 fn first(bytes: &mut [u8]) -> Attribute<'_> {
-    FileRecord::parse(fixup::apply(bytes).unwrap())
+    FileRecord::parse(bytes)
         .unwrap()
         .attributes()
         .next()

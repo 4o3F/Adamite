@@ -4,7 +4,7 @@ use super::*;
 use crate::entry::{NameAttribute, ReparseAttribute, StandardAttribute};
 use adamite_fixtures::builders::{AttrBuilder, NonResidentModel, RecordBuilder};
 use adamite_fixtures::runlist_encoder::{RunModel, RunlistEncoder};
-use adamite_ntfs::{FileRecord, FileRef, StandardInformation, fixup};
+use adamite_ntfs::{FileRecord, FileRef, StandardInformation};
 use std::error::Error;
 
 type TestResult = Result<(), Box<dyn Error>>;
@@ -93,7 +93,7 @@ fn nonresident(
         ..RecordBuilder::default()
     }
     .build();
-    let record = FileRecord::parse(fixup::apply(&mut raw)?)?;
+    let record = FileRecord::parse(&mut raw)?;
     let attr = record.attributes().next().ok_or("test attribute")??;
     let segment = attr.non_resident().ok_or("test segment")?;
     let mut run_count = 0u64;

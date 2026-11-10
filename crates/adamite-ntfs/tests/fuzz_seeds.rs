@@ -12,7 +12,7 @@ mod selectors;
 use adamite_fixtures::builders::RecordBuilder;
 use adamite_ntfs::{
     AttributeList, Bitmap, Data, FileName, FileRecord, IndexAllocation, ReparsePoint,
-    StandardInformation, Utf16Le, fixup,
+    StandardInformation, Utf16Le,
 };
 use std::{collections::BTreeSet, fs, path::Path};
 
@@ -37,7 +37,7 @@ fn check_attributes(region: &[u8], selector: u8) {
         ..Default::default()
     }
     .build();
-    let record = FileRecord::parse(fixup::apply(&mut raw).unwrap()).unwrap();
+    let record = FileRecord::parse(&mut raw).unwrap();
     for attribute in record.attributes() {
         let attribute = attribute.unwrap();
         let descriptor = if selector == selectors::DATA {

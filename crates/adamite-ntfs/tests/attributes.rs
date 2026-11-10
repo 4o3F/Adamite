@@ -9,7 +9,7 @@
 
 mod support;
 use adamite_fixtures::builders::{AttrBody, AttrBuilder, NonResidentModel, RecordBuilder};
-use adamite_ntfs::{Attribute, AttributeError, FileRecord, fixup};
+use adamite_ntfs::{Attribute, AttributeError, FileRecord};
 use proptest::prelude::*;
 
 #[test]
@@ -28,7 +28,7 @@ fn basic_attribute_sequence_names_and_resident_values() {
         ..Default::default()
     }
     .build();
-    let record = FileRecord::parse(fixup::apply(&mut bytes).unwrap()).unwrap();
+    let record = FileRecord::parse(&mut bytes).unwrap();
     let attrs: Vec<_> = record.attributes().collect::<Result<_, _>>().unwrap();
     assert_eq!(
         attrs
@@ -115,7 +115,7 @@ fn zero_length_attribute_errors_once() {
         ..Default::default()
     }
     .build();
-    let record = FileRecord::parse(fixup::apply(&mut bytes).unwrap()).unwrap();
+    let record = FileRecord::parse(&mut bytes).unwrap();
     let mut iter = record.attributes();
     assert_eq!(
         iter.next(),
@@ -151,7 +151,7 @@ fn nonresident_descriptors_report_sizes_only_in_the_first_segment() {
             ..Default::default()
         }
         .build();
-        let record = FileRecord::parse(fixup::apply(&mut bytes).unwrap()).unwrap();
+        let record = FileRecord::parse(&mut bytes).unwrap();
         let attr = record.attributes().next().unwrap().unwrap();
         assert!(!attr.is_resident());
         assert!(attr.resident_value().is_none());
@@ -180,10 +180,7 @@ fn nonresident_descriptors_report_sizes_only_in_the_first_segment() {
 }
 
 fn decode(bytes: &mut [u8]) -> Result<Vec<Attribute<'_>>, AttributeError> {
-    FileRecord::parse(fixup::apply(bytes).unwrap())
-        .unwrap()
-        .attributes()
-        .collect()
+    FileRecord::parse(bytes).unwrap().attributes().collect()
 }
 
 fn record(attributes: Vec<Vec<u8>>) -> Vec<u8> {
@@ -197,7 +194,7 @@ fn record(attributes: Vec<Vec<u8>>) -> Vec<u8> {
 
 fn error_once(attribute: Vec<u8>, expected: AttributeError) {
     let mut bytes = record(vec![attribute]);
-    let record = FileRecord::parse(fixup::apply(&mut bytes).unwrap()).unwrap();
+    let record = FileRecord::parse(&mut bytes).unwrap();
     let mut iter = record.attributes();
     assert_eq!(iter.next(), Some(Err(expected)));
     for _ in 0..16 {
@@ -348,7 +345,7 @@ proptest! {
     #[test]
     fn sequences_round_trip_and_iterators_are_fused(models in models()) {
         let mut bytes = record(models.iter().map(AttrBuilder::build).collect());
-        let record = FileRecord::parse(fixup::apply(&mut bytes).unwrap()).unwrap();
+        let record = FileRecord::parse(&mut bytes).unwrap();
         let mut iter = record.attributes();
         for model in &models {
             let attr = iter.next().unwrap().unwrap();
@@ -378,7 +375,7 @@ proptest! {
         for end in ((first + 8)..used).step_by(8) {
             let mut changed = plain.clone(); changed[24..28].copy_from_slice(&(end as u32).to_le_bytes());
             let mut bytes = builder.protect(&changed);
-            let record = FileRecord::parse(fixup::apply(&mut bytes).unwrap()).unwrap();
+            let record = FileRecord::parse(&mut bytes).unwrap();
             let mut iter = record.attributes(); let mut count = 0;
             for item in iter.by_ref() {
                 count += 1; prop_assert!(count <= (end - first) / 24 + 1);
@@ -400,7 +397,7 @@ proptest! {
     #[test]
     fn malformed_lengths_always_stop(length in any::<u32>()) {
         let mut attr = AttrBuilder::resident(0x80, vec![0; 72]).build(); attr[4..8].copy_from_slice(&length.to_le_bytes());
-        let mut bytes = record(vec![attr]); let record = FileRecord::parse(fixup::apply(&mut bytes).unwrap()).unwrap();
+        let mut bytes = record(vec![attr]); let record = FileRecord::parse(&mut bytes).unwrap();
         let mut iter = record.attributes(); let mut count = 0;
         for _ in iter.by_ref() { count += 1; prop_assert!(count <= 4096 / 24 + 1); }
         for _ in 0..16 { prop_assert_eq!(iter.next(), None); }

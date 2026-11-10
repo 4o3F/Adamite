@@ -303,7 +303,8 @@ mod tests {
             nodes,
             names: b"/x".to_vec(),
         };
-        let geometry = adamite_ntfs::parse_boot_sector(&BootSectorBuilder::default().build())?;
+        let geometry =
+            adamite_ntfs::VolumeGeometry::from_boot_sector(&BootSectorBuilder::default().build())?;
         let mut builder = SnapshotBuilder::new(tree, geometry, &ScanContext::default())?;
         for _ in 0..100 {
             let before = observed_work(&builder, count)?;

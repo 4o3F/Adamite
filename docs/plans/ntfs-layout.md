@@ -107,8 +107,8 @@ Each milestone is one bounded agent run of approximately 15–30 minutes, includ
 
 ### M3 — Type-owned parsing and classification
 
-- [ ] Implement D1 associated operations and D2's shared record pipeline; restrict fixup/token visibility and migrate every operation call in core, fixtures, parser tests, both fuzz packages and examples. Keep temporary root type re-exports for M4.
-- [ ] Implement D3 error conversion, relocate direct-fixup tests, and perform D6 doctest changes and focused regressions. Finish with `deno task check` green.
+- [x] Implement D1 associated operations and D2's shared record pipeline; restrict fixup/token visibility and migrate every operation call in core, fixtures, parser tests, both fuzz packages and examples. Keep temporary root type re-exports for M4.
+- [x] Implement D3 error conversion, relocate direct-fixup tests, and perform D6 doctest changes and focused regressions. Finish with `deno task check` green.
 
 ### M4 — Public paths and downstream migration
 

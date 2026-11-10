@@ -12,7 +12,7 @@ mod support;
 
 use adamite_fixtures::builders::BootSectorBuilder;
 use adamite_fixtures::runlist_encoder::{RunModel, RunlistEncoder};
-use adamite_ntfs::{Run, Runlist, RunlistError, VcnRange, parse_boot_sector};
+use adamite_ntfs::{Run, Runlist, RunlistError, VcnRange, VolumeGeometry};
 use proptest::prelude::*;
 
 fn decode(bytes: &[u8], lowest: i64, highest: i64) -> Result<Vec<Run>, RunlistError> {
@@ -224,7 +224,7 @@ fn coverage_zero_lengths_overflow_and_negative_lcns() {
 
 #[test]
 fn geometry_checks_accept_sparse_and_exact_end_but_reject_overrun() {
-    let geometry = parse_boot_sector(
+    let geometry = VolumeGeometry::from_boot_sector(
         &BootSectorBuilder {
             sectors: 128,
             cluster_encoding: 1,

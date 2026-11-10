@@ -1,7 +1,7 @@
 //! Bounded input decoding and conservative guards before calling the scan driver.
 
 use adamite_core::ScanConfig;
-use adamite_ntfs::{AttributeType, RecordClass, classify, parse_boot_sector};
+use adamite_ntfs::{AttributeType, RecordClass, VolumeGeometry};
 use libfuzzer_sys::arbitrary::{self, Unstructured};
 
 pub(super) const MAX_IMAGE: usize = 1_048_576;
@@ -119,7 +119,7 @@ pub(super) fn preflight(image: &[u8]) -> Option<usize> {
             _ => {}
         }
     }
-    let Ok(geometry) = parse_boot_sector(image) else {
+    let Ok(geometry) = VolumeGeometry::from_boot_sector(image) else {
         return Some(0);
     };
     let start = geometry
@@ -132,7 +132,7 @@ pub(super) fn preflight(image: &[u8]) -> Option<usize> {
         return Some(0);
     };
     let mut bytes = raw.to_vec();
-    let RecordClass::Base(record) = classify(&mut bytes) else {
+    let RecordClass::Base(record) = RecordClass::classify(&mut bytes) else {
         return Some(0);
     };
     let mut records = 0;

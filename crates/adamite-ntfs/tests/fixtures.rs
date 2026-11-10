@@ -10,7 +10,7 @@
 use adamite_fixtures::{EntryKind, Fixture, ReferenceMft};
 use adamite_ntfs::{
     AttributeFlags, AttributeType, FileName, FileRecord, FileRef, IndexAllocation, RecordClass,
-    RecordFlags, RecordHeader, ReparsePoint, StandardInformation, classify,
+    RecordFlags, RecordHeader, ReparsePoint, StandardInformation,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -145,7 +145,7 @@ fn verify(name: &str) {
     let mut extensions = Vec::new();
     for (number, bytes) in mft.records().enumerate() {
         let mut raw = bytes.to_vec();
-        match classify(&mut raw) {
+        match RecordClass::classify(&mut raw) {
             RecordClass::Base(record) => {
                 observe(record, observed.entry(number as u64).or_default())
             }
@@ -275,7 +275,7 @@ fn verify(name: &str) {
             );
             let mut raw = mft.record(number).unwrap().to_vec();
             assert!(
-                matches!(classify(&mut raw), RecordClass::Base(_)),
+                matches!(RecordClass::classify(&mut raw), RecordClass::Base(_)),
                 "{} record {number} is not Base",
                 fill.dir
             );
@@ -317,7 +317,7 @@ fn verify(name: &str) {
     for deleted in &fixture.manifest().deleted {
         let mut raw = mft.record(deleted.record).unwrap().to_vec();
         assert!(
-            matches!(classify(&mut raw), RecordClass::NotInUse(_)),
+            matches!(RecordClass::classify(&mut raw), RecordClass::NotInUse(_)),
             "{} deleted record",
             deleted.path
         );
@@ -365,7 +365,7 @@ fn v3_allocations_use_first_segment_values_for_all_stream_types() {
             ..Default::default()
         }
         .build();
-        let RecordClass::Base(record) = classify(&mut bytes) else {
+        let RecordClass::Base(record) = RecordClass::classify(&mut bytes) else {
             panic!("synthetic record must be a base")
         };
         let mut actual = Observed::default();

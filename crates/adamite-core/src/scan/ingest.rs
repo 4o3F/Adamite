@@ -14,8 +14,7 @@ use crate::{
     entry::{Patch, RecordKind, RecordSlot},
 };
 use adamite_ntfs::{
-    FileRef, ROOT_RECORD, RecordClass, RecordError, RecordFlags, RecordHeader, classify,
-    fixup::FixupError,
+    FileRef, ROOT_RECORD, RecordClass, RecordError, RecordFlags, RecordHeader, fixup::FixupError,
 };
 
 const RECORDS_PER_STEP: usize = 256;
@@ -170,7 +169,7 @@ impl Ingest {
     fn record(&mut self, mapping: &MftMapping) -> Result<(), ScanError> {
         let ordinal = self.stats.records_total;
         bump(&mut self.stats.records_total)?;
-        let class = classify(&mut self.raw);
+        let class = RecordClass::classify(&mut self.raw);
         let mut slot = RecordSlot {
             classification: RecordKind::Corrupt,
             sequence: None,

@@ -4,8 +4,7 @@ use crate::{Extent, Manifest};
 use adamite_ntfs::fixup::FixupError;
 use adamite_ntfs::{
     AttributeError, AttributeList, AttributeListError, AttributeType, FileRecord, FileRef,
-    FileRefError, GeometryError, NonResident, RecordError, RunlistError, VolumeGeometry, fixup,
-    parse_boot_sector,
+    FileRefError, GeometryError, NonResident, RecordError, RunlistError, VolumeGeometry,
 };
 use ruzstd::decoding::{StreamingDecoder, errors::FrameDecoderError};
 use snafu::{OptionExt, ResultExt, Snafu, ensure};
@@ -100,6 +99,13 @@ pub enum FixtureError {
         message: &'static str,
     },
 }
+fn record_error(error: RecordError) -> FixtureError {
+    match error {
+        RecordError::Fixup { source } => FixtureError::Fixup { source },
+        source => FixtureError::Record { source },
+    }
+}
+
 type Result<T, E = FixtureError> = std::result::Result<T, E>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -222,7 +228,7 @@ impl ReferenceMft {
     pub fn from_fixture(fixture: &Fixture) -> Result<Self> {
         let image = fixture.image();
         let manifest = fixture.manifest();
-        let geometry = parse_boot_sector(image).context(GeometrySnafu)?;
+        let geometry = VolumeGeometry::from_boot_sector(image).context(GeometrySnafu)?;
         let expected = &manifest.geometry;
         ensure!(
             geometry.bytes_per_sector() == expected.bytes_per_sector
@@ -243,8 +249,7 @@ impl ReferenceMft {
                 message: "MFT address overflow",
             })?;
         let mut raw = physical(image, start, u64::from(geometry.file_record_size()))?.to_vec();
-        let record =
-            FileRecord::parse(fixup::apply(&mut raw).context(FixupSnafu)?).context(RecordSnafu)?;
+        let record = FileRecord::parse(&mut raw).map_err(record_error)?;
         ensure!(
             record.header().base_reference().is_null(),
             InvalidSnafu {
@@ -350,8 +355,7 @@ impl ReferenceMft {
                     pending.push(request);
                     continue;
                 };
-                let record = FileRecord::parse(fixup::apply(&mut raw).context(FixupSnafu)?)
-                    .context(RecordSnafu)?;
+                let record = FileRecord::parse(&mut raw).map_err(record_error)?;
                 ensure!(
                     record.header().sequence() == request.sequence
                         && record.header().base_reference()
@@ -554,6 +558,87 @@ mod tests {
     };
 
     const MANIFEST: &str = include_str!("../../../tests/fixtures/ntfs/basic-4k.json");
+
+    #[test]
+    fn reference_record_and_extension_headers_precede_fixup_with_preserved_sources()
+    -> Result<(), Box<dyn Error>> {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/ntfs/frag-512.json");
+        let fixture = Fixture::load(&path)?;
+        let manifest = fs::read(path)?;
+        let reference = ReferenceMft::from_fixture(&fixture)?;
+        let extension = reference
+            .records()
+            .enumerate()
+            .find_map(|(ordinal, raw)| {
+                let header = adamite_ntfs::RecordHeader::peek(raw).ok()?;
+                let base = header.base_reference();
+                (!base.is_null() && base.record() == 0).then_some(ordinal)
+            })
+            .ok_or("fragmented fixture has no MFT extension")?;
+        let cluster = u64::from(reference.geometry().cluster_size());
+        for ordinal in [0, extension] {
+            let virtual_offset =
+                u64::try_from(ordinal)? * u64::from(reference.geometry().file_record_size());
+            let vcn = virtual_offset / cluster;
+            let extent = reference
+                .extents()
+                .iter()
+                .find(|extent| extent.vcn <= vcn && vcn < extent.vcn + extent.len)
+                .ok_or("missing record extent")?;
+            let physical = (extent.lcn.ok_or("sparse MFT extent")? + vcn - extent.vcn) * cluster
+                + virtual_offset % cluster;
+            let start = usize::try_from(physical)?;
+            for invalid_header in [false, true] {
+                for torn in [false, true] {
+                    let mut image = fixture.image().to_vec();
+                    if invalid_header {
+                        image[start + 28..start + 32].copy_from_slice(&999u32.to_le_bytes());
+                    }
+                    if torn {
+                        image[start + 510] ^= 1;
+                    }
+                    let changed = Fixture::from_image(image, serde_json::from_slice(&manifest)?)?;
+                    let result = ReferenceMft::from_fixture(&changed);
+                    if !invalid_header && !torn {
+                        result?;
+                        continue;
+                    }
+                    let error = result.unwrap_err();
+                    let nested = error.source().ok_or("missing fixture parser source")?;
+                    match &error {
+                        FixtureError::Record { source } => {
+                            assert!(invalid_header);
+                            assert_eq!(
+                                *source,
+                                RecordError::InvalidAllocatedSize {
+                                    declared: 999,
+                                    actual: reference.geometry().file_record_size() as usize
+                                }
+                            );
+                            assert_eq!(nested.downcast_ref::<RecordError>(), Some(source));
+                            assert_eq!(error.to_string(), format!("invalid FILE record: {source}"));
+                        }
+                        FixtureError::Fixup { source } => {
+                            assert!(!invalid_header && torn);
+                            assert!(matches!(
+                                source,
+                                FixupError::TrailerMismatch { stride: 0, .. }
+                            ));
+                            assert_eq!(nested.downcast_ref::<FixupError>(), Some(source));
+                            assert_eq!(
+                                error.to_string(),
+                                format!("invalid record fixup: {source}")
+                            );
+                        }
+                        _ => return Err(error.into()),
+                    }
+                    assert!(nested.source().is_none());
+                }
+            }
+        }
+        Ok(())
+    }
 
     #[test]
     fn raw_image_loading_does_not_require_a_valid_mft() {

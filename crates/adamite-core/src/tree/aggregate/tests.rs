@@ -48,7 +48,9 @@ fn build(entries: Vec<EntryRecord>) -> Result<Snapshot, Box<dyn Error>> {
     let mut stats = ScanStats::default();
     for _ in 0..100_000 {
         if linker.step(&mut stats)? {
-            let geometry = adamite_ntfs::parse_boot_sector(&BootSectorBuilder::default().build())?;
+            let geometry = adamite_ntfs::VolumeGeometry::from_boot_sector(
+                &BootSectorBuilder::default().build(),
+            )?;
             let mut builder =
                 SnapshotBuilder::new(linker.result, geometry, &ScanContext::default())?;
             for _ in 0..100_000 {

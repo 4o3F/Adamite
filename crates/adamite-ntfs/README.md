@@ -5,17 +5,19 @@
 ## Reading records in Phase 1
 
 1. Peek with `RecordHeader::peek` when the caller needs fixed header fields before classification.
-2. Call `classify` on the mutable record buffer. It checks size, uniform unused fill, BAAD, FILE signature, header validity and IN_USE before fixup. Base and extension results borrow fixed bytes; other classes leave the buffer unchanged.
+2. Call `RecordClass::classify` on the mutable record buffer. It checks size, uniform unused fill, BAAD, FILE signature, header validity and IN_USE before fixup. Base and extension results borrow fixed bytes; other classes leave the buffer unchanged.
 3. Exhaust `FileRecord::attributes()` and each required runlist so that late errors are observed.
 4. Copy names, references and required scalar fields into caller-owned storage. `FileName` reports its cached sizes, while `Data` reports its own stream values. Name selection, stream accounting and extension-record merging belong to the core.
-5. Drop borrowed views before returning the buffer to its pool. Fixup produces a private-constructor `FixedRecord` token consumed by `FileRecord::parse`; protection uses 512-byte strides even on 4Kn volumes.
+5. Drop borrowed views before returning the buffer to its pool. For direct parsing, `FileRecord::parse(&mut buffer)` validates the header and applies fixup, preserving the buffer on every error. Protection uses 512-byte strides even on 4Kn volumes.
+
+Decode volume geometry with `VolumeGeometry::from_boot_sector(&bytes)` before locating records.
 
 The callback below copies each name into the caller's chosen storage. Its lifetime bound prevents retaining a borrowed name after the call. The example uses snafu to preserve each parser error category.
 
 ```rust
 use adamite_ntfs::{
     AttributeError, AttributeType, FileName, FileRef, RecordClass,
-    RecordError, RecordHeader, Utf16Le, ValueError, classify,
+    RecordError, RecordHeader, Utf16Le, ValueError,
 };
 use snafu::Snafu;
 
@@ -35,7 +37,7 @@ fn scan_record(
 ) -> Result<(), ScanError> {
     let _header = RecordHeader::peek(buffer)?;
     {
-        match classify(buffer) {
+        match RecordClass::classify(buffer) {
             RecordClass::Base(record) | RecordClass::Extension(record) => {
                 for attribute in record.attributes() {
                     let attribute = attribute?;

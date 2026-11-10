@@ -11,7 +11,7 @@ mod support;
 use adamite_fixtures::builders::{
     AttrBuilder, AttrListBuilder, AttrListEntryModel, NonResidentModel, RecordBuilder,
 };
-use adamite_ntfs::{AttributeList, AttributeListError, FileRecord, fixup};
+use adamite_ntfs::{AttributeList, AttributeListError, FileRecord};
 use proptest::prelude::*;
 
 fn default_value() -> Vec<u8> {
@@ -49,7 +49,7 @@ fn mft_extension_reference_and_resident_attribute_adapter() {
         ..Default::default()
     }
     .build();
-    let record = FileRecord::parse(fixup::apply(&mut bytes).unwrap()).unwrap();
+    let record = FileRecord::parse(&mut bytes).unwrap();
     assert_eq!(
         AttributeList::from_attribute(record.attributes().next().unwrap().unwrap())
             .unwrap()
@@ -64,7 +64,7 @@ fn mft_extension_reference_and_resident_attribute_adapter() {
         ..Default::default()
     }
     .build();
-    let record = FileRecord::parse(fixup::apply(&mut bytes).unwrap()).unwrap();
+    let record = FileRecord::parse(&mut bytes).unwrap();
     assert!(matches!(
         AttributeList::from_attribute(record.attributes().next().unwrap().unwrap()),
         Err(AttributeListError::Value {
@@ -79,7 +79,7 @@ fn mft_extension_reference_and_resident_attribute_adapter() {
         ..Default::default()
     }
     .build();
-    let record = FileRecord::parse(fixup::apply(&mut bytes).unwrap()).unwrap();
+    let record = FileRecord::parse(&mut bytes).unwrap();
     assert!(matches!(
         AttributeList::from_attribute(record.attributes().next().unwrap().unwrap()),
         Err(AttributeListError::Value {

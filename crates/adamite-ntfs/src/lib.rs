@@ -20,7 +20,7 @@ pub use attribute::iter::AttributeIter;
 pub use attribute::non_resident::{NonResident, StreamSizes};
 pub use attribute::runlist::{Run, Runlist, RunlistError, VcnRange};
 pub use attribute::{Attribute, AttributeError, AttributeFlags, AttributeType};
-pub use boot::{BootError, BootError as GeometryError, VolumeGeometry, parse_boot_sector};
+pub use boot::{BootError, BootError as GeometryError, VolumeGeometry};
 pub use record::fixup;
 pub use record::reference::{FileRef, FileRefError};
 pub use record::system::{
@@ -28,7 +28,7 @@ pub use record::system::{
     FIRST_NON_RESERVED_RECORD, LOG_FILE_RECORD, MFT_MIRROR_RECORD, MFT_RECORD, ROOT_RECORD,
     SECURE_RECORD, UP_CASE_RECORD, VOLUME_RECORD,
 };
-pub use record::{FileRecord, RecordClass, RecordError, RecordFlags, RecordHeader, classify};
+pub use record::{FileRecord, RecordClass, RecordError, RecordFlags, RecordHeader};
 pub use utf16::{LossyChars, StrictChars, Units, Utf16Error, Utf16Le};
 pub use value::ValueError;
 pub use value::attribute_list::{AttributeList, AttributeListEntry, AttributeListError};

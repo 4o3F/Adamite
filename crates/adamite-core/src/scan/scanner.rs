@@ -20,7 +20,7 @@ use crate::{
 };
 use adamite_ntfs::{
     AttributeError, AttributeListError, FileRefError, GeometryError, RecordError, RunlistError,
-    fixup::FixupError, parse_boot_sector,
+    VolumeGeometry, fixup::FixupError,
 };
 use snafu::Snafu;
 use std::collections::TryReserveError;
@@ -125,7 +125,7 @@ pub enum ScanError {
         /// Parser fixup failure.
         source: FixupError,
     },
-    /// A fixed bootstrap record header is invalid.
+    /// A bootstrap record header is invalid.
     #[snafu(display("invalid bootstrap record: {source}"))]
     Record {
         /// Parser record failure.
@@ -317,7 +317,7 @@ impl Scanner {
             ScanPhase::Failed => Err(ScanError::Inactive),
             ScanPhase::Boot => {
                 if let Some((_, bytes)) = self.requests.take_ready() {
-                    let geometry = parse_boot_sector(&bytes)
+                    let geometry = VolumeGeometry::from_boot_sector(&bytes)
                         .map_err(|source| ScanError::Geometry { source })?;
                     let mapping = MftMapping::record0(geometry)?;
                     let len = usize::try_from(geometry.file_record_size())

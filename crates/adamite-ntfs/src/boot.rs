@@ -102,111 +102,113 @@ impl VolumeGeometry {
                 ..end.checked_mul(size).with_context(error)?,
         )
     }
-}
 
-/// Decodes boot-sector identification, sizes, then volume and MFT numeric relationships.
-///
-/// Only the first 512 bytes are interpreted. Boot code and reserved bytes are ignored.
-///
-/// # Errors
-///
-/// Returns [`BootError`] in validation order: input extent, identification,
-/// sector/cluster/record sizes, total sectors, then MFT and MFTMirr locations.
-pub fn parse_boot_sector(input: &[u8]) -> Result<VolumeGeometry, BootError> {
-    let boot = input.get(..512).context(TruncatedSnafu)?;
-    ensure!(
-        boot.get(3..11) == Some(b"NTFS    ") && boot.get(510..512) == Some(&[0x55, 0xaa]),
-        IdentificationSnafu
-    );
-    let bytes_per_sector = util::read_u16(boot, 0x0b).context(TruncatedSnafu)?;
-    ensure!(
-        matches!(bytes_per_sector, 512 | 1024 | 2048 | 4096),
-        InvalidSectorSizeSnafu {
-            size: bytes_per_sector
-        }
-    );
-    let encoded = util::read_u8(boot, 0x0d).context(TruncatedSnafu)?;
-    let sectors_per_cluster = match encoded {
-        1..=128 if encoded.is_power_of_two() => u32::from(encoded),
-        0xf4..=0xff => 1u32
-            .checked_shl(
-                256u32
-                    .checked_sub(u32::from(encoded))
-                    .context(InvalidClusterEncodingSnafu { encoding: encoded })?,
-            )
-            .context(InvalidClusterEncodingSnafu { encoding: encoded })?,
-        _ => return InvalidClusterEncodingSnafu { encoding: encoded }.fail(),
-    };
-    let cluster_size = u32::from(bytes_per_sector)
-        .checked_mul(sectors_per_cluster)
-        .context(InvalidClusterEncodingSnafu { encoding: encoded })?;
-    ensure!(
-        cluster_size <= MAX_CLUSTER_SIZE,
-        ClusterTooLargeSnafu { size: cluster_size }
-    );
-    let file_encoding = util::read_i8(boot, 0x40).context(TruncatedSnafu)?;
-    let index_encoding = util::read_i8(boot, 0x44).context(TruncatedSnafu)?;
-    let file_record_size =
-        decode_record_size(file_encoding, cluster_size).context(InvalidFileRecordSizeSnafu {
-            encoding: file_encoding,
-        })?;
-    let index_record_size =
-        decode_record_size(index_encoding, cluster_size).context(InvalidIndexRecordSizeSnafu {
-            encoding: index_encoding,
-        })?;
-    let total_sectors = util::read_u64(boot, 0x28).context(TruncatedSnafu)?;
-    ensure!(
-        (1..=i64::MAX as u64).contains(&total_sectors),
-        InvalidTotalSectorsSnafu {
-            sectors: total_sectors
-        }
-    );
-    let total_bytes = total_sectors
-        .checked_mul(u64::from(bytes_per_sector))
-        .context(InvalidTotalSectorsSnafu {
-            sectors: total_sectors,
-        })?;
-    let total_clusters = total_sectors
-        .checked_div(u64::from(sectors_per_cluster))
-        .context(InvalidTotalSectorsSnafu {
-            sectors: total_sectors,
-        })?;
-    ensure!(
-        total_clusters > 0,
-        InvalidTotalSectorsSnafu {
-            sectors: total_sectors
-        }
-    );
-    let mft_lcn = util::read_u64(boot, 0x30).context(TruncatedSnafu)?;
-    let mftmirr_lcn = util::read_u64(boot, 0x38).context(TruncatedSnafu)?;
-    let complete_bytes = total_clusters
-        .checked_mul(u64::from(cluster_size))
-        .context(InvalidTotalSectorsSnafu {
-            sectors: total_sectors,
-        })?;
-    let fits_record = |lcn: u64| {
-        lcn.checked_mul(u64::from(cluster_size))
-            .and_then(|start| start.checked_add(u64::from(file_record_size)))
-            .is_some_and(|end| end <= complete_bytes)
-    };
-    ensure!(fits_record(mft_lcn), MftOutOfVolumeSnafu { lcn: mft_lcn });
-    ensure!(
-        fits_record(mftmirr_lcn),
-        MftMirrorOutOfVolumeSnafu { lcn: mftmirr_lcn }
-    );
-    Ok(VolumeGeometry {
-        bytes_per_sector,
-        sectors_per_cluster,
-        cluster_size,
-        file_record_size,
-        index_record_size,
-        total_sectors,
-        total_clusters,
-        total_bytes,
-        mft_lcn,
-        mftmirr_lcn,
-        serial: util::read_u64(boot, 0x48).context(TruncatedSnafu)?,
-    })
+    /// Decodes boot-sector identification, sizes, then volume and MFT numeric relationships.
+    ///
+    /// Only the first 512 bytes are interpreted. Boot code and reserved bytes are ignored.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BootError`] in validation order: input extent, identification,
+    /// sector/cluster/record sizes, total sectors, then MFT and MFTMirr locations.
+    pub fn from_boot_sector(input: &[u8]) -> Result<Self, BootError> {
+        let boot = input.get(..512).context(TruncatedSnafu)?;
+        ensure!(
+            boot.get(3..11) == Some(b"NTFS    ") && boot.get(510..512) == Some(&[0x55, 0xaa]),
+            IdentificationSnafu
+        );
+        let bytes_per_sector = util::read_u16(boot, 0x0b).context(TruncatedSnafu)?;
+        ensure!(
+            matches!(bytes_per_sector, 512 | 1024 | 2048 | 4096),
+            InvalidSectorSizeSnafu {
+                size: bytes_per_sector
+            }
+        );
+        let encoded = util::read_u8(boot, 0x0d).context(TruncatedSnafu)?;
+        let sectors_per_cluster = match encoded {
+            1..=128 if encoded.is_power_of_two() => u32::from(encoded),
+            0xf4..=0xff => 1u32
+                .checked_shl(
+                    256u32
+                        .checked_sub(u32::from(encoded))
+                        .context(InvalidClusterEncodingSnafu { encoding: encoded })?,
+                )
+                .context(InvalidClusterEncodingSnafu { encoding: encoded })?,
+            _ => return InvalidClusterEncodingSnafu { encoding: encoded }.fail(),
+        };
+        let cluster_size = u32::from(bytes_per_sector)
+            .checked_mul(sectors_per_cluster)
+            .context(InvalidClusterEncodingSnafu { encoding: encoded })?;
+        ensure!(
+            cluster_size <= MAX_CLUSTER_SIZE,
+            ClusterTooLargeSnafu { size: cluster_size }
+        );
+        let file_encoding = util::read_i8(boot, 0x40).context(TruncatedSnafu)?;
+        let index_encoding = util::read_i8(boot, 0x44).context(TruncatedSnafu)?;
+        let file_record_size = decode_record_size(file_encoding, cluster_size).context(
+            InvalidFileRecordSizeSnafu {
+                encoding: file_encoding,
+            },
+        )?;
+        let index_record_size = decode_record_size(index_encoding, cluster_size).context(
+            InvalidIndexRecordSizeSnafu {
+                encoding: index_encoding,
+            },
+        )?;
+        let total_sectors = util::read_u64(boot, 0x28).context(TruncatedSnafu)?;
+        ensure!(
+            (1..=i64::MAX as u64).contains(&total_sectors),
+            InvalidTotalSectorsSnafu {
+                sectors: total_sectors
+            }
+        );
+        let total_bytes = total_sectors
+            .checked_mul(u64::from(bytes_per_sector))
+            .context(InvalidTotalSectorsSnafu {
+                sectors: total_sectors,
+            })?;
+        let total_clusters = total_sectors
+            .checked_div(u64::from(sectors_per_cluster))
+            .context(InvalidTotalSectorsSnafu {
+                sectors: total_sectors,
+            })?;
+        ensure!(
+            total_clusters > 0,
+            InvalidTotalSectorsSnafu {
+                sectors: total_sectors
+            }
+        );
+        let mft_lcn = util::read_u64(boot, 0x30).context(TruncatedSnafu)?;
+        let mftmirr_lcn = util::read_u64(boot, 0x38).context(TruncatedSnafu)?;
+        let complete_bytes = total_clusters
+            .checked_mul(u64::from(cluster_size))
+            .context(InvalidTotalSectorsSnafu {
+                sectors: total_sectors,
+            })?;
+        let fits_record = |lcn: u64| {
+            lcn.checked_mul(u64::from(cluster_size))
+                .and_then(|start| start.checked_add(u64::from(file_record_size)))
+                .is_some_and(|end| end <= complete_bytes)
+        };
+        ensure!(fits_record(mft_lcn), MftOutOfVolumeSnafu { lcn: mft_lcn });
+        ensure!(
+            fits_record(mftmirr_lcn),
+            MftMirrorOutOfVolumeSnafu { lcn: mftmirr_lcn }
+        );
+        Ok(Self {
+            bytes_per_sector,
+            sectors_per_cluster,
+            cluster_size,
+            file_record_size,
+            index_record_size,
+            total_sectors,
+            total_clusters,
+            total_bytes,
+            mft_lcn,
+            mftmirr_lcn,
+            serial: util::read_u64(boot, 0x48).context(TruncatedSnafu)?,
+        })
+    }
 }
 
 fn decode_record_size(encoding: i8, cluster_size: u32) -> Option<u32> {

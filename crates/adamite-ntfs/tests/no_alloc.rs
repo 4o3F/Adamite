@@ -13,7 +13,7 @@ use adamite_fixtures::builders::{
 };
 use adamite_ntfs::{
     AttributeList, Bitmap, Data, FileName, IndexAllocation, RecordClass, ReparsePoint,
-    StandardInformation, classify,
+    StandardInformation,
 };
 use std::{
     alloc::{GlobalAlloc, Layout, System},
@@ -115,7 +115,7 @@ fn record_attribute_and_runlist_hot_path_does_not_allocate() {
     let mut attributes_seen = 0;
     let mut runs_seen = 0;
     for bytes in &mut records {
-        let record = match classify(bytes) {
+        let record = match RecordClass::classify(bytes) {
             RecordClass::Base(record) | RecordClass::Extension(record) => record,
             other => panic!("unexpected class {other:?}"),
         };
@@ -197,7 +197,7 @@ fn real_fixture_records_do_not_allocate_during_classification_or_iteration() {
     let guard = CountingGuard;
     let mut seen = 0;
     for bytes in &mut records {
-        let record = match classify(bytes) {
+        let record = match RecordClass::classify(bytes) {
             RecordClass::Base(record) => record,
             other => panic!("unexpected fixture class {other:?}"),
         };

@@ -31,7 +31,7 @@ use adamite_fixtures::{
         NonResidentModel, RecordBuilder,
     },
 };
-use adamite_ntfs::{AttributeType, FileRecord, FileRef, fixup};
+use adamite_ntfs::{AttributeType, FileRecord, FileRef};
 use std::path::Path;
 
 type TestResult = Result<(), Box<dyn Error>>;
@@ -72,7 +72,7 @@ fn image(boot: &BootSectorBuilder, record: &[u8]) -> Result<Vec<u8>, Box<dyn Err
         .get_mut(..512)
         .ok_or("boot image slice")?
         .copy_from_slice(&boot.build());
-    let geometry = parse_boot_sector(&boot.build())?;
+    let geometry = VolumeGeometry::from_boot_sector(&boot.build())?;
     let offset = geometry
         .mft_lcn()
         .checked_mul(u64::from(geometry.cluster_size()))
@@ -189,6 +189,80 @@ fn reject_record(record: &[u8]) -> Result<ScanError, Box<dyn Error>> {
     );
     assert!(matches!(scanner.step(), Err(ScanError::Inactive)));
     Ok(error)
+}
+
+#[test]
+fn bootstrap_record_and_extension_headers_precede_fixup_with_preserved_sources() -> TestResult {
+    let geometry = VolumeGeometry::from_boot_sector(&boot().build())?;
+    let base = FileRef::new(0, 7)?;
+    let extension_ref = FileRef::new(1, 7)?;
+    for extension in [false, true] {
+        for invalid_header in [false, true] {
+            for torn in [false, true] {
+                let builder = if extension {
+                    RecordBuilder {
+                        record_number: 1,
+                        base: base.raw(),
+                        ..record()
+                    }
+                } else {
+                    record()
+                };
+                let mut raw = builder.build();
+                if invalid_header {
+                    raw.get_mut(28..32)
+                        .ok_or("allocated-size field")?
+                        .copy_from_slice(&999u32.to_le_bytes());
+                }
+                if torn {
+                    builder.corrupt_tail(&mut raw, 1);
+                }
+                let result = if extension {
+                    bootstrap::parse_extension(raw, extension_ref, base, geometry).map(|_| ())
+                } else {
+                    bootstrap::parse_record0(raw, geometry).map(|_| ())
+                };
+                if !invalid_header && !torn {
+                    result?;
+                    continue;
+                }
+                let error = result.err().ok_or("expected bootstrap parse failure")?;
+                let nested = error.source().ok_or("missing parser source")?;
+                match &error {
+                    ScanError::Record { source } => {
+                        assert!(invalid_header);
+                        assert_eq!(
+                            *source,
+                            RecordError::InvalidAllocatedSize {
+                                declared: 999,
+                                actual: 1024
+                            }
+                        );
+                        assert_eq!(nested.downcast_ref::<RecordError>(), Some(source));
+                        assert_eq!(
+                            error.to_string(),
+                            format!("invalid bootstrap record: {source}")
+                        );
+                    }
+                    ScanError::Fixup { source } => {
+                        assert!(!invalid_header && torn);
+                        assert!(matches!(
+                            source,
+                            FixupError::TrailerMismatch { stride: 1, .. }
+                        ));
+                        assert_eq!(nested.downcast_ref::<FixupError>(), Some(source));
+                        assert_eq!(
+                            error.to_string(),
+                            format!("invalid bootstrap fixup: {source}")
+                        );
+                    }
+                    _ => return Err(error.into()),
+                }
+                assert!(nested.source().is_none());
+            }
+        }
+    }
+    Ok(())
 }
 
 #[test]
@@ -648,8 +722,7 @@ fn real_fixture(name: &str) -> TestResult {
         .get(start..end)
         .ok_or("fixture record slice")?
         .to_vec();
-    let fixed = fixup::apply(&mut raw)?;
-    let record = FileRecord::parse(fixed)?;
+    let record = FileRecord::parse(&mut raw)?;
     let mut highest = None;
     for attr in record.attributes() {
         let attr = attr?;
@@ -929,7 +1002,17 @@ fn bootstrap_missing_target_and_segment_identity_are_fatal() -> TestResult {
         .ok_or("missing extension record")?
         .fill(0);
     let (_, _, outcome) = discover_image(&image, 2, 512)?;
-    assert!(matches!(outcome, Err(ScanError::Fixup { .. })));
+    assert!(
+        matches!(
+            outcome,
+            Err(ScanError::Record {
+                source: RecordError::InvalidSignature {
+                    signature: [0, 0, 0, 0]
+                }
+            })
+        ),
+        "{outcome:?}"
+    );
     Ok(())
 }
 
