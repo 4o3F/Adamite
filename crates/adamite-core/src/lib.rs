@@ -26,8 +26,8 @@
 //! # }
 //! ```
 //!
-//! Successful tree linking currently returns [`ScanError::PhaseNotImplemented`]
-//! for [`ScanPhase::Snapshot`]. Snapshot construction and scan completion are pending.
+//! Snapshot construction currently returns [`ScanError::PhaseNotImplemented`]
+//! for [`ScanPhase::Aggregate`]. Aggregation and scan completion are pending.
 #![forbid(unsafe_code)]
 #![deny(
     clippy::indexing_slicing,
@@ -47,7 +47,7 @@ pub use scan::{
     ConfigError, FeedError, ReadRequest, RequestId, ScanConfig, ScanContext, ScanError, ScanOutput,
     ScanPhase, ScanProgress, ScanStep, Scanner,
 };
-pub use snapshot::Snapshot;
+pub use snapshot::{Node, NodeFlags, NodeId, NodeView, Snapshot, SnapshotError, VolumeInfo};
 pub use stats::ScanStats;
 
 const _: fn() = || {

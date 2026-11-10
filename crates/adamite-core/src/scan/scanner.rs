@@ -10,8 +10,9 @@ use super::{
     merge::Merge,
 };
 use crate::{
-    ScanStats, Snapshot,
+    ScanStats, Snapshot, SnapshotError,
     entry::EntryRecord,
+    snapshot::SnapshotBuilder,
     tree::link::{Linker, ParentTree},
 };
 use adamite_ntfs::{
@@ -210,6 +211,12 @@ pub enum ScanError {
         /// Missing virtual or physical byte offset.
         offset: u64,
     },
+    /// Snapshot representation or storage construction failed.
+    #[snafu(display("snapshot construction failed: {source}"))]
+    Snapshot {
+        /// Snapshot construction failure.
+        source: SnapshotError,
+    },
     /// Scan storage could not be allocated.
     #[snafu(display("scan allocation failed: {source}"))]
     Allocation {
@@ -218,9 +225,15 @@ pub enum ScanError {
     },
 }
 
+impl From<SnapshotError> for ScanError {
+    fn from(source: SnapshotError) -> Self {
+        Self::Snapshot { source }
+    }
+}
+
 /// Streams, merges and resolves NTFS records from caller-supplied bytes.
 ///
-/// Stops explicitly before snapshot storage construction, which is not yet implemented.
+/// Stops after snapshot construction, before subtree aggregation.
 #[derive(Debug)]
 pub struct Scanner {
     config: ScanConfig,
@@ -235,6 +248,7 @@ pub struct Scanner {
     entries: Vec<EntryRecord>,
     linker: Option<Linker>,
     parent_tree: Option<ParentTree>,
+    snapshot_builder: Option<SnapshotBuilder>,
 }
 
 #[derive(Clone, Copy)]
@@ -264,6 +278,7 @@ impl Scanner {
             entries: Vec::new(),
             linker: None,
             parent_tree: None,
+            snapshot_builder: None,
         })
     }
 
@@ -278,8 +293,8 @@ impl Scanner {
     /// # Errors
     ///
     /// Invalid geometry, bootstrap data, arithmetic overflow or allocation failure
-    /// terminates the scan. Successful tree linking currently terminates with
-    /// [`ScanError::PhaseNotImplemented`] for Snapshot. Further calls return Inactive.
+    /// terminates the scan. Successful snapshot construction currently terminates with
+    /// [`ScanError::PhaseNotImplemented`] for Aggregate. Further calls return Inactive.
     pub fn step(&mut self) -> Result<ScanStep, ScanError> {
         let span = tracing::info_span!("scan_phase", phase = ?self.phase);
         let _entered = span.enter();
@@ -321,6 +336,7 @@ impl Scanner {
             ScanPhase::Stream => self.stream(),
             ScanPhase::Merge => self.merge(),
             ScanPhase::Link => self.link(),
+            ScanPhase::Snapshot => self.snapshot(),
             phase => Err(ScanError::PhaseNotImplemented { phase }),
         }
     }
@@ -472,6 +488,42 @@ impl Scanner {
         Ok(self.progress(InputStatus::Ready))
     }
 
+    fn snapshot(&mut self) -> Result<ScanStep, ScanError> {
+        if self.snapshot_builder.is_none() {
+            let tree = self.parent_tree.take().ok_or(ScanError::Link {
+                reason: "missing parent tree",
+            })?;
+            let geometry = self
+                .bootstrap
+                .as_ref()
+                .ok_or(ScanError::Link {
+                    reason: "missing volume geometry",
+                })?
+                .mapping
+                .geometry;
+            self.snapshot_builder =
+                Some(SnapshotBuilder::new(tree, geometry, &self.config.context)?);
+            return Ok(self.progress(InputStatus::Ready));
+        }
+        let builder = self.snapshot_builder.as_mut().ok_or(ScanError::Link {
+            reason: "missing snapshot builder",
+        })?;
+        if let Some(snapshot) = builder.step()? {
+            let stats = self
+                .ingest
+                .as_ref()
+                .ok_or(ScanError::Link {
+                    reason: "missing scan statistics",
+                })?
+                .stats
+                .clone();
+            self.output = Some(ScanOutput { snapshot, stats });
+            self.snapshot_builder = None;
+            self.phase = ScanPhase::Aggregate;
+        }
+        Ok(self.progress(InputStatus::Ready))
+    }
+
     fn progress(&self, input: InputStatus) -> ScanStep {
         ScanStep::Progress(ScanProgress {
             phase: self.phase,
@@ -504,6 +556,7 @@ impl Scanner {
         self.discovery = None;
         self.merge = None;
         self.linker = None;
+        self.snapshot_builder = None;
     }
 }
 

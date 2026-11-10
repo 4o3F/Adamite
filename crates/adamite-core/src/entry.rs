@@ -81,27 +81,7 @@ pub(crate) struct Patch {
     pub contribution: RecordContribution,
 }
 
-/// Flags used by generic tree construction and the eventual snapshot arena.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct EntryFlags(u16);
-
-impl EntryFlags {
-    pub const DIRECTORY: Self = Self(1);
-    pub const REPARSE: Self = Self(1 << 1);
-    pub const SPARSE: Self = Self(1 << 2);
-    pub const COMPRESSED: Self = Self(1 << 3);
-    pub const HIDDEN: Self = Self(1 << 4);
-    pub const SYSTEM: Self = Self(1 << 5);
-    pub const HARDLINK_DUP: Self = Self(1 << 6);
-    pub const SYNTHETIC: Self = Self(1 << 7);
-
-    pub fn insert(&mut self, flag: Self) {
-        self.0 |= flag.0;
-    }
-    pub fn contains(self, flag: Self) -> bool {
-        self.0 & flag.0 == flag.0
-    }
-}
+pub(crate) use crate::snapshot::NodeFlags as EntryFlags;
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct EntryName {

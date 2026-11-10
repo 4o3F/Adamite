@@ -4,12 +4,13 @@ use std::error::Error;
 #[test]
 fn protocol_done_transfers_output_once_then_rejects_calls() -> Result<(), Box<dyn Error>> {
     let mut scanner = Scanner::new(ScanConfig::default())?;
-    // Finalization is not implemented in M4; seed its terminal handoff directly.
+    let fixture = Fixture::load(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/ntfs/basic-4k.json"),
+    )?;
+    let (_, outcome) = drive_to(&mut scanner, fixture.image(), ScanPhase::Aggregate)?;
+    outcome?;
+    // Exercise terminal handoff using the real snapshot built by the scanner.
     scanner.phase = ScanPhase::Done;
-    scanner.output = Some(ScanOutput {
-        snapshot: Snapshot::default(),
-        stats: ScanStats::default(),
-    });
     assert!(matches!(scanner.step()?, ScanStep::Done(_)));
     for _ in 0..3 {
         assert!(matches!(scanner.step(), Err(ScanError::Inactive)));
@@ -30,7 +31,7 @@ use adamite_fixtures::{
         NonResidentModel, RecordBuilder,
     },
 };
-use adamite_ntfs::{AttributeType, FileRecord, fixup};
+use adamite_ntfs::{AttributeType, FileRecord, FileRef, fixup};
 use std::path::Path;
 
 type TestResult = Result<(), Box<dyn Error>>;
@@ -115,7 +116,10 @@ fn drive_to_observed(
         .and_then(|n| n.checked_mul(16))
         .and_then(|n| n.checked_add(4096))
         .ok_or("driver step bound")?;
-    let mut previous_records = 0u64;
+    let mut previous_records = scanner
+        .ingest
+        .as_ref()
+        .map_or(0, |state| state.stats.records_total);
     for _ in 0..calls {
         let result = scanner.step();
         peak_transport_bytes = peak_transport_bytes.max(assert_transport_bound(scanner)?);
@@ -2408,6 +2412,19 @@ fn merge_fixture_native_4kn_64k_all_entries_and_metafiles() -> TestResult {
 
 use crate::tree::link::ParentTree;
 
+fn name_bytes<'a>(
+    tree: &'a ParentTree,
+    node: &crate::tree::link::ResolvedNode,
+) -> Result<&'a [u8], Box<dyn Error>> {
+    let start = usize::try_from(node.name_off)?;
+    let end = start
+        .checked_add(usize::from(node.name_len))
+        .ok_or("name range overflow")?;
+    tree.names
+        .get(start..end)
+        .ok_or_else(|| "name pool range".into())
+}
+
 fn parent_path(tree: &ParentTree, mut id: usize) -> Result<String, Box<dyn Error>> {
     let mut parts = Vec::new();
     for _ in 0..tree.nodes.len() {
@@ -2416,7 +2433,7 @@ fn parent_path(tree: &ParentTree, mut id: usize) -> Result<String, Box<dyn Error
             return Ok(format!("/{}", parts.join("/")));
         }
         let node = tree.nodes.get(id).ok_or("parent-array index")?;
-        parts.push(std::str::from_utf8(&node.name)?);
+        parts.push(std::str::from_utf8(name_bytes(tree, node)?)?);
         id = node.parent;
     }
     Err("cycle in parent-array fixture path".into())
@@ -2521,7 +2538,11 @@ fn linking_fixture(name: &str) -> TestResult {
             1
         );
         assert!(!paths.contains_key("/deleted.txt"));
-        assert!(tree.nodes.iter().all(|node| node.name != b"LONGFI~1.TXT"));
+        assert!(
+            tree.nodes
+                .iter()
+                .all(|node| name_bytes(tree, node).is_ok_and(|name| name != b"LONGFI~1.TXT"))
+        );
         let deepest = fixture
             .manifest()
             .entries
@@ -2545,10 +2566,12 @@ fn linking_fixture(name: &str) -> TestResult {
             );
         }
     }
+    let (_, outcome) = drive_to(&mut scanner, fixture.image(), ScanPhase::Aggregate)?;
+    outcome?;
     assert!(matches!(
         scanner.step(),
         Err(ScanError::PhaseNotImplemented {
-            phase: ScanPhase::Snapshot
+            phase: ScanPhase::Aggregate
         })
     ));
     assert!(matches!(scanner.step(), Err(ScanError::Inactive)));
@@ -2598,4 +2621,85 @@ fn linking_driver_counts_invalid_utf16_at_conversion_once() -> TestResult {
         2
     );
     Ok(())
+}
+
+fn snapshot_fixture(name: &str) -> TestResult {
+    let fixture = Fixture::load(
+        &Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/ntfs")
+            .join(format!("{name}.json")),
+    )?;
+    let context = crate::ScanContext {
+        label: Some(name.into()),
+        scanned_at_filetime: Some(123),
+        free_bytes: Some(456),
+    };
+    let mut scanner = Scanner::new(ScanConfig {
+        max_outstanding: 4,
+        chunk_size: 512,
+        context: context.clone(),
+    })?;
+    let (_, outcome) = drive_to(&mut scanner, fixture.image(), ScanPhase::Aggregate)?;
+    outcome?;
+    let output = scanner.output.as_ref().ok_or("snapshot output")?;
+    let snapshot = &output.snapshot;
+    assert_eq!(snapshot.volume().context(), &context);
+    assert_eq!(&scanner.config.context, &context);
+    let mut paths = std::collections::BTreeMap::new();
+    for raw in 0..u32::try_from(snapshot.len())? {
+        let id = crate::NodeId::from_raw(raw);
+        paths.insert(snapshot.path(id)?.ok_or("snapshot path")?, id);
+    }
+    for expected in &fixture.manifest().entries {
+        let id = *paths
+            .get(&expected.path)
+            .ok_or_else(|| format!("{name}: missing {}", expected.path))?;
+        let node = snapshot.node(id).ok_or("manifest node")?;
+        assert_eq!(
+            node.file_ref(),
+            Some(FileRef::new(expected.record, expected.seq)?),
+            "{name}: {}",
+            expected.path
+        );
+        assert_eq!(node.attrs(), expected.attributes);
+        assert_eq!(node.mtime(), expected.mtime_filetime);
+        assert_eq!(u64::from(node.nlink()), expected.nlink);
+        assert_eq!(node.reparse_tag(), expected.reparse_tag);
+    }
+    for expected in &fixture.manifest().metafiles {
+        let leaf = expected
+            .path
+            .rsplit('/')
+            .next()
+            .ok_or("metafile basename")?;
+        let path = format!("/<NTFS metadata>/{leaf}");
+        let id = *paths
+            .get(&path)
+            .ok_or_else(|| format!("{name}: missing {path}"))?;
+        assert_eq!(
+            snapshot.node(id).ok_or("metafile node")?.file_ref(),
+            Some(FileRef::new(expected.record, expected.seq)?)
+        );
+    }
+    assert!(matches!(
+        scanner.step(),
+        Err(ScanError::PhaseNotImplemented {
+            phase: ScanPhase::Aggregate
+        })
+    ));
+    assert!(matches!(scanner.step(), Err(ScanError::Inactive)));
+    Ok(())
+}
+
+#[test]
+fn snapshot_fixture_basic_4k_paths_and_file_refs() -> TestResult {
+    snapshot_fixture("basic-4k")
+}
+#[test]
+fn snapshot_fixture_frag_512_paths_and_file_refs() -> TestResult {
+    snapshot_fixture("frag-512")
+}
+#[test]
+fn snapshot_fixture_native_4kn_64k_paths_and_file_refs() -> TestResult {
+    snapshot_fixture("4kn-64k")
 }

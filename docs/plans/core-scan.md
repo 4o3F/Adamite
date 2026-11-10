@@ -142,8 +142,8 @@ Each automated milestone is one bounded Codex run targeting 15–30 minutes, inc
 
 ### M10 — Snapshot arena and CSR
 
-- [ ] M10.1 Implement the exact Node layout/assertion, checked shared name pool, cold columns, deterministic ids and CSR. Link appends names directly to the pool; nodes keep (offset, len), with no per-node `Vec<u16>`/`Vec<u8>`; raw UTF-16 is transient for ordering/comparison. Add immutable node/children/name/path accessors and Send + Sync checks.
-- [ ] M10.2 Test root, invalid ids, Unicode, deep paths and representational bounds. Verify: `cargo test -p adamite-core --locked snapshot`; `cargo doc -p adamite-core --no-deps`.
+- [x] M10.1 Implement the exact Node layout/assertion, checked shared name pool, cold columns, deterministic ids and CSR. Link appends names directly to the pool; nodes keep (offset, len), with no per-node `Vec<u16>`/`Vec<u8>`; raw UTF-16 is transient for ordering/comparison. Add immutable node/children/name/path accessors and Send + Sync checks.
+- [x] M10.2 Test root, invalid ids, Unicode, deep paths and representational bounds. Verify: `cargo test -p adamite-core --locked snapshot`; `cargo doc -p adamite-core --no-deps`.
 
 ### M11 — Aggregation and finalization
 

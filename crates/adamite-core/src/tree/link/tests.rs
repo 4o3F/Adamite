@@ -146,6 +146,19 @@ fn run(entries: Vec<EntryRecord>) -> Result<(ParentTree, ScanStats), Box<dyn Err
     }
     Err("linker did not terminate".into())
 }
+fn name_bytes<'a>(
+    tree: &'a ParentTree,
+    node: &crate::tree::link::ResolvedNode,
+) -> Result<&'a [u8], Box<dyn Error>> {
+    let start = usize::try_from(node.name_off)?;
+    let end = start
+        .checked_add(usize::from(node.name_len))
+        .ok_or("name range overflow")?;
+    tree.names
+        .get(start..end)
+        .ok_or_else(|| "name pool range".into())
+}
+
 fn ids(tree: &ParentTree, record: u64) -> Vec<usize> {
     tree.nodes
         .iter()
@@ -170,7 +183,9 @@ fn primary(tree: &ParentTree, record: u64) -> Result<usize, Box<dyn Error>> {
 fn group(tree: &ParentTree, label: &[u8]) -> Result<usize, Box<dyn Error>> {
     tree.nodes
         .iter()
-        .position(|node| node.name == label && node.file_ref.is_none())
+        .position(|node| {
+            name_bytes(tree, node).is_ok_and(|name| name == label) && node.file_ref.is_none()
+        })
         .ok_or_else(|| "missing synthetic group".into())
 }
 fn path(tree: &ParentTree, mut id: usize) -> Result<String, Box<dyn Error>> {
@@ -181,7 +196,7 @@ fn path(tree: &ParentTree, mut id: usize) -> Result<String, Box<dyn Error>> {
             return Ok(format!("/{}", pieces.join("/")));
         }
         let node = tree.nodes.get(id).ok_or("path parent index")?;
-        pieces.push(std::str::from_utf8(&node.name)?);
+        pieces.push(std::str::from_utf8(name_bytes(tree, node)?)?);
         id = node.parent;
     }
     Err("cycle in parent-array path".into())
@@ -205,7 +220,7 @@ fn linking_same_parent_hardlinks_keep_values_and_choose_raw_name_primary() -> Te
         "unneeded synthetic directories"
     );
     assert_eq!(tree.nodes.first().ok_or("root")?.parent, 0);
-    assert_eq!(tree.nodes.first().ok_or("root")?.name, b"/");
+    assert_eq!(name_bytes(&tree, tree.nodes.first().ok_or("root")?)?, b"/");
     Ok(())
 }
 
@@ -235,11 +250,13 @@ fn linking_cross_directory_primary_is_parent_then_raw_name() -> TestResult {
     ];
     let (tree, _) = run(vec![root(), unicode])?;
     assert_eq!(
-        tree.nodes
-            .get(primary(&tree, 65)?)
-            .ok_or("unicode primary")?
-            .raw_name,
-        vec![0xd800, 0xdc00]
+        std::str::from_utf8(name_bytes(
+            &tree,
+            tree.nodes
+                .get(primary(&tree, 65)?)
+                .ok_or("unicode primary")?
+        )?)?,
+        "𐀀"
     );
     Ok(())
 }
@@ -276,7 +293,11 @@ fn linking_dos_suppression_dos_only_and_identical_link_deduplication() -> TestRe
     duplicate.names.extend([name(5, "same"), alias]);
     let (tree, stats) = run(vec![root(), file, only, duplicate])?;
     assert_eq!(ids(&tree, 64).len(), 1);
-    assert!(tree.nodes.iter().all(|node| node.name != b"LONGFI~1.TXT"));
+    assert!(
+        tree.nodes
+            .iter()
+            .all(|node| name_bytes(&tree, node).is_ok_and(|name| name != b"LONGFI~1.TXT"))
+    );
     assert_eq!(path(&tree, primary(&tree, 65)?)?, "/ONLY~1.TXT");
     assert_eq!(ids(&tree, 66).len(), 1);
     assert_eq!(stats.hardlink_duplicates, 0);
@@ -401,7 +422,11 @@ fn linking_metadata_groups_reserved_and_extend_children_once() -> TestResult {
         path(&tree, primary(&tree, 72)?)?,
         "/<NTFS metadata>/other/descendant/leaf"
     );
-    assert!(tree.nodes.iter().all(|node| node.name != b"<orphaned>"));
+    assert!(
+        tree.nodes
+            .iter()
+            .all(|node| name_bytes(&tree, node).is_ok_and(|name| name != b"<orphaned>"))
+    );
     Ok(())
 }
 
@@ -490,8 +515,11 @@ fn linking_invalid_surrogates_count_only_surviving_name_conversions() -> TestRes
         .nodes
         .get(primary(&tree, 64)?)
         .ok_or("invalid-name node")?;
-    assert_eq!(node.raw_name, units);
-    assert_eq!(std::str::from_utf8(&node.name)?, "�A�");
+    assert_eq!(
+        std::str::from_utf8(name_bytes(&tree, node)?)?,
+        String::from_utf16_lossy(&units)
+    );
+    assert_eq!(std::str::from_utf8(name_bytes(&tree, node)?)?, "�A�");
     assert_eq!(stats.invalid_utf16, 2);
     assert_eq!(stats.hardlink_duplicates, 0);
     Ok(())

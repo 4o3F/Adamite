@@ -3,22 +3,22 @@
 use crate::{
     ScanError, ScanStats,
     entry::{EntryFlags, EntryName, EntryRecord},
+    snapshot::{checked_u32, name_range},
 };
 use adamite_ntfs::{EXTEND_RECORD, FIRST_NON_RESERVED_RECORD, FileRef, ROOT_RECORD};
-use std::{char, fmt::Write, vec::IntoIter};
+use std::{fmt::Write, vec::IntoIter};
 
 /// Maximum graph operations performed before yielding to the caller.
 const ITEMS_PER_STEP: usize = 256;
 
 /// One node in a flat parent-index array.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ResolvedNode {
     pub parent: usize,
     pub file_ref: Option<FileRef>,
     pub original_parent: Option<FileRef>,
-    pub namespace: u8,
-    pub raw_name: Vec<u16>,
-    pub name: Vec<u8>,
+    pub name_off: u32,
+    pub name_len: u16,
     pub flags: EntryFlags,
     pub attrs: u32,
     pub mtime: u64,
@@ -33,11 +33,7 @@ pub(crate) struct ResolvedNode {
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct ParentTree {
     pub nodes: Vec<ResolvedNode>,
-}
-
-#[derive(Debug)]
-struct PendingNode {
-    node: ResolvedNode,
+    pub names: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -47,6 +43,7 @@ struct RecordInfo {
     primary: usize,
     len: usize,
     metadata: bool,
+    source: usize,
 }
 
 #[derive(Debug)]
@@ -71,7 +68,12 @@ enum CycleWork {
 pub(crate) struct Linker {
     entries: IntoIter<EntryRecord>,
     records: Vec<RecordInfo>,
-    nodes: Vec<PendingNode>,
+    sources: Vec<EntryRecord>,
+    order: Vec<usize>,
+    remap: Vec<u32>,
+    order_record: usize,
+    order_link: usize,
+    nodes: Vec<ResolvedNode>,
     root_seen: bool,
     metadata: Option<usize>,
     orphaned: Option<usize>,
@@ -81,7 +83,6 @@ pub(crate) struct Linker {
     positions: Vec<Option<usize>>,
     path: Vec<usize>,
     cycle_work: CycleWork,
-    emitting: IntoIter<PendingNode>,
     pub result: ParentTree,
 }
 
@@ -98,82 +99,59 @@ fn increment(counter: &mut u64) -> Result<(), ScanError> {
     Ok(())
 }
 fn push<T>(items: &mut Vec<T>, item: T) -> Result<(), ScanError> {
+    checked_u32(
+        items.len().checked_add(1).ok_or_else(overflow)?,
+        "link storage length",
+    )?;
     items
         .try_reserve(1)
         .map_err(|source| ScanError::Allocation { source })?;
     items.push(item);
     Ok(())
 }
-fn copy<T: Copy>(input: &[T]) -> Result<Vec<T>, ScanError> {
-    let mut result = Vec::new();
-    result
-        .try_reserve_exact(input.len())
-        .map_err(|source| ScanError::Allocation { source })?;
-    result.extend_from_slice(input);
-    Ok(result)
-}
-fn ascii_name(name: &str) -> Result<Vec<u16>, ScanError> {
-    let mut units = Vec::new();
-    units
-        .try_reserve_exact(name.len())
-        .map_err(|source| ScanError::Allocation { source })?;
-    units.extend(name.encode_utf16());
-    Ok(units)
-}
-fn unnamed(record: u64) -> Result<Vec<u16>, ScanError> {
+fn unnamed(record: u64) -> Result<String, ScanError> {
     let mut text = String::new();
     // A 48-bit ordinal needs at most 15 digits, plus the ASCII label and delimiters.
     text.try_reserve_exact(32)
         .map_err(|source| ScanError::Allocation { source })?;
     write!(&mut text, "<record {record}>")
         .map_err(|_| invalid("could not format unnamed record"))?;
-    ascii_name(&text)
+    Ok(text)
 }
-fn synthetic(name: &str) -> Result<PendingNode, ScanError> {
+fn synthetic() -> ResolvedNode {
     let mut flags = EntryFlags::DIRECTORY;
     flags.insert(EntryFlags::SYNTHETIC);
-    Ok(PendingNode {
-        node: ResolvedNode {
-            parent: 0,
-            file_ref: None,
-            original_parent: None,
-            namespace: 0,
-            raw_name: ascii_name(name)?,
-            name: Vec::new(),
-            flags,
-            attrs: 0,
-            mtime: 0,
-            size: 0,
-            ads_size: 0,
-            alloc: 0,
-            nlink: 0,
-            reparse_tag: None,
-        },
-    })
+    ResolvedNode {
+        parent: 0,
+        file_ref: None,
+        original_parent: None,
+        name_off: 0,
+        name_len: 0,
+        flags,
+        attrs: 0,
+        mtime: 0,
+        size: 0,
+        ads_size: 0,
+        alloc: 0,
+        nlink: 0,
+        reparse_tag: None,
+    }
 }
-fn node(
-    entry: &EntryRecord,
-    raw_name: Vec<u16>,
-    parent_reference: Option<FileRef>,
-    namespace: u8,
-) -> PendingNode {
-    PendingNode {
-        node: ResolvedNode {
-            parent: 0,
-            file_ref: Some(entry.file_ref),
-            original_parent: parent_reference,
-            namespace,
-            raw_name,
-            name: Vec::new(),
-            flags: entry.flags,
-            attrs: entry.attrs,
-            mtime: entry.mtime,
-            size: entry.size,
-            ads_size: entry.ads_size,
-            alloc: entry.alloc,
-            nlink: entry.nlink,
-            reparse_tag: entry.reparse_tag,
-        },
+fn node(entry: &EntryRecord, parent_reference: Option<FileRef>) -> ResolvedNode {
+    ResolvedNode {
+        parent: 0,
+        file_ref: Some(entry.file_ref),
+        original_parent: parent_reference,
+        name_off: 0,
+        name_len: 0,
+        flags: entry.flags,
+        attrs: entry.attrs,
+        mtime: entry.mtime,
+        size: entry.size,
+        ads_size: entry.ads_size,
+        alloc: entry.alloc,
+        nlink: entry.nlink,
+        reparse_tag: entry.reparse_tag,
     }
 }
 
@@ -227,13 +205,45 @@ fn select_names(mut names: Vec<EntryName>) -> Vec<EntryName> {
     names
 }
 
+/// Encodes directly into the shared pool; no node owns an individual name buffer.
+fn append_name(
+    pool: &mut Vec<u8>,
+    units: impl Iterator<Item = u16> + Clone,
+    stats: &mut ScanStats,
+) -> Result<(u32, u16), ScanError> {
+    let len = char::decode_utf16(units.clone()).try_fold(0usize, |len, item| {
+        len.checked_add(item.unwrap_or(char::REPLACEMENT_CHARACTER).len_utf8())
+            .ok_or_else(overflow)
+    })?;
+    let range = name_range(pool.len(), len)?;
+    pool.try_reserve(len)
+        .map_err(|source| ScanError::Allocation { source })?;
+    for decoded in char::decode_utf16(units) {
+        let character = match decoded {
+            Ok(character) => character,
+            Err(_) => {
+                increment(&mut stats.invalid_utf16)?;
+                char::REPLACEMENT_CHARACTER
+            }
+        };
+        let mut bytes = [0; 4];
+        pool.extend_from_slice(character.encode_utf8(&mut bytes).as_bytes());
+    }
+    Ok(range)
+}
+
 impl Linker {
     pub(crate) fn new(entries: Vec<EntryRecord>) -> Result<Self, ScanError> {
         let mut nodes = Vec::new();
-        push(&mut nodes, synthetic("/")?)?;
+        push(&mut nodes, synthetic())?;
         Ok(Self {
             entries: entries.into_iter(),
             records: Vec::new(),
+            sources: Vec::new(),
+            order: Vec::new(),
+            remap: Vec::new(),
+            order_record: 0,
+            order_link: 0,
             nodes,
             root_seen: false,
             metadata: None,
@@ -244,7 +254,6 @@ impl Linker {
             positions: Vec::new(),
             path: Vec::new(),
             cycle_work: CycleWork::Start,
-            emitting: Vec::new().into_iter(),
             result: ParentTree::default(),
         })
     }
@@ -283,22 +292,22 @@ impl Linker {
             *self
                 .nodes
                 .get_mut(0)
-                .ok_or_else(|| invalid("missing root placeholder"))? =
-                node(&entry, copy(&[47])?, None, 0);
+                .ok_or_else(|| invalid("missing root placeholder"))? = node(&entry, None);
             self.root_seen = true;
             (0, 1)
         } else {
-            let names = select_names(std::mem::take(&mut entry.names));
+            entry.names = select_names(std::mem::take(&mut entry.names));
+            let names = &entry.names;
             let primary = self.nodes.len();
             if names.is_empty() {
-                push(&mut self.nodes, node(&entry, unnamed(ordinal)?, None, 0))?;
+                push(&mut self.nodes, node(&entry, None))?;
                 (primary, 1)
             } else {
                 let len = names.len();
-                for (index, name) in names.into_iter().enumerate() {
-                    let mut pending = node(&entry, name.name, Some(name.parent), name.namespace);
+                for (index, name) in names.iter().enumerate() {
+                    let mut pending = node(&entry, Some(name.parent));
                     if index != 0 {
-                        pending.node.flags.insert(EntryFlags::HARDLINK_DUP);
+                        pending.flags.insert(EntryFlags::HARDLINK_DUP);
                         increment(&mut stats.hardlink_duplicates)?;
                     }
                     push(&mut self.nodes, pending)?;
@@ -314,8 +323,10 @@ impl Linker {
                 primary,
                 len,
                 metadata: false,
+                source: self.sources.len(),
             },
         );
+        push(&mut self.sources, entry)?;
         Ok(())
     }
 
@@ -324,7 +335,7 @@ impl Linker {
             return Ok(id);
         }
         let id = self.nodes.len();
-        push(&mut self.nodes, synthetic("<NTFS metadata>")?)?;
+        push(&mut self.nodes, synthetic())?;
         self.metadata = Some(id);
         Ok(id)
     }
@@ -343,7 +354,7 @@ impl Linker {
                 .try_reserve(1)
                 .map_err(|source| ScanError::Allocation { source })?;
         }
-        push(&mut self.nodes, synthetic("<orphaned>")?)?;
+        push(&mut self.nodes, synthetic())?;
         if !self.marks.is_empty() {
             self.marks.push(2);
             self.positions.push(None);
@@ -371,7 +382,7 @@ impl Linker {
             .ok_or_else(overflow)?
             .iter()
             .any(|node| {
-                extend.is_some_and(|extend| node.node.original_parent == Some(extend.reference))
+                extend.is_some_and(|extend| node.original_parent == Some(extend.reference))
             });
         if reserved || direct {
             self.ensure_metadata()?;
@@ -386,7 +397,7 @@ impl Linker {
             return Ok(());
         }
         let node = self.nodes.get(index).ok_or_else(overflow)?;
-        let Some(reference) = node.node.file_ref else {
+        let Some(reference) = node.file_ref else {
             return Ok(());
         };
         let owner = self
@@ -395,7 +406,7 @@ impl Linker {
         let parent = if owner.metadata {
             self.metadata
                 .ok_or_else(|| invalid("metadata directory was not created"))?
-        } else if let Some(parent) = node.node.original_parent.and_then(|reference| {
+        } else if let Some(parent) = node.original_parent.and_then(|reference| {
             self.record(reference.record()).filter(|parent| {
                 parent.reference == reference && parent.flags.contains(EntryFlags::DIRECTORY)
             })
@@ -405,7 +416,7 @@ impl Linker {
             increment(&mut stats.orphans)?;
             self.ensure_orphaned()?
         };
-        self.nodes.get_mut(index).ok_or_else(overflow)?.node.parent = parent;
+        self.nodes.get_mut(index).ok_or_else(overflow)?.parent = parent;
         Ok(())
     }
 
@@ -436,6 +447,10 @@ impl Linker {
         match self.cycle_work {
             CycleWork::Start => {
                 if self.cursor == self.marks.len() {
+                    self.remap
+                        .try_reserve_exact(self.nodes.len())
+                        .map_err(|source| ScanError::Allocation { source })?;
+                    self.remap.resize(self.nodes.len(), 0);
                     self.stage = Stage::Convert;
                     self.cursor = 0;
                     return Ok(());
@@ -453,7 +468,7 @@ impl Linker {
                     .last()
                     .copied()
                     .ok_or_else(|| invalid("empty cycle walk"))?;
-                let parent = self.nodes.get(id).ok_or_else(overflow)?.node.parent;
+                let parent = self.nodes.get(id).ok_or_else(overflow)?.parent;
                 match self.marks.get(parent).copied().ok_or_else(overflow)? {
                     0 => self.visit(parent)?,
                     1 => {
@@ -472,7 +487,7 @@ impl Linker {
             CycleWork::Break { cursor } => {
                 if let Some(id) = self.path.get(cursor).copied() {
                     let orphaned = self.ensure_orphaned()?;
-                    let node = &mut self.nodes.get_mut(id).ok_or_else(overflow)?.node;
+                    let node = self.nodes.get_mut(id).ok_or_else(overflow)?;
                     if !node.flags.contains(EntryFlags::DIRECTORY) {
                         return Err(invalid("non-directory node in parent cycle"));
                     }
@@ -499,24 +514,93 @@ impl Linker {
         Ok(())
     }
 
-    fn convert(&mut self, index: usize, stats: &mut ScanStats) -> Result<(), ScanError> {
-        let node = &mut self.nodes.get_mut(index).ok_or_else(overflow)?.node;
-        let bound = node.raw_name.len().checked_mul(3).ok_or_else(overflow)?;
-        node.name
-            .try_reserve_exact(bound)
-            .map_err(|source| ScanError::Allocation { source })?;
-        for decoded in char::decode_utf16(node.raw_name.iter().copied()) {
-            let character = match decoded {
-                Ok(character) => character,
-                Err(_) => {
-                    increment(&mut stats.invalid_utf16)?;
-                    char::REPLACEMENT_CHARACTER
-                }
-            };
-            let mut encoded = [0u8; 4];
-            node.name
-                .extend_from_slice(character.encode_utf8(&mut encoded).as_bytes());
+    fn order_one(&mut self) -> Result<(), ScanError> {
+        let synthetic_count = 1usize
+            .checked_add(usize::from(self.metadata.is_some()))
+            .and_then(|n| n.checked_add(usize::from(self.orphaned.is_some())))
+            .ok_or_else(overflow)?;
+        let old = if self.cursor == 0 {
+            0
+        } else if self.cursor < synthetic_count {
+            if self.cursor == 1 {
+                self.metadata.or(self.orphaned).ok_or_else(overflow)?
+            } else {
+                self.orphaned.ok_or_else(overflow)?
+            }
+        } else {
+            // Records are already indexed in ascending ordinal order.
+            let mut record = self.records.get(self.order_record).ok_or_else(overflow)?;
+            if record.reference.record() == ROOT_RECORD {
+                self.order_record = self.order_record.checked_add(1).ok_or_else(overflow)?;
+                record = self.records.get(self.order_record).ok_or_else(overflow)?;
+            }
+            let old = record
+                .primary
+                .checked_add(self.order_link)
+                .ok_or_else(overflow)?;
+            self.order_link = self.order_link.checked_add(1).ok_or_else(overflow)?;
+            if self.order_link == record.len {
+                self.order_record = self.order_record.checked_add(1).ok_or_else(overflow)?;
+                self.order_link = 0;
+            }
+            old
+        };
+        *self.remap.get_mut(old).ok_or_else(overflow)? = checked_u32(self.cursor, "node id")?;
+        push(&mut self.order, old)?;
+        self.cursor = self.cursor.checked_add(1).ok_or_else(overflow)?;
+        Ok(())
+    }
+
+    fn emit(&mut self, stats: &mut ScanStats) -> Result<(), ScanError> {
+        let old = *self.order.get(self.cursor).ok_or_else(overflow)?;
+        let mut node = *self.nodes.get(old).ok_or_else(overflow)?;
+        let range = if old == 0 {
+            append_name(&mut self.result.names, "/".encode_utf16(), stats)?
+        } else if Some(old) == self.metadata {
+            append_name(
+                &mut self.result.names,
+                "<NTFS metadata>".encode_utf16(),
+                stats,
+            )?
+        } else if Some(old) == self.orphaned {
+            append_name(&mut self.result.names, "<orphaned>".encode_utf16(), stats)?
+        } else {
+            let record = self
+                .record(node.file_ref.ok_or_else(overflow)?.record())
+                .ok_or_else(overflow)?;
+            let source = self.sources.get(record.source).ok_or_else(overflow)?;
+            if source.names.is_empty() {
+                append_name(
+                    &mut self.result.names,
+                    unnamed(record.reference.record())?.encode_utf16(),
+                    stats,
+                )?
+            } else {
+                let index = old.checked_sub(record.primary).ok_or_else(overflow)?;
+                let name = source.names.get(index).ok_or_else(overflow)?;
+                append_name(&mut self.result.names, name.name.iter().copied(), stats)?
+            }
+        };
+        if let Some(reference) = node.file_ref {
+            let record = self.record(reference.record()).ok_or_else(overflow)?;
+            if old.checked_add(1).ok_or_else(overflow)?
+                == record
+                    .primary
+                    .checked_add(record.len)
+                    .ok_or_else(overflow)?
+            {
+                self.sources
+                    .get_mut(record.source)
+                    .ok_or_else(overflow)?
+                    .names = Vec::new();
+            }
         }
+        node.name_off = range.0;
+        node.name_len = range.1;
+        node.parent = usize::try_from(*self.remap.get(node.parent).ok_or_else(overflow)?)
+            .map_err(|_| overflow())?;
+        push(&mut self.result.nodes, node)?;
+        self.cursor = self.cursor.checked_add(1).ok_or_else(overflow)?;
         Ok(())
     }
 
@@ -556,17 +640,17 @@ impl Linker {
                 Stage::Cycles => self.cycle_step(stats)?,
                 Stage::Convert => {
                     if self.cursor < self.nodes.len() {
-                        self.convert(self.cursor, stats)?;
-                        self.cursor = self.cursor.checked_add(1).ok_or_else(overflow)?;
+                        self.order_one()?;
                     } else {
-                        self.emitting = std::mem::take(&mut self.nodes).into_iter();
                         self.stage = Stage::Emit;
+                        self.cursor = 0;
                     }
                 }
                 Stage::Emit => {
-                    if let Some(node) = self.emitting.next() {
-                        push(&mut self.result.nodes, node.node)?;
+                    if self.cursor < self.order.len() {
+                        self.emit(stats)?;
                     } else {
+                        self.sources = Vec::new();
                         self.stage = Stage::Done;
                         return Ok(true);
                     }

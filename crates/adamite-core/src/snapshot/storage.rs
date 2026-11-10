@@ -1,0 +1,214 @@
+//! Frozen node arena, shared names and compressed sparse row child storage.
+
+use super::{Node, NodeId, NodeView};
+
+use crate::ScanContext;
+use adamite_ntfs::{FileRef, VolumeGeometry};
+use snafu::Snafu;
+use std::collections::TryReserveError;
+
+/// Allocation, representational bounds or tree validation prevented snapshot access or construction.
+#[must_use]
+#[derive(Debug, Snafu)]
+#[non_exhaustive]
+pub enum SnapshotError {
+    /// A stored index or length cannot fit the arena representation.
+    #[snafu(display("snapshot {field} exceeds its representational bound"))]
+    Overflow {
+        /// Index or length being represented.
+        field: &'static str,
+    },
+    /// Fallible storage reservation failed.
+    #[snafu(display("snapshot allocation failed: {source}"))]
+    Allocation {
+        /// Underlying allocation failure.
+        source: TryReserveError,
+    },
+    /// Parent or CSR invariants are invalid.
+    #[snafu(display("invalid snapshot tree: {reason}"))]
+    InvalidTree {
+        /// Invariant that failed.
+        reason: &'static str,
+    },
+}
+
+pub(crate) fn checked_u32(value: usize, field: &'static str) -> Result<u32, SnapshotError> {
+    u32::try_from(value).map_err(|_| SnapshotError::Overflow { field })
+}
+
+pub(crate) fn name_range(offset: usize, len: usize) -> Result<(u32, u16), SnapshotError> {
+    let end = offset.checked_add(len).ok_or(SnapshotError::Overflow {
+        field: "name pool length",
+    })?;
+    checked_u32(end, "name pool length")?;
+    Ok((
+        checked_u32(offset, "name offset")?,
+        u16::try_from(len).map_err(|_| SnapshotError::Overflow {
+            field: "name length",
+        })?,
+    ))
+}
+
+/// Parsed volume geometry together with metadata supplied by the caller.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VolumeInfo {
+    pub(super) geometry: VolumeGeometry,
+    pub(super) context: ScanContext,
+}
+
+impl VolumeInfo {
+    /// Returns the validated geometry, including the volume serial number.
+    #[must_use]
+    pub const fn geometry(&self) -> VolumeGeometry {
+        self.geometry
+    }
+    /// Borrows optional label, scan timestamp and free bytes supplied by the caller.
+    #[must_use]
+    pub const fn context(&self) -> &ScanContext {
+        &self.context
+    }
+}
+
+/// Immutable arena with parallel cold columns, shared UTF-8 names and CSR children.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Snapshot {
+    storage: Box<[SnapshotStorage; 1]>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct SnapshotStorage {
+    pub(super) nodes: Vec<Node>,
+    pub(super) names: Vec<u8>,
+    pub(super) children: Vec<NodeId>,
+    pub(super) ads_size: Vec<u64>,
+    pub(super) file_refs: Vec<Option<FileRef>>,
+    pub(super) attrs: Vec<u32>,
+    pub(super) nlink: Vec<u16>,
+    pub(super) reparse_tags: Vec<Option<u32>>,
+    pub(super) volume: VolumeInfo,
+}
+
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<Snapshot>();
+};
+
+impl Snapshot {
+    pub(super) fn from_storage(storage: SnapshotStorage) -> Result<Self, SnapshotError> {
+        // Indirection keeps ScanStep small; reserve the single storage allocation fallibly.
+        let mut owned = Vec::new();
+        owned
+            .try_reserve_exact(1)
+            .map_err(|source| SnapshotError::Allocation { source })?;
+        owned.push(storage);
+        let storage =
+            owned
+                .into_boxed_slice()
+                .try_into()
+                .map_err(|_| SnapshotError::InvalidTree {
+                    reason: "invalid storage length",
+                })?;
+        Ok(Self { storage })
+    }
+    pub(super) fn data(&self) -> &SnapshotStorage {
+        let [storage] = self.storage.as_ref();
+        storage
+    }
+    pub(super) fn data_mut(&mut self) -> &mut SnapshotStorage {
+        let [storage] = self.storage.as_mut();
+        storage
+    }
+
+    /// Returns the number of nodes, including the root and synthetic directories.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.data().nodes.len()
+    }
+    /// Reports whether the arena contains no nodes.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.data().nodes.is_empty()
+    }
+    /// Borrows the immutable volume geometry and caller metadata.
+    #[must_use]
+    pub fn volume(&self) -> &VolumeInfo {
+        &self.data().volume
+    }
+    /// Borrows the hot fields and cold metadata of an existing node.
+    #[must_use]
+    pub fn node(&self, id: NodeId) -> Option<NodeView<'_>> {
+        let index = usize::try_from(id.raw()).ok()?;
+        Some(NodeView {
+            id,
+            node: self.data().nodes.get(index)?,
+            ads_size: *self.data().ads_size.get(index)?,
+            file_ref: *self.data().file_refs.get(index)?,
+            attrs: *self.data().attrs.get(index)?,
+            nlink: *self.data().nlink.get(index)?,
+            reparse_tag: *self.data().reparse_tags.get(index)?,
+        })
+    }
+    /// Borrows immediate children in ascending NodeId order until final aggregation.
+    #[must_use]
+    pub fn children(&self, id: NodeId) -> Option<&[NodeId]> {
+        let node = self.node(id)?;
+        let start = usize::try_from(node.child_start()).ok()?;
+        let len = usize::try_from(node.child_len()).ok()?;
+        self.data().children.get(start..start.checked_add(len)?)
+    }
+    /// Borrows the node's lossy UTF-8 name directly from the shared pool.
+    #[must_use]
+    pub fn name(&self, id: NodeId) -> Option<&str> {
+        let node = self.node(id)?;
+        let start = usize::try_from(node.name_off()).ok()?;
+        let end = start.checked_add(usize::from(node.name_len()))?;
+        std::str::from_utf8(self.data().names.get(start..end)?).ok()
+    }
+    /// Builds a volume-relative path iteratively, returning None for an unknown identifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns an allocation or length-overflow error, or InvalidTree if parent invariants fail.
+    pub fn path(&self, id: NodeId) -> Result<Option<String>, SnapshotError> {
+        if self.node(id).is_none() {
+            return Ok(None);
+        }
+        let mut ancestors = Vec::new();
+        let mut current = id;
+        let mut len = 0usize;
+        while current != NodeId::ROOT {
+            if ancestors.len() >= self.data().nodes.len() {
+                return Err(SnapshotError::InvalidTree {
+                    reason: "parent cycle",
+                });
+            }
+            let node = self.node(current).ok_or(SnapshotError::InvalidTree {
+                reason: "missing parent",
+            })?;
+            len = len
+                .checked_add(usize::from(node.name_len()))
+                .and_then(|n| n.checked_add(1))
+                .ok_or(SnapshotError::Overflow {
+                    field: "path length",
+                })?;
+            ancestors
+                .try_reserve(1)
+                .map_err(|source| SnapshotError::Allocation { source })?;
+            ancestors.push(current);
+            current = node.parent();
+        }
+        let mut path = String::new();
+        path.try_reserve_exact(len.max(1))
+            .map_err(|source| SnapshotError::Allocation { source })?;
+        for ancestor in ancestors.into_iter().rev() {
+            path.push('/');
+            path.push_str(self.name(ancestor).ok_or(SnapshotError::InvalidTree {
+                reason: "invalid name range",
+            })?);
+        }
+        if path.is_empty() {
+            path.push('/');
+        }
+        Ok(Some(path))
+    }
+}
