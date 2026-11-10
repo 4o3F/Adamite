@@ -4,7 +4,7 @@ use core::iter::FusedIterator;
 
 use snafu::{OptionExt, Snafu, ensure};
 
-use crate::{VolumeGeometry, util};
+use crate::{boot::VolumeGeometry, util};
 
 /// A validated inclusive on-disk VCN range, with highest VCN -1 for an empty stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -230,7 +230,6 @@ impl FusedIterator for Runlist<'_> {}
 /// `ScanStats` mapping: `RunOutOfVolume` counts as an out-of-volume extent;
 /// all other variants count as corrupt runlists. The core owns these counters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Snafu)]
-#[snafu(visibility(pub(crate)))]
 #[non_exhaustive]
 pub enum RunlistError {
     /// The signed segment bounds violate the empty or nonempty range rules.

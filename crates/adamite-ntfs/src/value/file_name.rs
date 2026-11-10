@@ -1,10 +1,15 @@
 //! File-name metadata with borrowed original UTF-16LE units.
 
 use super::{
-    Attribute, AttributeType, FileAttributes, FileTimes, InvalidNameLengthSnafu,
-    InvalidNamespaceSnafu, TruncatedValueSnafu, ValueError,
+    InvalidNameLengthSnafu, InvalidNamespaceSnafu, TruncatedValueSnafu, ValueError,
+    standard_information::{FileAttributes, FileTimes},
 };
-use crate::{FileRef, Utf16Le, util};
+use crate::{
+    attribute::{Attribute, AttributeType},
+    record::reference::FileRef,
+    utf16::Utf16Le,
+    util,
+};
 use snafu::{OptionExt, ensure};
 
 /// One file-name value with cached sizes and its original namespace.

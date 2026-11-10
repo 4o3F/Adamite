@@ -85,7 +85,6 @@ impl FusedIterator for BitmapIter<'_> {}
 /// `ScanStats` mapping: every variant counts as an invalid bitmap length.
 /// The core owns this counter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Snafu)]
-#[snafu(visibility(pub(crate)))]
 #[non_exhaustive]
 pub enum BitmapError {
     /// The logical count exceeds the capacity of the borrowed byte slice.

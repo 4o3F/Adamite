@@ -1,10 +1,12 @@
 //! Reparse tags and opaque payloads without link-target interpretation.
 
 use super::{
-    Attribute, AttributeType, InvalidReparseLengthSnafu, ReparseValueTooLargeSnafu,
-    TruncatedValueSnafu, ValueError,
+    InvalidReparseLengthSnafu, ReparseValueTooLargeSnafu, TruncatedValueSnafu, ValueError,
 };
-use crate::util;
+use crate::{
+    attribute::{Attribute, AttributeType},
+    util,
+};
 use snafu::{OptionExt, ensure};
 
 /// A reparse tag, declared length and every byte following its eight-byte header.

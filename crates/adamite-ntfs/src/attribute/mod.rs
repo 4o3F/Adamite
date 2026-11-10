@@ -1,27 +1,14 @@
-//! Borrowed attribute headers and bounded iteration over fixed FILE records.
+//! Borrowed attribute headers and non-resident descriptor validation.
 
-use core::iter::FusedIterator;
+pub mod iter;
+pub mod non_resident;
+pub mod runlist;
 
 use snafu::{OptionExt, Snafu, ensure};
 
-use crate::{Utf16Le, util};
-
-mod attribute_list;
-mod bitmap;
-mod data;
-mod index_allocation;
-mod nonresident;
-pub use attribute_list::{AttributeList, AttributeListEntry, AttributeListError};
-mod reparse_point;
-pub use bitmap::{Bitmap, BitmapError, BitmapIter};
-pub use data::Data;
-pub use index_allocation::IndexAllocation;
-pub use nonresident::{NonResident, StreamSizes};
-pub use reparse_point::ReparsePoint;
-mod file_name;
-mod standard_information;
-pub use file_name::FileName;
-pub use standard_information::{FileAttributes, FileTimes, StandardInformation};
+use self::non_resident::{NonResident, StreamSizes};
+use self::runlist::VcnRange;
+use crate::{utf16::Utf16Le, util};
 
 /// Attribute type code retaining unknown nonzero values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -217,124 +204,48 @@ impl<'a> Attribute<'a> {
     }
 }
 
-/// Fused attribute iterator bounded to the record's declared used-byte region.
-/// Exhaust the iterator to validate every header and the end marker.
-#[must_use = "exhaust the attribute iterator to validate the complete record"]
-#[derive(Debug, Clone)]
-pub struct AttributeIter<'a> {
-    region: Option<&'a [u8]>,
-    cursor: usize,
-    finished: bool,
-}
-
-impl<'a> AttributeIter<'a> {
-    /// Borrows an arbitrary attribute region in instrumented fuzz builds.
-    #[cfg(fuzzing)]
-    pub fn from_region(region: &'a [u8]) -> Self {
-        Self::new(Some(region))
-    }
-
-    pub(crate) fn new(region: Option<&'a [u8]>) -> Self {
-        Self {
-            region,
-            cursor: 0,
-            finished: false,
-        }
-    }
-
-    fn read_next(&mut self) -> Result<Option<Attribute<'a>>, AttributeError> {
-        let input = self
-            .region
-            .context(InvalidRegionSnafu)?
-            .get(self.cursor..)
-            .context(InvalidRegionSnafu)?;
-        let kind = util::read_u32(input, 0).context(MissingEndMarkerSnafu)?;
-        if kind == u32::MAX {
-            return Ok(None);
-        }
-        let attribute = Attribute::parse(input)?;
-        self.cursor = util::range(self.cursor, attribute.bytes.len())
-            .context(AttributePastUsedBytesSnafu)?
-            .end;
-        Ok(Some(attribute))
+impl<'a> NonResident<'a> {
+    fn parse(input: &'a [u8], flags: AttributeFlags) -> Result<Self, AttributeError> {
+        let offset = usize::from(util::read_u16(input, 0x20).context(TruncatedHeaderSnafu)?);
+        let header_size = if flags.extended_header() { 72 } else { 64 };
+        ensure!(offset >= header_size, InvalidMappingPairsSnafu);
+        let mapping_pairs = input.get(offset..).context(InvalidMappingPairsSnafu)?;
+        let lowest = util::read_i64(input, 0x10).context(TruncatedHeaderSnafu)?;
+        let highest = util::read_i64(input, 0x18).context(TruncatedHeaderSnafu)?;
+        let range = VcnRange::new(lowest, highest).map_err(|_| InvalidVcnRangeSnafu.build())?;
+        let sizes = if lowest == 0 {
+            let allocated = read_size(input, 0x28)?;
+            let data = read_size(input, 0x30)?;
+            let initialized = read_size(input, 0x38)?;
+            let compressed = if flags.extended_header() {
+                Some(read_size(input, 0x40)?)
+            } else {
+                None
+            };
+            ensure!(initialized <= data, InitializedPastDataSnafu);
+            Some(StreamSizes {
+                allocated,
+                data,
+                initialized,
+                compressed,
+            })
+        } else {
+            None
+        };
+        Ok(Self {
+            range,
+            compression_unit: util::read_u8(input, 0x22).context(TruncatedHeaderSnafu)?,
+            mapping_pairs,
+            sizes,
+        })
     }
 }
 
-impl<'a> Iterator for AttributeIter<'a> {
-    type Item = Result<Attribute<'a>, AttributeError>;
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.finished {
-            return None;
-        }
-        let step = self.read_next();
-        crate::util::finish_step(step, &mut self.finished)
-    }
-}
-impl FusedIterator for AttributeIter<'_> {}
-
-fn ensure_type(attribute: Attribute<'_>, expected: AttributeType) -> Result<(), ValueError> {
-    ensure!(
-        attribute.attribute_type() == expected,
-        WrongAttributeTypeSnafu {
-            expected: expected.raw(),
-            actual: attribute.attribute_type().raw()
-        }
-    );
-    Ok(())
-}
-
-fn resident_value(attribute: Attribute<'_>, expected: AttributeType) -> Result<&[u8], ValueError> {
-    ensure_type(attribute, expected)?;
-    attribute.resident_value().context(WrongStorageFormSnafu)
-}
-
-/// Typed attribute payload validation failure.
-///
-/// `ScanStats` mapping: `WrongAttributeType` and `WrongStorageForm` count as
-/// attribute type/storage mismatches; other variants count as corrupt typed
-/// values. The core owns these counters.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Snafu)]
-#[snafu(visibility(pub(crate)))]
-#[non_exhaustive]
-pub enum ValueError {
-    /// The attribute type differs from the requested typed decoder.
-    #[snafu(display("attribute type {actual:#x} differs from expected {expected:#x}"))]
-    WrongAttributeType {
-        /// Required type code.
-        expected: u32,
-        /// Supplied type code.
-        actual: u32,
-    },
-    /// The attribute uses a storage form unsupported by this decoder.
-    #[snafu(display("unsupported attribute storage form"))]
-    WrongStorageForm,
-    /// A fixed field is incomplete.
-    #[snafu(display("truncated typed attribute value"))]
-    TruncatedValue,
-    /// Standard information is neither 48 bytes nor at least 72 bytes.
-    #[snafu(display("invalid standard-information length {len}"))]
-    InvalidStandardInformationLength {
-        /// Supplied value length.
-        len: usize,
-    },
-    /// The file name is empty or its declared units exceed the value.
-    #[snafu(display("invalid file-name length"))]
-    InvalidNameLength,
-    /// The file-name namespace is outside 0..=3.
-    #[snafu(display("invalid file-name namespace {namespace}"))]
-    InvalidNamespace {
-        /// Raw namespace byte.
-        namespace: u8,
-    },
-    /// A reparse value's declared data extends beyond its supplied bytes.
-    #[snafu(display("invalid reparse data length"))]
-    InvalidReparseLength,
-    /// A reparse value exceeds 16 KiB.
-    #[snafu(display("reparse value length {len} exceeds 16384 bytes"))]
-    ReparseValueTooLarge {
-        /// Supplied value length.
-        len: usize,
-    },
+fn read_size(input: &[u8], offset: usize) -> Result<u64, AttributeError> {
+    let value = util::read_i64(input, offset).context(TruncatedHeaderSnafu)?;
+    u64::try_from(value)
+        .ok()
+        .context(NegativeSizeSnafu { offset })
 }
 
 /// Attribute header, extent or descriptor validation failure.
@@ -342,7 +253,6 @@ pub enum ValueError {
 /// `ScanStats` mapping: every variant counts as a corrupt attribute. The core
 /// owns this counter; iterator errors are reported once before termination.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Snafu)]
-#[snafu(visibility(pub(crate)))]
 #[non_exhaustive]
 pub enum AttributeError {
     /// The fixed header is incomplete.

@@ -9,19 +9,17 @@
     clippy::panic
 )]
 
-mod attribute;
+pub mod attribute;
 pub mod boot;
 pub mod record;
-mod runlist;
 mod utf16;
 mod util;
+pub mod value;
 
-pub use attribute::{
-    Attribute, AttributeError, AttributeFlags, AttributeIter, AttributeList, AttributeListEntry,
-    AttributeListError, AttributeType, Bitmap, BitmapError, BitmapIter, Data, FileAttributes,
-    FileName, FileTimes, IndexAllocation, NonResident, ReparsePoint, StandardInformation,
-    StreamSizes, ValueError,
-};
+pub use attribute::iter::AttributeIter;
+pub use attribute::non_resident::{NonResident, StreamSizes};
+pub use attribute::runlist::{Run, Runlist, RunlistError, VcnRange};
+pub use attribute::{Attribute, AttributeError, AttributeFlags, AttributeType};
 pub use boot::{BootError, BootError as GeometryError, VolumeGeometry, parse_boot_sector};
 pub use record::fixup;
 pub use record::reference::{FileRef, FileRefError};
@@ -31,5 +29,12 @@ pub use record::system::{
     SECURE_RECORD, UP_CASE_RECORD, VOLUME_RECORD,
 };
 pub use record::{FileRecord, RecordClass, RecordError, RecordFlags, RecordHeader, classify};
-pub use runlist::{Run, Runlist, RunlistError, VcnRange};
 pub use utf16::{LossyChars, StrictChars, Units, Utf16Error, Utf16Le};
+pub use value::ValueError;
+pub use value::attribute_list::{AttributeList, AttributeListEntry, AttributeListError};
+pub use value::bitmap::{Bitmap, BitmapError, BitmapIter};
+pub use value::data::Data;
+pub use value::file_name::FileName;
+pub use value::index_allocation::IndexAllocation;
+pub use value::reparse_point::ReparsePoint;
+pub use value::standard_information::{FileAttributes, FileTimes, StandardInformation};

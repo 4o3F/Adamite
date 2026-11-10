@@ -102,8 +102,8 @@ Each milestone is one bounded agent run of approximately 15–30 minutes, includ
 
 ### M2 — Attribute headers and typed values
 
-- [ ] Extract `attribute/iter.rs`, rename the descriptor file, move runlists under attribute and typed decoders/helpers/errors under value; relocate descriptor parsing as specified in D2 and apply D4 visibility.
-- [ ] Retarget temporary root re-exports to the moved items. Finish with `deno task check` green.
+- [x] Extract `attribute/iter.rs`, rename the descriptor file, move runlists under attribute and typed decoders/helpers/errors under value; relocate descriptor parsing as specified in D2 and apply D4 visibility.
+- [x] Retarget temporary root re-exports to the moved items. Finish with `deno task check` green.
 
 ### M3 — Type-owned parsing and classification
 

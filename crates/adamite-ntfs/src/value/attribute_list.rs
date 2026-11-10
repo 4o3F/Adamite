@@ -1,7 +1,12 @@
 //! Complete ATTRIBUTE_LIST value decoding for MFT bootstrap segment references.
 
-use super::{Attribute, AttributeType, ValueError, resident_value};
-use crate::{FileRef, Utf16Le, util};
+use super::{ValueError, resident_value};
+use crate::{
+    attribute::{Attribute, AttributeType},
+    record::reference::FileRef,
+    utf16::Utf16Le,
+    util,
+};
 use core::iter::FusedIterator;
 use snafu::{OptionExt, ResultExt, Snafu, ensure};
 
@@ -139,7 +144,6 @@ impl FusedIterator for AttributeList<'_> {}
 /// type/storage mismatch categories; other variants count as corrupt attribute lists. The core owns
 /// these counters and resolves the reported segment references.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Snafu)]
-#[snafu(visibility(pub(crate)))]
 #[non_exhaustive]
 pub enum AttributeListError {
     /// A typed attribute check failed before entry decoding.

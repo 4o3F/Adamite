@@ -1,10 +1,10 @@
 //! Non-resident index-allocation descriptors without INDX block decoding.
 
-use super::{
-    Attribute, AttributeFlags, AttributeType, NonResident, ValueError, WrongStorageFormSnafu,
-    ensure_type,
+use super::{ValueError, WrongStorageFormSnafu, ensure_type};
+use crate::{
+    attribute::{Attribute, AttributeFlags, AttributeType, non_resident::NonResident},
+    utf16::Utf16Le,
 };
-use crate::Utf16Le;
 use snafu::OptionExt;
 
 /// A named INDEX_ALLOCATION segment preserving its flags and stream descriptor.

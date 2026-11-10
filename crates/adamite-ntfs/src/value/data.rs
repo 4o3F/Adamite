@@ -1,7 +1,10 @@
 //! One named or unnamed data stream without stream-selection policy.
 
-use super::{Attribute, AttributeFlags, AttributeType, NonResident, ValueError, ensure_type};
-use crate::Utf16Le;
+use super::{ValueError, ensure_type};
+use crate::{
+    attribute::{Attribute, AttributeFlags, AttributeType, non_resident::NonResident},
+    utf16::Utf16Le,
+};
 
 /// A DATA attribute preserving its individual name, flags and storage form.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

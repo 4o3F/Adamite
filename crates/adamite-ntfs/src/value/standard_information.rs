@@ -1,10 +1,10 @@
 //! Eager standard-information fields and raw Windows file metadata.
 
-use super::{
-    Attribute, AttributeType, InvalidStandardInformationLengthSnafu, TruncatedValueSnafu,
-    ValueError,
+use super::{InvalidStandardInformationLengthSnafu, TruncatedValueSnafu, ValueError};
+use crate::{
+    attribute::{Attribute, AttributeType},
+    util,
 };
-use crate::util;
 use snafu::{OptionExt, ensure};
 
 /// Raw Windows file-attribute bits, preserving unknown values.
