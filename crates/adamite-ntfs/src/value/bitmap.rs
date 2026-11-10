@@ -81,9 +81,6 @@ impl ExactSizeIterator for BitmapIter<'_> {}
 impl FusedIterator for BitmapIter<'_> {}
 
 /// A logical bitmap length exceeding the supplied bytes.
-///
-/// `ScanStats` mapping: every variant counts as an invalid bitmap length.
-/// The core owns this counter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Snafu)]
 #[non_exhaustive]
 pub enum BitmapError {

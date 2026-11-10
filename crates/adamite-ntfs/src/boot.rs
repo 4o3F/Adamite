@@ -223,9 +223,6 @@ fn decode_record_size(encoding: i8, cluster_size: u32) -> Option<u32> {
 }
 
 /// Boot-sector or cluster-range validation failure.
-///
-/// `ScanStats` mapping: `InvalidClusterRange` counts as an invalid cluster extent;
-/// all other variants count as invalid volume geometry. The core owns these counters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Snafu)]
 #[snafu(visibility(pub(crate)))]
 #[non_exhaustive]

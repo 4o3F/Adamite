@@ -74,9 +74,6 @@ impl fmt::Debug for FileRef {
 }
 
 /// Failure to construct a representable file reference.
-///
-/// `ScanStats` mapping: [`Self::RecordOutOfRange`] counts as an invalid file
-/// reference. The core owns and updates that counter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Snafu)]
 #[snafu(visibility(pub(crate)))]
 #[non_exhaustive]

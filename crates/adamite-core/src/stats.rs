@@ -1,4 +1,27 @@
 //! Record and diagnostic counters owned by a completed scan.
+//!
+//! Streaming ingestion classifies each MFT ordinal once. Corrupt classifications increment `corrupt_records` plus the diagnostic below. Deleted records still increment `deleted`; an inconsistent stored record number also increments `corrupt_records` and `corrupt_headers`. In-use bases/extensions increment their classification counters before identity or contribution validation.
+//!
+//! | Streaming failure | Diagnostic counter |
+//! |---|---|
+//! | `RecordError::Fixup` with `FixupError::TrailerMismatch` | `bad_fixup` |
+//! | Other `RecordError::Fixup` | `invalid_fixup_metadata` |
+//! | `RecordError::InvalidSignature` | `invalid_signature` |
+//! | Other `RecordError`, or a stored record number inconsistent with its ordinal | `corrupt_headers` |
+//! | Attribute iteration/header failure | `corrupt_attributes` |
+//! | `ValueError::WrongAttributeType` or `WrongStorageForm` | `type_storage_mismatches` |
+//! | Other typed-value failure | `corrupt_values` |
+//! | Runlist iteration/coverage failure | `corrupt_runlists` |
+//! | Run geometry validation failure | `out_of_volume_extents` |
+//! | Resident attribute-list construction or entry failure | `invalid_attribute_lists` |
+//!
+//! Contribution decoding discards the whole contribution on the first failure, incrementing its diagnostic and `corrupt_records`. Resident attribute-list errors all use `invalid_attribute_lists` in this path. Failure to construct a streamed `FileRef` increments `invalid_file_refs` and terminates with [`ScanError::FileRef`](crate::ScanError::FileRef). These rules are implemented in `scan/ingest.rs::record_error` and `scan/ingest/decode.rs::{contribution_error,value_counter}`.
+//!
+//! During merge, an invalid extension base/source identity increments both `rejected_extensions` and `invalid_file_refs`. Conflicting standard-information values or reparse tags discard the base and increment `corrupt_values` and `corrupt_records`. Each invalid stream group increments `corrupt_streams`; rejecting any group discards the base and increments `corrupt_records` once. Allocation, arithmetic and required-root failures terminate through [`ScanError`](crate::ScanError).
+//!
+//! Tree name conversion increments `invalid_utf16` once per unpaired surrogate replaced in an emitted name, after name selection and deduplication. Names are retained as UTF-16 units until that conversion; the preliminary UTF-8 length calculation does not increment counters. Bitmap decoding has no scan counter path, and odd-length attribute names are rejected by attribute/value validation before tree conversion.
+//!
+//! Boot and MFT bootstrap errors terminate the scan through [`ScanError`](crate::ScanError), rather than producing streaming corruption counts. Boot decoding uses `Geometry { source: BootError }`; bootstrap record parsing maps `RecordError::Fixup { source }` to `Fixup { source }` and other record errors to `Record { source }`. Header validation precedes fixup, so a record with both failures reports the header error. Attribute, runlist and attribute-list failures use the corresponding `Attribute`, `Runlist` and `AttributeList` variants with their parser sources. Invalid physical bootstrap extents use `OutOfVolume`; identity/storage constraints, list size limits and stalled discovery use `Bootstrap`, `AttributeListTooLarge` and `BootstrapIncomplete`, respectively. Nested parser error sources and their Display text are preserved.
 
 /// Scan counters, independent of transport chunk size and response arrival order.
 ///

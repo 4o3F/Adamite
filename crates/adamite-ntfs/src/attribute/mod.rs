@@ -1,4 +1,6 @@
 //! Borrowed attribute headers and non-resident descriptor validation.
+//!
+//! [`crate::record::FileRecord::attributes`] yields headers through [`iter::AttributeIter`]. Non-resident descriptors and mapping pairs live in [`non_resident`] and [`runlist`]; typed payload decoders live in [`crate::value`].
 
 pub mod iter;
 pub mod non_resident;
@@ -249,9 +251,6 @@ fn read_size(input: &[u8], offset: usize) -> Result<u64, AttributeError> {
 }
 
 /// Attribute header, extent or descriptor validation failure.
-///
-/// `ScanStats` mapping: every variant counts as a corrupt attribute. The core
-/// owns this counter; iterator errors are reported once before termination.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Snafu)]
 #[non_exhaustive]
 pub enum AttributeError {

@@ -8,11 +8,18 @@ Preflight rejects advertised MFT data above 4096 records and attribute-list valu
 
 Every request must be nonempty, at most one chunk and free of offset overflow. Outstanding requests, including accepted responses awaiting consumption, must fit `cap × chunk_size`. Requests outside the supplied image stop that input immediately. Other inputs must reach Done or an error within `4096 + 64 × records + 16 × image_sectors` calls, with partial sectors rounded up. A second scanner receives only valid feeds; subsequent steps and final outputs must agree after injected invalid feeds. Completed snapshots undergo linear CSR and aggregation checks.
 
-From this directory:
+From `crates/adamite-core`, create `../../target/fuzz-smoke/adamite-core/scan/` before running:
 
 ```sh
 cargo +nightly fuzz build scan
-cargo +nightly fuzz run scan -- -max_total_time=30 -max_len=262144 -timeout=2 -rss_limit_mb=2048
+cargo +nightly fuzz run scan ../../target/fuzz-smoke/adamite-core/scan/ fuzz/corpus/scan/ -- -max_total_time=30 -max_len=262144 -timeout=2 -rss_limit_mb=2048
+```
+
+libFuzzer writes new inputs to the first corpus directory, so the scratch directory receives discoveries while the committed corpus remains a read-only seed source.
+
+From `crates/adamite-core/fuzz`, run the harness checks:
+
+```sh
 cargo test --test harness --locked
 cargo clippy --all-targets --locked -- -D warnings
 ```
@@ -23,4 +30,4 @@ Generate or restore the deterministic corpus from the repository root:
 deno run --frozen --allow-run=zstd --allow-read=tests/fixtures/ntfs --allow-write=crates/adamite-core/fuzz/corpus scripts/fuzz_corpus.ts --core
 ```
 
-The corpus contains 128 synthetic configurations and three reduced fixture images, totaling 48,676 bytes under the 64 KiB budget. Fixture reductions retain real boot sectors and records 0/5, use one-sector clusters, relocate the MFT into six records, rewrite its DATA mapping, remove its attribute list, remap the root's non-resident streams and restore update-sequence protection. The harness tests require every deterministic seed to reach Done. Regenerate after fuzzing to remove coverage-generated inputs before committing.
+The corpus contains 128 synthetic configurations and three reduced fixture images, totaling 48,676 bytes under the 64 KiB budget. Fixture reductions retain real boot sectors and records 0/5, use one-sector clusters, relocate the MFT into six records, rewrite its DATA mapping, remove its attribute list, remap the root's non-resident streams and restore update-sequence protection. The harness tests require every deterministic seed to reach Done.

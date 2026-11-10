@@ -1,4 +1,6 @@
-//! FILE record header views and record classification.
+//! FILE header views, in-place parsing and record classification.
+//!
+//! [`FileRecord::parse`] validates the header and applies fixup before returning a borrowed view. [`RecordClass::classify`] shares that pipeline for in-use records. References and system record numbers live in [`mod@reference`] and [`system`].
 
 pub mod fixup;
 pub mod reference;
@@ -361,11 +363,7 @@ impl<'a> RecordClass<'a> {
     }
 }
 
-/// FILE header or classification failure.
-///
-/// `ScanStats` mapping: `Fixup` follows the nested [`FixupError`] category;
-/// `InvalidSignature` counts as an invalid signature. Other variants count as
-/// corrupt record headers. The core owns these counters.
+/// FILE header, fixup or classification failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Snafu)]
 #[snafu(visibility(pub(crate)))]
 #[non_exhaustive]

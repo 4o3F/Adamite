@@ -1,4 +1,6 @@
 //! Typed attribute payload decoders and shared validation errors.
+//!
+//! Each decoder lives in its named child module and provides associated constructors for its payload or an [`Attribute`]. Shared type/storage validation returns [`ValueError`].
 
 pub mod attribute_list;
 pub mod bitmap;
@@ -29,10 +31,6 @@ fn resident_value(attribute: Attribute<'_>, expected: AttributeType) -> Result<&
 }
 
 /// Typed attribute payload validation failure.
-///
-/// `ScanStats` mapping: `WrongAttributeType` and `WrongStorageForm` count as
-/// attribute type/storage mismatches; other variants count as corrupt typed
-/// values. The core owns these counters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Snafu)]
 #[non_exhaustive]
 pub enum ValueError {

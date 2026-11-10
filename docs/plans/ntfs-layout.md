@@ -117,14 +117,14 @@ Each milestone is one bounded agent run of approximately 15–30 minutes, includ
 
 ### M5 — Test names, documentation and final verification
 
-- [ ] Apply D6 test renames; update README/module documentation, the architecture crate description and core counter documentation per D5.
-- [ ] Audit public items and dependency edges against D1–D2. Snapshot both fuzz corpora before smoke testing; restore only smoke-generated changes and verify original filenames and byte hashes afterward.
-- [ ] Finish with both `deno task check` and `deno task check --fuzz` green; record commands and results in the milestone review.
+- [x] Apply D6 test renames; update README/module documentation, the architecture crate description and core counter documentation per D5.
+- [x] Audit public items and dependency edges against D1–D2. Snapshot both fuzz corpora before smoke testing; restore only smoke-generated changes and verify original filenames and byte hashes afterward.
+- [x] Finish with both `deno task check` and `deno task check --fuzz` green; record commands and results in the milestone review.
 
 ## Acceptance criteria
 
-- [ ] `rg -n '\bpub use\b' crates/adamite-ntfs/src` returns no matches; `lib.rs` has only the D1 contents, and generated rustdoc matches the public API table with one path per item.
-- [ ] Inspect `rg -n '^pub fn|^    pub fn' crates/adamite-ntfs/src` and the broader `rg -n '^\s*pub\s+(const\s+|async\s+|unsafe\s+)*fn\b' crates/adamite-ntfs/src`: every public operation is inside a type's impl, with zero module-level public functions. Rustdoc exposes only `FixupError` under `record::fixup`; `apply` and `FixedRecord` are internal.
-- [ ] List cross-module edges using `rg -n -U 'use\s+(crate|super|self)::[^;]*;' crates/adamite-ntfs/src`; also inspect fully qualified paths and moved impl blocks. Resolve relative imports and confirm every edge matches D2 and the graph has a topological ordering, including `#[cfg(fuzzing)]` code.
-- [ ] Searches find no old `GeometryError`, `_RECORD` system names, public free operations, external fixup/token calls, root item imports or obsolete module paths in active source, tests, fuzz code and examples; parser source/README contain no `ScanStats` mapping prose.
-- [ ] Direct-parse atomicity and D3 priority/category/source-chain regressions pass. Retain all existing cases and doctests except the token doctest, adapting API calls and expected errors where D3 changes precedence. Classification, allocation/error-size checks, fixture oracles and embedded builds pass. Both final gates are green; fixture files, fuzz selectors, target names and both corpora are unchanged.
+- [x] `rg -n '\bpub use\b' crates/adamite-ntfs/src` returns no matches; `lib.rs` has only the D1 contents, and generated rustdoc matches the public API table with one path per item.
+- [x] Inspect `rg -n '^pub fn|^    pub fn' crates/adamite-ntfs/src` and the broader `rg -n '^\s*pub\s+(const\s+|async\s+|unsafe\s+)*fn\b' crates/adamite-ntfs/src`: every public operation is inside a type's impl, with zero module-level public functions. Rustdoc exposes only `FixupError` under `record::fixup`; `apply` and `FixedRecord` are internal.
+- [x] List cross-module edges using `rg -n -U 'use\s+(crate|super|self)::[^;]*;' crates/adamite-ntfs/src`; also inspect fully qualified paths and moved impl blocks. Resolve relative imports and confirm every edge matches D2 and the graph has a topological ordering, including `#[cfg(fuzzing)]` code.
+- [x] Searches find no old `GeometryError`, `_RECORD` system names, public free operations, external fixup/token calls, root item imports or obsolete module paths in active source, tests, fuzz code and examples; parser source/README contain no `ScanStats` mapping prose.
+- [x] Direct-parse atomicity and D3 priority/category/source-chain regressions pass. Retain all existing cases and doctests except the token doctest, adapting API calls and expected errors where D3 changes precedence. Classification, allocation/error-size checks, fixture oracles and embedded builds pass. Both final gates are green; fixture files, fuzz selectors, target names and both corpora are unchanged.

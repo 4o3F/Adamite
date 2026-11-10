@@ -135,9 +135,6 @@ impl Iterator for LossyChars<'_> {
 impl FusedIterator for LossyChars<'_> {}
 
 /// Invalid UTF-16 input.
-///
-/// `ScanStats` mapping: [`Self::OddLength`] counts as a malformed name;
-/// [`Self::UnpairedSurrogate`] counts as invalid UTF-16. The core owns these counters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Snafu)]
 #[snafu(visibility(pub(crate)))]
 #[non_exhaustive]

@@ -139,10 +139,6 @@ impl<'a> Iterator for AttributeList<'a> {
 impl FusedIterator for AttributeList<'_> {}
 
 /// Attribute-list value, entry extent, or segment-field validation failure.
-///
-/// `ScanStats` mapping: `Value` delegates to [`ValueError`], including its
-/// type/storage mismatch categories; other variants count as corrupt attribute lists. The core owns
-/// these counters and resolves the reported segment references.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Snafu)]
 #[non_exhaustive]
 pub enum AttributeListError {

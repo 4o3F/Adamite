@@ -2,7 +2,21 @@
 
 `adamite-ntfs` parses NTFS boot sectors, FILE records, attributes, mapping pairs and typed attribute values from caller-owned bytes. It uses `no_std`, forbids unsafe code, and has snafu as its only runtime dependency. It performs no I/O or logging. It has no Cargo features.
 
-## Reading records in Phase 1
+## Modules
+
+Each public item has one path under its owning module:
+
+| Module | Contents and entry points |
+|---|---|
+| `boot` | `VolumeGeometry::from_boot_sector` and `BootError` |
+| `record` | `RecordHeader::peek`, `FileRecord::parse` and `RecordClass::classify`; `reference` contains `FileRef`, `system` contains `u64` record numbers such as `MFT` and `ROOT`, and `fixup` exposes `FixupError` |
+| `attribute` | Attribute types, flags and header parsing; `iter::AttributeIter`, `non_resident::{NonResident, StreamSizes}` and `runlist::{Runlist, Run, VcnRange}` |
+| `value` | `ValueError` and the `standard_information`, `file_name`, `attribute_list`, `data`, `index_allocation`, `reparse_point` and `bitmap` decoders |
+| `utf16` | Borrowed `Utf16Le`, unit iteration, strict/lossy character decoding and `Utf16Error` |
+
+Record parsing owns in-place update-sequence fixup. Typed decoders use their associated constructors, such as `value::file_name::FileName::from_attribute`, while `Attribute` retains its resident-value and non-resident descriptor accessors.
+
+## Reading records
 
 1. Peek with `RecordHeader::peek` when the caller needs fixed header fields before classification.
 2. Call `RecordClass::classify` on the mutable record buffer. It checks size, uniform unused fill, BAAD, FILE signature, header validity and IN_USE before fixup. Base and extension results borrow fixed bytes; other classes leave the buffer unchanged.
@@ -69,22 +83,24 @@ Standard information accepts exactly 48 bytes or at least 72 bytes, ignoring byt
 
 Non-resident sizes are exposed only from the first segment, where lowest VCN is zero. Attribute lists decode complete values and segment references for MFT bootstrap; the core resolves those references.
 
-## Errors and ScanStats categories
+## Errors
 
-Parser errors are non-exhaustive snafu enums implementing `core::error::Error`, `Copy`, `Send` and `Sync`, with no backtraces or heap data. Integration tests enforce a maximum size of 24 bytes. The core owns `ScanStats` and maps errors to the following categories.
+Parser errors are non-exhaustive snafu enums implementing `core::error::Error`, `Copy`, `Send` and `Sync`, with no backtraces or heap data. Integration tests enforce a maximum size of 24 bytes.
 
-| Error | Counter categories |
+| Error path | Validation failures |
 |---|---|
-| `BootError` | Invalid cluster extent for `InvalidClusterRange`; invalid volume geometry otherwise |
-| `FileRefError` | Invalid file reference |
-| `FixupError` | Bad fixup for `TrailerMismatch`; invalid fixup metadata otherwise |
-| `RecordError` | Nested fixup category for `Fixup`; invalid signature for `InvalidSignature`; corrupt header otherwise |
-| `AttributeError` | Corrupt attribute |
-| `ValueError` | Type/storage mismatch for `WrongAttributeType` and `WrongStorageForm`; corrupt typed value otherwise |
-| `RunlistError` | Out-of-volume extent for `RunOutOfVolume`; corrupt runlist otherwise |
-| `BitmapError` | Invalid bitmap length |
-| `AttributeListError` | `Value` follows its nested `ValueError` mapping; corrupt attribute list otherwise |
-| `Utf16Error` | Malformed name for `OddLength`; invalid UTF-16 for `UnpairedSurrogate` |
+| `boot::BootError` | Boot identification, sector/cluster/record sizes, volume bounds and requested cluster ranges |
+| `record::reference::FileRefError` | Record number outside the 48-bit reference field |
+| `record::fixup::FixupError` | Update-sequence metadata or a protected-trailer mismatch |
+| `record::RecordError` | Record size, signature or header; `Fixup { source }` preserves the nested repair error |
+| `attribute::AttributeError` | Attribute headers, regions, lengths, names or non-resident descriptors |
+| `value::ValueError` | Wrong attribute type/storage form or invalid typed payload |
+| `attribute::runlist::RunlistError` | Mapping-pair encoding, VCN coverage or physical extent bounds |
+| `value::bitmap::BitmapError` | Logical bit count exceeding the borrowed byte capacity |
+| `value::attribute_list::AttributeListError` | Attribute-list size, entry bounds or segment fields; `Value { source }` preserves typed validation errors |
+| `utf16::Utf16Error` | Odd byte length or an unpaired surrogate during strict decoding |
+
+`FileRecord::parse` validates the header before applying fixup and leaves the input unchanged on every error. Attribute, attribute-list and runlist iterators can report corruption after yielding valid entries; exhaust them before accepting the complete structure.
 
 ## Local checks and fixtures
 
@@ -101,10 +117,12 @@ cargo install cargo-fuzz --locked
 cargo +nightly fuzz build
 ```
 
-Run `deno task fuzz-corpus` from the repository root to generate deterministic parser/core seeds, with a 64 KiB budget per target. Re-running this command replaces generated and evolved corpus files with those seeds. Then, from `crates/adamite-ntfs`, run a target with:
+Run `deno task fuzz-corpus` from the repository root to generate deterministic parser/core seeds, with a 64 KiB budget per target. Re-running this command replaces generated and evolved corpus files with those seeds. Then, from `crates/adamite-ntfs`, create `../../target/fuzz-smoke/adamite-ntfs/file_record/` before running:
 
 ```text
-cargo +nightly fuzz run file_record fuzz/corpus/file_record/ -- -max_total_time=30 -max_len=262144 -timeout=2 -rss_limit_mb=2048
+cargo +nightly fuzz run file_record ../../target/fuzz-smoke/adamite-ntfs/file_record/ fuzz/corpus/file_record/ -- -max_total_time=30 -max_len=262144 -timeout=2 -rss_limit_mb=2048
 ```
 
-`deno task check --fuzz` requires a nonempty corpus for each target, builds both fuzz packages, and runs five parser targets plus core's `scan` target. Missing or empty corpora fail the command; run `deno task fuzz-corpus` to regenerate seeds.
+libFuzzer writes new inputs to the first corpus directory, so the scratch directory receives discoveries while the committed corpus remains a read-only seed source.
+
+`deno task check --fuzz` requires a nonempty corpus for each target, builds both fuzz packages, and runs five parser targets plus core's `scan` target. Smoke runs write discovered inputs into fresh `target/fuzz-smoke/<package>/<target>/` directories and read committed corpora as seeds. Missing or empty corpora fail the command; run `deno task fuzz-corpus` to regenerate seeds.

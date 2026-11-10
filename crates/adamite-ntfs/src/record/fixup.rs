@@ -1,4 +1,6 @@
 //! Two-pass update-sequence fixup with a fixed 512-byte protection stride.
+//!
+//! [`FixupError`] describes repair failures returned through [`super::RecordError::Fixup`]. [`super::FileRecord::parse`] owns the repair step.
 
 use snafu::{OptionExt, Snafu, ensure};
 
@@ -99,9 +101,6 @@ pub(super) fn apply(input: &mut [u8]) -> Result<FixedRecord<'_>, FixupError> {
 }
 
 /// Invalid update-sequence metadata or a torn protected trailer.
-///
-/// `ScanStats` mapping: `TrailerMismatch` counts as a bad fixup; other variants
-/// count as invalid fixup metadata. The core owns these counters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Snafu)]
 #[snafu(visibility(pub(crate)))]
 #[non_exhaustive]

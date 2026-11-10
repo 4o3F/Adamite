@@ -38,7 +38,7 @@ The diagram includes planned components; only the parser, single-threaded scan/s
 │                      → finalize → Done(snapshot, stats)        │
 │   query/ (planned): summary / listing / search / subtree ranks │
 │   persist/ (planned): flat-array snapshot serialization        │
-│ adamite-ntfs: pure boot/FILE/fixup/attribute/runlist decoding    │
+│ adamite-ntfs: boot/record/attribute/value/utf16 decoding         │
 └────────────────────────────────────────────────────────────────┘
 ```
 
@@ -46,7 +46,7 @@ The diagram includes planned components; only the parser, single-threaded scan/s
 
 ```text
 crates/
-  adamite-ntfs/     # implemented: byte decoding, no I/O, no_std
+  adamite-ntfs/     # implemented: boot/record/attribute/value/utf16, no_std
   adamite-core/     # implemented: scan/tree/snapshot; query/persist planned
   adamite-fixtures/ # implemented: shared development-only fixture support
   adamite-io/       # planned: VolumeReader + platform adapters serving requests
@@ -57,9 +57,11 @@ crates/
 
 | Implemented crate | Responsibility |
 |---|---|
-| `adamite-ntfs` | `no_std` decoding of geometry, records, fixup, attributes and runlists |
+| `adamite-ntfs` | `no_std` byte decoding through `boot`, `record`, `attribute`, `value` and `utf16` modules; record parsing owns fixup, and attribute runlists live under `attribute::runlist` |
 | `adamite-core` | Single-threaded `std` scan driver, NTFS merge, generic linking, aggregation and snapshot storage |
 | `adamite-fixtures` | Unpublished development support: image loading, independent manifests/reference MFT reconstruction and synthetic builders |
+
+Parser operations belong to their types: `boot::VolumeGeometry::from_boot_sector` decodes volume geometry, `record::FileRecord::parse` validates headers and restores protected trailers in place, and `record::RecordClass::classify` applies streaming classification precedence. Parsing errors leave record bytes unchanged. Typed attribute decoders live under `value`; record references and system record numbers live under `record::reference` and `record::system`. Every public parser item has one module path.
 
 Core performs no file, device or network I/O. It defines no reader trait or callback, starts no threads, reads no clocks and never sleeps. The caller owns transport and scheduling; `ScanContext` supplies optional label, scan FILETIME and free bytes. Core never acquires these values itself.
 

@@ -226,9 +226,6 @@ impl Iterator for Runlist<'_> {
 impl FusedIterator for Runlist<'_> {}
 
 /// Invalid mapping pairs, VCN coverage, or physical extent.
-///
-/// `ScanStats` mapping: `RunOutOfVolume` counts as an out-of-volume extent;
-/// all other variants count as corrupt runlists. The core owns these counters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Snafu)]
 #[non_exhaustive]
 pub enum RunlistError {
