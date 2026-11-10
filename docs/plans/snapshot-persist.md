@@ -99,7 +99,7 @@ Each milestone ends with one reviewed commit and `deno task check` green. A mile
 
 ### P4 — Rejection tests
 
-- [ ] Add the D7 header/section/CRC rejection tests, one targeted mutation test per D4 rule and the CRC-repairing proptest.
+- [x] Add the D7 header/section/CRC rejection tests, one targeted mutation test per D4 rule and the CRC-repairing proptest.
 
 ### P5 — Fuzzing and gate
 
