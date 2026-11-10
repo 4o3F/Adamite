@@ -106,43 +106,30 @@ export function checkSteps(options: { packages: readonly FuzzPackage[]; fuzz: bo
     }
   }
 
-  for (const feature of ["--no-default-features", "--all-features"]) {
-    steps.push(
-      {
-        name: `Clippy ${feature}`,
-        command: "cargo",
-        args: [
-          "clippy",
-          "--workspace",
-          "--all-targets",
-          "--locked",
-          feature,
-          "--",
-          "-D",
-          "warnings",
-        ],
-      },
-      {
-        name: `Rust tests ${feature}`,
-        command: "cargo",
-        args: ["test", "--workspace", "--locked", feature],
-        env: { PROPTEST_CASES: "1024" },
-      },
-    );
-  }
+  steps.push(
+    {
+      name: "Clippy",
+      command: "cargo",
+      args: ["clippy", "--workspace", "--all-targets", "--locked", "--", "-D", "warnings"],
+    },
+    {
+      name: "Rust tests",
+      command: "cargo",
+      args: ["test", "--workspace", "--locked"],
+      env: { PROPTEST_CASES: "1024" },
+    },
+  );
   steps.push({
     name: "Rust documentation",
     command: "cargo",
-    args: ["doc", "--workspace", "--no-deps", "--all-features"],
+    args: ["doc", "--workspace", "--no-deps"],
     env: { RUSTDOCFLAGS: "-D warnings" },
   });
-  for (const features of [[], ["--features", "alloc"]]) {
-    steps.push({
-      name: `no_std build ${features.length === 0 ? "without alloc" : "with alloc"}`,
-      command: "cargo",
-      args: ["build", "-p", "adamite-ntfs", "--target", "thumbv7em-none-eabihf", ...features],
-    });
-  }
+  steps.push({
+    name: "no_std build",
+    command: "cargo",
+    args: ["build", "-p", "adamite-ntfs", "--target", "thumbv7em-none-eabihf"],
+  });
   steps.push(
     { name: "dependency audit", command: "cargo", args: ["deny", "check"] },
     { name: "Deno formatting", command: "deno", args: ["fmt", "--check"] },

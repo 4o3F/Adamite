@@ -22,7 +22,8 @@ fn compressed_size(directory: &Path) -> io::Result<u64> {
     let mut total = 0u64;
     for entry in entries {
         let entry = entry?;
-        if entry.file_type()?.is_file() && entry.file_name().to_string_lossy().ends_with(".img.zst")
+        if entry.file_type()?.is_file()
+            && entry.file_name().as_encoded_bytes().ends_with(b".img.zst")
         {
             total = total
                 .checked_add(entry.metadata()?.len())

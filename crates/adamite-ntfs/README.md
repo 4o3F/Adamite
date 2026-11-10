@@ -1,6 +1,6 @@
 # adamite-ntfs
 
-`adamite-ntfs` parses NTFS boot sectors, FILE records, attributes, mapping pairs and typed attribute values from caller-owned bytes. It uses `no_std`, forbids unsafe code, and has snafu as its only runtime dependency. It performs no I/O or logging. Default features are empty; `alloc` enables fallible UTF-16 string conversion and runlist collection.
+`adamite-ntfs` parses NTFS boot sectors, FILE records, attributes, mapping pairs and typed attribute values from caller-owned bytes. It uses `no_std`, forbids unsafe code, and has snafu as its only runtime dependency. It performs no I/O or logging. It has no Cargo features.
 
 ## Reading records in Phase 1
 
@@ -61,7 +61,7 @@ fn scan_record(
 
 ## Accepted format variations
 
-Standard information accepts exactly 48 bytes or at least 72 bytes, ignoring bytes beyond the 72-byte header. File names accept trailing bytes after their declared UTF-16 units. Names preserve NULs, unpaired surrogates and unaligned byte storage; strict and lossy decoders are available without `alloc`. Fixup accepts every USN value. Unknown attribute types, flag bits and reparse tags are preserved. Attribute-list iteration accepts a short all-zero tail of fewer than 26 bytes. Resident value and mapping-pair offsets may be unaligned. Attribute lengths remain 8-aligned, and bounds, fixup integrity, iterator progress and numeric relationships are validated.
+Standard information accepts exactly 48 bytes or at least 72 bytes, ignoring bytes beyond the 72-byte header. File names accept trailing bytes after their declared UTF-16 units. Names preserve NULs, unpaired surrogates and unaligned byte storage; strict and lossy decoders are available. Fixup accepts every USN value. Unknown attribute types, flag bits and reparse tags are preserved. Attribute-list iteration accepts a short all-zero tail of fewer than 26 bytes. Resident value and mapping-pair offsets may be unaligned. Attribute lengths remain 8-aligned, and bounds, fixup integrity, iterator progress and numeric relationships are validated.
 
 Non-resident sizes are exposed only from the first segment, where lowest VCN is zero. Attribute lists decode complete values and segment references for MFT bootstrap; the core resolves those references.
 
@@ -77,14 +77,14 @@ Parser errors are non-exhaustive snafu enums implementing `core::error::Error`, 
 | `RecordError` | Nested fixup category for `Fixup`; invalid signature for `InvalidSignature`; corrupt header otherwise |
 | `AttributeError` | Corrupt attribute |
 | `ValueError` | Type/storage mismatch for `WrongAttributeType` and `WrongStorageForm`; corrupt typed value otherwise |
-| `RunlistError` | Out-of-volume extent for `RunOutOfVolume`; allocation failure when enabled; corrupt runlist otherwise |
+| `RunlistError` | Out-of-volume extent for `RunOutOfVolume`; corrupt runlist otherwise |
 | `BitmapError` | Invalid bitmap length |
 | `AttributeListError` | `Value` follows its nested `ValueError` mapping; corrupt attribute list otherwise |
-| `Utf16Error` | Malformed name for `OddLength`; invalid UTF-16 for `UnpairedSurrogate`; allocation failure when enabled |
+| `Utf16Error` | Malformed name for `OddLength`; invalid UTF-16 for `UnpairedSurrogate` |
 
 ## Local checks and fixtures
 
-From the repository root, run `deno task check`. It checks formatting, both feature sets with Clippy and tests, documentation, embedded `no_std` builds, dependency policy and Deno scripts. The property tests run 1024 cases per property through this task. `deno test --allow-read=scripts/fixtures/testdata scripts/fixtures/` checks manifest serialization and tool-output parsing.
+From the repository root, run `deno task check`. It checks formatting, Clippy, tests, documentation, an embedded `no_std` build, dependency policy and Deno scripts. The property tests run 1024 cases per property through this task. `deno test --allow-read=scripts/fixtures/testdata scripts/fixtures/` checks manifest serialization and tool-output parsing.
 
 On Linux, install ntfs-3g, zstd and attr, then run `deno task fixtures` from the repository root. This manual step uses sudo for image mounting, populates and verifies `basic-4k`, `frag-512` and `4kn-64k`, and writes each compressed image together with its independent JSON manifest under `tests/fixtures/ntfs/`. `deno task fixtures --help` prints usage without tool execution. The total compressed budget is 1 MiB. Rust fixture support uses ruzstd and compares decompressed length and frame checksum before bootstrapping the MFT.
 

@@ -68,16 +68,6 @@ proptest! {
             prop_assert_eq!(result, Err(Utf16Error::OddLength { len: bytes.len() }));
         }
     }
-
-    #[cfg(feature = "alloc")]
-    #[test]
-    fn string_helpers_equal_iterator_output(units in unit_sequences()) {
-        let bytes = encode(&units);
-        let view = Utf16Le::new(&bytes).unwrap();
-        let strict: Result<String, _> = view.decode_strict().collect();
-        prop_assert_eq!(view.to_string_strict(), strict);
-        prop_assert_eq!(view.to_string_lossy().unwrap(), view.decode_lossy().collect::<String>());
-    }
 }
 
 #[test]
@@ -105,8 +95,6 @@ fn unpaired_surrogate_followed_by_ascii() {
     );
     assert_eq!(view.decode_lossy().collect::<String>(), "\u{fffd}a");
     assert_eq!(view.units().collect::<Vec<_>>(), [0xd800, u16::from(b'a')]);
-    #[cfg(feature = "alloc")]
-    assert_eq!(view.to_string_lossy().unwrap(), "\u{fffd}a");
 }
 
 #[test]
@@ -145,9 +133,8 @@ fn surrogate_errors_use_unit_indices_after_pairs_and_lookahead() {
             }),
         ]
     );
-    #[cfg(feature = "alloc")]
     assert_eq!(
-        view.to_string_strict(),
+        view.decode_strict().collect::<Result<String, _>>(),
         Err(Utf16Error::UnpairedSurrogate {
             index: 2,
             unit: 0xd800
@@ -165,11 +152,11 @@ fn unaligned_bytes_empty_input_and_odd_length() {
     assert_eq!(empty.decode_strict().next(), None);
     assert_eq!(empty.decode_lossy().next(), None);
     assert_eq!(Utf16Le::new(&[0]), Err(Utf16Error::OddLength { len: 1 }));
-    #[cfg(feature = "alloc")]
-    {
-        assert_eq!(empty.to_string_strict().unwrap(), "");
-        assert_eq!(empty.to_string_lossy().unwrap(), "");
-    }
+    assert_eq!(
+        empty.decode_strict().collect::<Result<String, _>>(),
+        Ok(String::new())
+    );
+    assert_eq!(empty.decode_lossy().collect::<String>(), "");
 }
 
 #[test]

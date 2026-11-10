@@ -20,8 +20,6 @@ pub fn name(value: Utf16Le<'_>) {
     for character in value.decode_lossy() {
         black_box(character);
     }
-    black_box(value.to_string_strict()).ok();
-    black_box(value.to_string_lossy()).ok();
 }
 pub fn header(value: RecordHeader) {
     black_box(value.flags().contains(adamite_ntfs::RecordFlags::IN_USE));
@@ -103,7 +101,9 @@ pub fn descriptor(value: NonResident<'_>) {
         ));
     }
     runs(value.runs());
-    black_box(value.runs().collect_runs()).ok();
+    for run in value.runs() {
+        black_box(run).ok();
+    }
 }
 pub fn attribute(value: Attribute<'_>) {
     black_box(value.flags().contains(adamite_ntfs::AttributeFlags::SPARSE));

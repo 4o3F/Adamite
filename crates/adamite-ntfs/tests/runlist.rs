@@ -282,8 +282,6 @@ proptest! {
         }
         let collected: Result<Vec<_>, _> = Runlist::new(&encoder.encode(0), VcnRange::new(lowest, highest).unwrap()).collect();
         prop_assert_eq!(&collected.unwrap(), &expected);
-        #[cfg(feature = "alloc")]
-        prop_assert_eq!(Runlist::new(&encoder.encode(0), VcnRange::new(lowest, highest).unwrap()).collect_runs().unwrap(), expected);
     }
 
     #[test]

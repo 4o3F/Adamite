@@ -54,11 +54,6 @@ fn exhaust_name(name: adamite_ntfs::Utf16Le<'_>) {
     assert_eq!(name.units().count(), name.len_units());
     let _ = name.decode_strict().count();
     let _ = name.decode_lossy().count();
-    #[cfg(feature = "alloc")]
-    {
-        let _ = name.to_string_strict();
-        let _ = name.to_string_lossy();
-    }
 }
 
 fn exercise_attribute(attribute: Attribute<'_>) {
@@ -447,8 +442,6 @@ fn file_names_preserve_namespace_metadata_and_raw_units() {
     );
     assert_eq!(name.decode_lossy().collect::<String>(), "😀\0\u{fffd}a");
     assert!(name.decode_strict().collect::<Result<String, _>>().is_err());
-    #[cfg(feature = "alloc")]
-    assert_eq!(name.to_string_lossy().unwrap(), "😀\0\u{fffd}a");
 }
 
 #[test]

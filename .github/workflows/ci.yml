@@ -44,11 +44,9 @@ jobs:
           RUSTFLAGS: --cfg fuzzing
       - run: cargo test --manifest-path crates/adamite-core/fuzz/Cargo.toml --test harness --locked
         if: runner.os == 'Linux'
-      - run: cargo clippy --workspace --all-targets --locked --no-default-features -- -D warnings
-      - run: cargo clippy --workspace --all-targets --locked --all-features -- -D warnings
-      - run: cargo test --workspace --locked --no-default-features
-      - run: cargo test --workspace --locked --all-features
-      - run: cargo doc --workspace --no-deps --all-features
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+      - run: cargo doc --workspace --no-deps
         env:
           RUSTDOCFLAGS: -D warnings
 
@@ -63,7 +61,6 @@ jobs:
           build-warnings: ""
       - uses: Swatinem/rust-cache@v2
       - run: cargo build -p adamite-ntfs --target thumbv7em-none-eabihf
-      - run: cargo build -p adamite-ntfs --target thumbv7em-none-eabihf --features alloc
 
   deny:
     runs-on: ubuntu-latest

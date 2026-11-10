@@ -57,7 +57,7 @@ crates/
 
 | Implemented crate | Responsibility |
 |---|---|
-| `adamite-ntfs` | `no_std` decoding of geometry, records, fixup, attributes and runlists; optional `alloc` helpers |
+| `adamite-ntfs` | `no_std` decoding of geometry, records, fixup, attributes and runlists |
 | `adamite-core` | Single-threaded `std` scan driver, NTFS merge, generic linking, aggregation and snapshot storage |
 | `adamite-fixtures` | Unpublished development support: image loading, independent manifests/reference MFT reconstruction and synthetic builders |
 

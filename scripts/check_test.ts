@@ -112,18 +112,38 @@ Deno.test("normal checks include fixture and check-script tests with scoped read
   );
 });
 
-Deno.test("normal checks retain workspace feature coverage and parser-only no_std builds", () => {
+Deno.test("normal checks run once without feature flags and keep the no_std build parser-only", () => {
   const steps = checkSteps({ packages: fuzzPackages, fuzz: false });
-  for (const feature of ["--no-default-features", "--all-features"]) {
-    const tests = steps.find((step) => step.name === `Rust tests ${feature}`);
-    equal(tests?.args, ["test", "--workspace", "--locked", feature], "workspace tests");
-    equal(tests?.env, { PROPTEST_CASES: "1024" }, "property count");
+  equal(steps.filter((step) => step.args[0] === "clippy" && step.args.includes("--workspace")), [
+    {
+      name: "Clippy",
+      command: "cargo",
+      args: ["clippy", "--workspace", "--all-targets", "--locked", "--", "-D", "warnings"],
+    },
+  ], "workspace Clippy");
+  equal(steps.filter((step) => step.args[0] === "test" && step.args.includes("--workspace")), [
+    {
+      name: "Rust tests",
+      command: "cargo",
+      args: ["test", "--workspace", "--locked"],
+      env: { PROPTEST_CASES: "1024" },
+    },
+  ], "workspace tests");
+  equal(steps.find((step) => step.name === "Rust documentation")?.args, [
+    "doc",
+    "--workspace",
+    "--no-deps",
+  ], "documentation");
+  equal(steps.filter((step) => step.args.includes("thumbv7em-none-eabihf")), [
+    {
+      name: "no_std build",
+      command: "cargo",
+      args: ["build", "-p", "adamite-ntfs", "--target", "thumbv7em-none-eabihf"],
+    },
+  ], "no_std build");
+  for (const step of checkSteps({ packages: fuzzPackages, fuzz: true })) {
+    assert(!step.args.some((arg) => arg.includes("features")), `${step.name} has feature flags`);
   }
-  const builds = steps.filter((step) => step.args.includes("thumbv7em-none-eabihf"));
-  equal(builds.map((step) => step.args), [
-    ["build", "-p", "adamite-ntfs", "--target", "thumbv7em-none-eabihf"],
-    ["build", "-p", "adamite-ntfs", "--target", "thumbv7em-none-eabihf", "--features", "alloc"],
-  ], "no_std commands");
 });
 
 Deno.test("normal checks do not install tools, invoke nightly or generate fixtures/corpora", () => {
@@ -321,8 +341,18 @@ Deno.test("CI covers every fuzz target, Deno tests and Windows while keeping no_
   );
   equal(jobs.no_std.steps.flatMap((step) => step.run ? [step.run] : []), [
     "cargo build -p adamite-ntfs --target thumbv7em-none-eabihf",
-    "cargo build -p adamite-ntfs --target thumbv7em-none-eabihf --features alloc",
   ], "CI no_std commands");
+  equal(
+    jobs.check.steps.flatMap((step) =>
+      step.run?.startsWith("cargo ") && step.run.includes("--workspace") ? [step.run] : []
+    ),
+    [
+      "cargo clippy --workspace --all-targets --locked -- -D warnings",
+      "cargo test --workspace --locked",
+      "cargo doc --workspace --no-deps",
+    ],
+    "CI workspace commands",
+  );
   for (
     const step of checkSteps({ packages: fuzzPackages, fuzz: false }).filter((step) =>
       step.command === "deno" && step.args[0] === "test"

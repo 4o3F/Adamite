@@ -20,9 +20,6 @@ mod record;
 mod runlist;
 mod utf16;
 
-#[cfg(feature = "alloc")]
-extern crate alloc;
-
 pub use attribute::{
     Attribute, AttributeError, AttributeFlags, AttributeIter, AttributeList, AttributeListEntry,
     AttributeListError, AttributeType, Bitmap, BitmapError, BitmapIter, Data, FileAttributes,

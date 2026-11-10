@@ -2,8 +2,6 @@
 
 use core::{char::DecodeUtf16, iter::FusedIterator, slice::Iter};
 
-#[cfg(feature = "alloc")]
-use alloc::string::String;
 use snafu::{Snafu, ensure};
 
 use crate::bytes;
@@ -58,44 +56,6 @@ impl<'a> Utf16Le<'a> {
             strict: self.decode_strict(),
         }
     }
-
-    /// Copies the strict decoder's characters into an owned UTF-8 string.
-    ///
-    /// # Errors
-    ///
-    /// Returns the first [`Utf16Error::UnpairedSurrogate`], or
-    /// [`Utf16Error::AllocationFailed`] if reserving the string fails.
-    #[cfg(feature = "alloc")]
-    pub fn to_string_strict(self) -> Result<String, Utf16Error> {
-        let mut output = String::new();
-        for character in self.decode_strict() {
-            push_char(&mut output, character?)?;
-        }
-        Ok(output)
-    }
-
-    /// Copies the lossy decoder's characters into an owned UTF-8 string.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Utf16Error::AllocationFailed`] if reserving the string fails.
-    #[cfg(feature = "alloc")]
-    pub fn to_string_lossy(self) -> Result<String, Utf16Error> {
-        let mut output = String::new();
-        for character in self.decode_lossy() {
-            push_char(&mut output, character)?;
-        }
-        Ok(output)
-    }
-}
-
-#[cfg(feature = "alloc")]
-fn push_char(output: &mut String, character: char) -> Result<(), Utf16Error> {
-    output
-        .try_reserve(character.len_utf8())
-        .map_err(|_| AllocationFailedSnafu.build())?;
-    output.push(character);
-    Ok(())
 }
 
 /// An allocation-free iterator over the original little-endian code units.
@@ -174,11 +134,10 @@ impl Iterator for LossyChars<'_> {
 
 impl FusedIterator for LossyChars<'_> {}
 
-/// Invalid UTF-16 input or failure to reserve an owned string.
+/// Invalid UTF-16 input.
 ///
 /// `ScanStats` mapping: [`Self::OddLength`] counts as a malformed name;
-/// [`Self::UnpairedSurrogate`] counts as invalid UTF-16. With `alloc` enabled,
-/// `AllocationFailed` counts as an allocation failure. The core owns these counters.
+/// [`Self::UnpairedSurrogate`] counts as invalid UTF-16. The core owns these counters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Snafu)]
 #[snafu(visibility(pub(crate)))]
 #[non_exhaustive]
@@ -197,8 +156,4 @@ pub enum Utf16Error {
         /// The original unpaired surrogate unit.
         unit: u16,
     },
-    /// The owned string could not reserve room for the next character.
-    #[cfg(feature = "alloc")]
-    #[snafu(display("could not reserve memory for the UTF-8 string"))]
-    AllocationFailed,
 }

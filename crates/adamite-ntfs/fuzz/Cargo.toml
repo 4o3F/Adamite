@@ -11,7 +11,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-adamite-ntfs = { path = "..", features = ["alloc"] }
+adamite-ntfs = { path = ".." }
 
 [[bin]]
 name = "boot_sector"

@@ -2,8 +2,6 @@
 
 use core::iter::FusedIterator;
 
-#[cfg(feature = "alloc")]
-use alloc::vec::Vec;
 use snafu::{OptionExt, Snafu, ensure};
 
 use crate::{VolumeGeometry, bytes};
@@ -131,24 +129,6 @@ impl<'a> Runlist<'a> {
         }
     }
 
-    /// Collects every run, checking termination and reserving memory fallibly.
-    ///
-    /// # Errors
-    ///
-    /// Returns the first decoding error, or [`RunlistError::AllocationFailed`]
-    /// if reserving the output vector fails.
-    #[cfg(feature = "alloc")]
-    pub fn collect_runs(self) -> Result<Vec<Run>, RunlistError> {
-        let mut runs = Vec::new();
-        for result in self {
-            let run = result?;
-            runs.try_reserve(1)
-                .map_err(|_| AllocationFailedSnafu.build())?;
-            runs.push(run);
-        }
-        Ok(runs)
-    }
-
     fn read_next(&mut self) -> Result<Option<Run>, RunlistError> {
         let header = bytes::read_u8(self.input, self.cursor).context(MissingTerminatorSnafu)?;
         if header == 0 {
@@ -247,11 +227,10 @@ impl Iterator for Runlist<'_> {
 
 impl FusedIterator for Runlist<'_> {}
 
-/// Invalid mapping pairs, VCN coverage, physical extent, or output allocation.
+/// Invalid mapping pairs, VCN coverage, or physical extent.
 ///
 /// `ScanStats` mapping: `RunOutOfVolume` counts as an out-of-volume extent;
-/// `AllocationFailed`, when enabled, counts as an allocation failure. All other
-/// variants count as corrupt runlists. The core owns these counters.
+/// all other variants count as corrupt runlists. The core owns these counters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Snafu)]
 #[snafu(visibility(pub(crate)))]
 #[non_exhaustive]
@@ -307,8 +286,4 @@ pub enum RunlistError {
     /// A physical run extends past the last complete volume cluster.
     #[snafu(display("run extends outside the volume"))]
     RunOutOfVolume,
-    /// The output vector could not reserve one more run.
-    #[cfg(feature = "alloc")]
-    #[snafu(display("could not reserve memory for collected runs"))]
-    AllocationFailed,
 }

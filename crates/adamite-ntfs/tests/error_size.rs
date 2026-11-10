@@ -71,10 +71,4 @@ fn leaf_errors_have_display_messages_and_no_sources() {
     assert!(surrogate.to_string().contains("0xd800"));
     assert!(surrogate.to_string().contains('7'));
     assert!(surrogate.source().is_none());
-
-    #[cfg(feature = "alloc")]
-    {
-        assert!(!Utf16Error::AllocationFailed.to_string().is_empty());
-        assert!(Utf16Error::AllocationFailed.source().is_none());
-    }
 }
