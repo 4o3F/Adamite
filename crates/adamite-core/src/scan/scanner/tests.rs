@@ -34,6 +34,7 @@ use adamite_ntfs::{AttributeType, FileRecord, fixup};
 use std::path::Path;
 
 type TestResult = Result<(), Box<dyn Error>>;
+type ObservedDriveOutcome = (Vec<ReadRequest>, Result<(), ScanError>, usize);
 type DriveOutcome = (Vec<ReadRequest>, Result<(), ScanError>);
 type DriverOutcome = (Scanner, Vec<ReadRequest>, Result<(), ScanError>);
 
@@ -96,6 +97,16 @@ fn drive_to(
     image: &[u8],
     stop: ScanPhase,
 ) -> Result<DriveOutcome, Box<dyn Error>> {
+    let (requests, outcome, _) = drive_to_observed(scanner, image, stop)?;
+    Ok((requests, outcome))
+}
+
+fn drive_to_observed(
+    scanner: &mut Scanner,
+    image: &[u8],
+    stop: ScanPhase,
+) -> Result<ObservedDriveOutcome, Box<dyn Error>> {
+    let mut peak_transport_bytes = 0usize;
     let mut requests = Vec::new();
     let mut pending = Vec::new();
     let calls = image
@@ -107,7 +118,7 @@ fn drive_to(
     let mut previous_records = 0u64;
     for _ in 0..calls {
         let result = scanner.step();
-        assert_transport_bound(scanner)?;
+        peak_transport_bytes = peak_transport_bytes.max(assert_transport_bound(scanner)?);
         match result {
             Ok(ScanStep::Need(request)) => {
                 assert!(request.len <= scanner.config.chunk_size);
@@ -123,7 +134,7 @@ fn drive_to(
                 assert!(processed <= 256, "CPU step processed too many records");
                 previous_records = progress.records_processed;
                 if progress.phase == stop {
-                    return Ok((requests, Ok(())));
+                    return Ok((requests, Ok(()), peak_transport_bytes));
                 }
                 if matches!(
                     progress.phase,
@@ -148,11 +159,12 @@ fn drive_to(
                             request.id,
                             image.get(start..end).ok_or("response image slice")?,
                         )?;
-                        assert_transport_bound(scanner)?;
+                        peak_transport_bytes =
+                            peak_transport_bytes.max(assert_transport_bound(scanner)?);
                     }
                 }
             }
-            Err(error) => return Ok((requests, Err(error))),
+            Err(error) => return Ok((requests, Err(error), peak_transport_bytes)),
             Ok(ScanStep::Done(_)) => return Err("bootstrap unexpectedly completed the scan".into()),
         }
     }
@@ -1497,7 +1509,7 @@ fn bootstrap_accepts_complete_256k_list_with_bounded_entry_steps() -> TestResult
 use crate::entry::{RecordKind, StreamStorage};
 use adamite_fixtures::builders::FileNameBuilder;
 
-fn assert_transport_bound(scanner: &Scanner) -> TestResult {
+fn assert_transport_bound(scanner: &Scanner) -> Result<usize, Box<dyn Error>> {
     if let Some(state) = &scanner.ingest {
         let record_size = usize::try_from(
             scanner
@@ -1514,12 +1526,14 @@ fn assert_transport_bound(scanner: &Scanner) -> TestResult {
             .checked_mul(scanner.config.chunk_size)
             .and_then(|n| n.checked_add(record_size))
             .ok_or("transport byte bound")?;
+        let retained = state.transport_bytes(&scanner.requests)?;
         assert!(
-            state.transport_bytes(&scanner.requests)? <= bound,
+            retained <= bound,
             "retained raw MFT exceeds cap * chunk + record"
         );
+        return Ok(retained);
     }
-    Ok(())
+    Ok(0)
 }
 
 fn named_record(number: u32, name: Vec<u16>) -> RecordBuilder {
@@ -1643,15 +1657,13 @@ fn ingest_classification_and_patches_do_not_double_count_bootstrap() -> TestResu
         adamite_ntfs::FileRef::from_raw((7u64 << 48) | 6)
     );
     assert_eq!(patch.source.record(), 7);
+    assert_eq!(patch.contribution.reference, patch.source);
+    let name = patch.contribution.names.first().ok_or("patch name")?;
     assert_eq!(
-        patch
-            .contribution
-            .names
-            .first()
-            .ok_or("patch name")?
-            .attribute_id,
-        0
+        name.parent,
+        adamite_ntfs::FileRef::from_raw((7u64 << 48) | 5)
     );
+    assert_eq!(name.namespace, 1);
     assert_eq!(
         patch.contribution.names.first().ok_or("patch name")?.name,
         vec![80]
@@ -1867,7 +1879,7 @@ fn ingest_keeps_stream_segment_identity_sizes_and_typed_metadata() -> TestResult
         .standard_information
         .first()
         .ok_or("standard information")?;
-    assert_eq!(standard.attribute_id, 1);
+    assert_eq!(contribution.standard_information.len(), 1);
     assert_eq!(standard.value.times().modified(), 123);
     assert_eq!(standard.value.file_attributes().raw(), 0x20);
     assert_eq!(contribution.streams.len(), 4);
@@ -1920,7 +1932,13 @@ fn ingest_small_chunks_reordering_and_transport_bound_are_independent() -> TestR
     outcome?;
     let expected = reference.ingest.as_ref().ok_or("reference")?;
     for (cap, chunk) in [(3, 512), (4, 4096), (2, 16_384)] {
-        let (scanner, _, outcome) = ingest_image(&volume, cap, chunk)?;
+        let mut scanner = Scanner::new(ScanConfig {
+            max_outstanding: cap,
+            chunk_size: chunk,
+            ..ScanConfig::default()
+        })?;
+        let (_, outcome, peak_transport_bytes) =
+            drive_to_observed(&mut scanner, &volume, ScanPhase::Merge)?;
         outcome?;
         let actual = scanner.ingest.as_ref().ok_or("state")?;
         assert_eq!(actual.slots, expected.slots);
@@ -1930,10 +1948,10 @@ fn ingest_small_chunks_reordering_and_transport_bound_are_independent() -> TestR
             .checked_mul(chunk)
             .and_then(|n| n.checked_add(1024))
             .ok_or("expected transport bound")?;
-        assert!(actual.peak_transport_bytes <= bound);
+        assert!(peak_transport_bytes <= bound);
         if (cap, chunk) == (4, 4096) {
             assert_eq!(
-                actual.peak_transport_bytes, bound,
+                peak_transport_bytes, bound,
                 "test must fill all response slots"
             );
         }

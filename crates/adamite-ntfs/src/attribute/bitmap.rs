@@ -31,10 +31,12 @@ impl<'a> Bitmap<'a> {
         })
     }
     /// Returns the caller's logical bit count.
+    #[must_use]
     pub const fn logical_bits(self) -> usize {
         self.logical_bits
     }
     /// Returns one LSB-first bit, or None at or beyond the logical count.
+    #[must_use]
     pub fn get(self, index: usize) -> Option<bool> {
         if index >= self.logical_bits {
             return None;
@@ -42,6 +44,7 @@ impl<'a> Bitmap<'a> {
         bytes::read_bit(self.bytes, index)
     }
     /// Iterates exactly the logical bit count and remains exhausted afterward.
+    #[must_use]
     pub fn iter(self) -> BitmapIter<'a> {
         BitmapIter {
             bitmap: self,

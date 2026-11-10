@@ -144,7 +144,8 @@ impl Discovery {
             let value = match &descriptor.storage {
                 ListStorage::Resident(bytes) => {
                     check_storage(descriptor.flags, 0)?;
-                    AttributeList::new(bytes)
+                    // Check the value bound here; entries are parsed in bounded steps later.
+                    let _ = AttributeList::new(bytes)
                         .map_err(|source| ScanError::AttributeList { source })?;
                     ListValue::Resident(Some(copy_slice(bytes)?))
                 }

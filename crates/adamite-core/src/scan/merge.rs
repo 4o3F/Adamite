@@ -11,8 +11,9 @@ use crate::{
 use adamite_ntfs::{
     AttributeFlags, AttributeType, BAD_CLUS_RECORD, FileAttributes, ROOT_RECORD, RecordFlags,
 };
-use std::vec::IntoIter;
+use std::{cmp::Ordering, vec::IntoIter};
 
+/// Maximum patches or base records processed before yielding to the caller.
 const ITEMS_PER_STEP: usize = 256;
 /// The named DATA stream used by $BadClus; its logical size describes volume coverage.
 const BAD_STREAM_NAME: &[u16] = &[36, 66, 97, 100];
@@ -30,9 +31,8 @@ pub(super) struct Merge {
     cluster_size: u32,
     cursor: usize,
     stage: Stage,
+    root_emitted: bool,
     pub entries: Vec<EntryRecord>,
-    #[cfg(test)]
-    pub last_batch: usize,
 }
 
 impl Merge {
@@ -43,18 +43,13 @@ impl Merge {
             cluster_size,
             cursor: 0,
             stage: Stage::Patches,
+            root_emitted: false,
             entries: Vec::new(),
-            #[cfg(test)]
-            last_batch: 0,
         }
     }
 
     /// Returns true only after every patch and base has been considered.
     pub(super) fn step(&mut self, stats: &mut ScanStats) -> Result<bool, ScanError> {
-        #[cfg(test)]
-        {
-            self.last_batch = 0;
-        }
         for _ in 0..ITEMS_PER_STEP {
             match self.stage {
                 Stage::Patches => {
@@ -66,11 +61,7 @@ impl Merge {
                 }
                 Stage::Entries => {
                     let Some(slot) = self.slots.get_mut(self.cursor) else {
-                        if !self
-                            .entries
-                            .iter()
-                            .any(|entry| entry.file_ref.record() == ROOT_RECORD)
-                        {
+                        if !self.root_emitted {
                             return Err(ScanError::RequiredRecord {
                                 record: ROOT_RECORD,
                             });
@@ -90,7 +81,9 @@ impl Merge {
                             reason: "base slot has no record flags",
                         })?;
                         if let Some(entry) = entry(base, flags, self.cluster_size, stats)? {
+                            let is_root = entry.file_ref.record() == ROOT_RECORD;
                             push(&mut self.entries, entry)?;
+                            self.root_emitted |= is_root;
                         } else if ordinal == ROOT_RECORD {
                             return Err(ScanError::RequiredRecord {
                                 record: ROOT_RECORD,
@@ -98,13 +91,6 @@ impl Merge {
                         }
                     }
                 }
-            }
-            #[cfg(test)]
-            {
-                self.last_batch = self
-                    .last_batch
-                    .checked_add(1)
-                    .ok_or_else(|| overflow("merge batch count"))?;
             }
         }
         Ok(false)
@@ -281,6 +267,54 @@ fn stream(segments: &[StreamSegment], cluster_size: u32) -> Result<StreamTotals,
     })
 }
 
+fn entry_flags(
+    record_flags: RecordFlags,
+    attributes: FileAttributes,
+    reparse_tag: Option<u32>,
+) -> EntryFlags {
+    let mut flags = EntryFlags::default();
+    if record_flags.contains(RecordFlags::DIRECTORY)
+        || attributes.contains(FileAttributes::DIRECTORY)
+    {
+        flags.insert(EntryFlags::DIRECTORY);
+    }
+    if reparse_tag.is_some() || attributes.contains(FileAttributes::REPARSE_POINT) {
+        flags.insert(EntryFlags::REPARSE);
+    }
+    if attributes.contains(FileAttributes::SPARSE_FILE) {
+        flags.insert(EntryFlags::SPARSE);
+    }
+    if attributes.contains(FileAttributes::COMPRESSED) {
+        flags.insert(EntryFlags::COMPRESSED);
+    }
+    if attributes.contains(FileAttributes::HIDDEN) {
+        flags.insert(EntryFlags::HIDDEN);
+    }
+    if attributes.contains(FileAttributes::SYSTEM) {
+        flags.insert(EntryFlags::SYSTEM);
+    }
+    flags
+}
+
+fn compare_segments(left: &StreamSegment, right: &StreamSegment) -> Ordering {
+    (
+        left.attribute_type.raw(),
+        &left.name,
+        lowest(left),
+        left.source.record(),
+        left.source.sequence(),
+        left.attribute_id,
+    )
+        .cmp(&(
+            right.attribute_type.raw(),
+            &right.name,
+            lowest(right),
+            right.source.record(),
+            right.source.sequence(),
+            right.attribute_id,
+        ))
+}
+
 fn entry(
     mut base: RecordContribution,
     record_flags: RecordFlags,
@@ -309,46 +343,8 @@ fn entry(
     let attrs = standard.map_or(0, |value| value.file_attributes().raw());
     let mtime = standard.map_or(0, |value| value.times().modified());
     let reparse_tag = base.reparse_tags.first().map(|attribute| attribute.tag);
-    let attributes = FileAttributes::from_raw(attrs);
-    let mut flags = EntryFlags::default();
-    if record_flags.contains(RecordFlags::DIRECTORY)
-        || attributes.contains(FileAttributes::DIRECTORY)
-    {
-        flags.insert(EntryFlags::DIRECTORY);
-    }
-    if reparse_tag.is_some() || attributes.contains(FileAttributes::REPARSE_POINT) {
-        flags.insert(EntryFlags::REPARSE);
-    }
-    if attributes.contains(FileAttributes::SPARSE_FILE) {
-        flags.insert(EntryFlags::SPARSE);
-    }
-    if attributes.contains(FileAttributes::COMPRESSED) {
-        flags.insert(EntryFlags::COMPRESSED);
-    }
-    if attributes.contains(FileAttributes::HIDDEN) {
-        flags.insert(EntryFlags::HIDDEN);
-    }
-    if attributes.contains(FileAttributes::SYSTEM) {
-        flags.insert(EntryFlags::SYSTEM);
-    }
-    base.streams.sort_unstable_by(|left, right| {
-        (
-            left.attribute_type.raw(),
-            &left.name,
-            lowest(left),
-            left.source.record(),
-            left.source.sequence(),
-            left.attribute_id,
-        )
-            .cmp(&(
-                right.attribute_type.raw(),
-                &right.name,
-                lowest(right),
-                right.source.record(),
-                right.source.sequence(),
-                right.attribute_id,
-            ))
-    });
+    let mut flags = entry_flags(record_flags, FileAttributes::from_raw(attrs), reparse_tag);
+    base.streams.sort_unstable_by(compare_segments);
     let mut size = 0u64;
     let mut ads_size = 0u64;
     let mut alloc = 0u64;

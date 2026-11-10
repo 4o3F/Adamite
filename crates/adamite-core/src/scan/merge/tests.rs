@@ -14,7 +14,6 @@ fn reference(record: u64) -> FileRef {
 }
 fn name(value: u16) -> NameAttribute {
     NameAttribute {
-        attribute_id: 0,
         parent: reference(5),
         namespace: 1,
         name: vec![value],
@@ -145,7 +144,7 @@ fn model(lowest: i64, highest: i64, sizes: [i64; 4]) -> NonResidentModel {
     }
 }
 
-fn standard(id: u16, attrs: u32, mtime: u64) -> Result<StandardAttribute, Box<dyn Error>> {
+fn standard(attrs: u32, mtime: u64) -> Result<StandardAttribute, Box<dyn Error>> {
     let mut bytes = [0u8; 48];
     bytes
         .get_mut(8..16)
@@ -156,7 +155,6 @@ fn standard(id: u16, attrs: u32, mtime: u64) -> Result<StandardAttribute, Box<dy
         .ok_or("SI attrs")?
         .copy_from_slice(&attrs.to_le_bytes());
     Ok(StandardAttribute {
-        attribute_id: id,
         value: StandardInformation::parse(&bytes)?,
     })
 }
@@ -168,8 +166,22 @@ fn finish(
     let mut merge = Merge::new(slots, patches, 512);
     let mut stats = ScanStats::default();
     for _ in 0..4096 {
+        let before = (merge.patches.len(), merge.cursor);
         let done = merge.step(&mut stats)?;
-        assert!(merge.last_batch <= 256);
+        let patches = before
+            .0
+            .checked_sub(merge.patches.len())
+            .ok_or_else(|| overflow("test patch progress"))?;
+        let slots = merge
+            .cursor
+            .checked_sub(before.1)
+            .ok_or_else(|| overflow("test slot progress"))?;
+        assert!(
+            patches
+                .checked_add(slots)
+                .ok_or_else(|| overflow("test batch size"))?
+                <= 256
+        );
         if done {
             return Ok((merge.entries, stats));
         }
@@ -194,7 +206,7 @@ fn merge_extension_before_base_and_multisegment_stream_counted_once() -> TestRes
     let mut added = contribution(1);
     added.hard_links = 9;
     added.names = vec![name(66)];
-    added.standard_information.push(standard(2, 6, 123)?);
+    added.standard_information.push(standard(6, 123)?);
     added
         .streams
         .push(nonresident(1, 9, model(1, 1, [-1; 4]), 0)?);
@@ -368,11 +380,8 @@ fn merge_badclus_bad_excludes_only_its_logical_ads_size() -> TestResult {
 fn merge_reparse_directory_and_si_flags_are_retained() -> TestResult {
     let mut base = contribution(6);
     base.standard_information
-        .push(standard(1, 0x10 | 0x400 | 0x200 | 0x800 | 6, 456)?);
-    base.reparse_tags.push(ReparseAttribute {
-        attribute_id: 2,
-        tag: 0xa000000c,
-    });
+        .push(standard(0x10 | 0x400 | 0x200 | 0x800 | 6, 456)?);
+    base.reparse_tags.push(ReparseAttribute { tag: 0xa000000c });
     let (entries, _) = finish(slots(base)?, vec![])?;
     let entry = find(&entries, 6)?;
     for flag in [
@@ -391,9 +400,22 @@ fn merge_reparse_directory_and_si_flags_are_retained() -> TestResult {
 }
 
 #[test]
+fn merge_missing_root_is_fatal() -> TestResult {
+    let mut without_root = slots(contribution(6))?;
+    *without_root.get_mut(5).ok_or("root slot")? = empty_slot();
+    for slots in [Vec::new(), without_root] {
+        assert!(matches!(
+            finish(slots, vec![]),
+            Err(ScanError::RequiredRecord { record: 5 })
+        ));
+    }
+    Ok(())
+}
+
+#[test]
 fn merge_conflicting_si_and_corrupt_root_are_fatal_or_discarded() -> TestResult {
     let mut base = contribution(6);
-    base.standard_information = vec![standard(0, 0, 1)?, standard(1, 0, 2)?];
+    base.standard_information = vec![standard(0, 1)?, standard(0, 2)?];
     let (entries, stats) = finish(slots(base)?, vec![])?;
     assert!(entries.iter().all(|entry| entry.file_ref.record() != 6));
     assert_eq!(stats.corrupt_values, 1);

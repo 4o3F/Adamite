@@ -398,6 +398,8 @@ pub struct ScanScheduler {
 
 Rust crates use edition 2024 and toolchain 1.99. Keep `rust-toolchain.toml` and the workspace `rust-version` synchronized.
 
+Production types must not carry fields, variants or hook state used only by tests; tests observe real outputs or existing production state.
+
 Every crate uses snafu errors. The parser configures snafu with `default-features = false` and `features = ["rust_1_81"]` for `no_std` support.
 
 Crates that log use tracing, beginning with `adamite-core`; binaries install tracing-subscriber. `adamite-ntfs` returns parsed values and errors without logging.

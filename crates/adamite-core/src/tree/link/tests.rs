@@ -36,17 +36,104 @@ fn entry(record: u64, parent: u64, label: &str, directory: bool) -> EntryRecord 
 fn root() -> EntryRecord {
     entry(5, 5, ".", true)
 }
+// Compute cumulative work from the iterators, cursors and graph marks used by linking.
+fn stage_number(stage: &Stage) -> usize {
+    match stage {
+        Stage::Prepare => 0,
+        Stage::Metadata => 1,
+        Stage::Resolve => 2,
+        Stage::Cycles => 3,
+        Stage::Convert => 4,
+        Stage::Emit => 5,
+        Stage::Done => 6,
+    }
+}
+
+fn sum_work(items: impl IntoIterator<Item = usize>) -> Result<usize, Box<dyn Error>> {
+    items.into_iter().try_fold(0usize, |total, item| {
+        total
+            .checked_add(item)
+            .ok_or_else(|| "test progress overflow".into())
+    })
+}
+
+fn observed_work(
+    linker: &Linker,
+    stats: &ScanStats,
+    input_count: usize,
+) -> Result<usize, Box<dyn Error>> {
+    let stage = stage_number(&linker.stage);
+    let cursor_work = |phase, total| {
+        if stage < phase {
+            0
+        } else if stage == phase {
+            linker.cursor
+        } else {
+            total
+        }
+    };
+    let prepared = input_count
+        .checked_sub(linker.entries.len())
+        .ok_or("entry iterator moved backwards")?;
+    let record_nodes = sum_work(linker.records.iter().map(|record| record.len))?;
+    let metadata_nodes = usize::from(linker.metadata.is_some());
+    let resolved_orphan = usize::from(stats.orphans > stats.cycle_nodes);
+    let resolved = sum_work([record_nodes, metadata_nodes, resolved_orphan])?;
+    let total_nodes = sum_work([
+        record_nodes,
+        metadata_nodes,
+        usize::from(linker.orphaned.is_some()),
+    ])?;
+    let cycles = if stage < 3 {
+        0
+    } else {
+        let marks = sum_work(linker.marks.iter().copied().map(usize::from))?;
+        // Root and an orphan directory created during cycle repair start already finished.
+        let automatic_orphan = linker.orphaned.is_some() && stats.orphans == stats.cycle_nodes;
+        let automatic = if automatic_orphan { 4 } else { 2 };
+        let visits_and_finishes = marks.checked_sub(automatic).ok_or("invalid graph marks")?;
+        let scanned = if stage == 3 {
+            linker.cursor
+        } else {
+            linker.marks.len()
+        }
+        .checked_sub(1)
+        .ok_or("missing root mark")?;
+        sum_work([
+            visits_and_finishes,
+            scanned,
+            usize::try_from(stats.cycle_nodes)?,
+        ])?
+    };
+    sum_work([
+        prepared,
+        cursor_work(1, linker.records.len()),
+        cursor_work(2, resolved),
+        cycles,
+        cursor_work(4, total_nodes),
+        linker.result.nodes.len(),
+    ])
+}
+
 fn run(entries: Vec<EntryRecord>) -> Result<(ParentTree, ScanStats), Box<dyn Error>> {
     let limit = entries
         .len()
         .checked_mul(32)
         .and_then(|n| n.checked_add(256))
         .ok_or("link test step bound")?;
+    let input_count = entries.len();
     let mut linker = Linker::new(entries)?;
     let mut stats = ScanStats::default();
     for _ in 0..limit {
+        let before = observed_work(&linker, &stats, input_count)?;
         let done = linker.step(&mut stats)?;
-        assert!(linker.last_batch <= 256);
+        let after = observed_work(&linker, &stats, input_count)?;
+        assert!(
+            after
+                .checked_sub(before)
+                .ok_or("link progress moved backwards")?
+                <= 256
+        );
         if done {
             let before = stats.clone();
             assert!(linker.step(&mut stats)?);

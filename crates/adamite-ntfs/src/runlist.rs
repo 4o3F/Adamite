@@ -43,14 +43,17 @@ impl VcnRange {
     }
 
     /// Returns the first virtual cluster in this segment.
+    #[must_use]
     pub const fn lowest_vcn(self) -> u64 {
         self.lowest
     }
     /// Returns the inclusive highest VCN, or -1 for an empty stream.
+    #[must_use]
     pub const fn highest_vcn(self) -> i64 {
         self.highest
     }
     /// Reports whether the range denotes the empty stream `(0, -1)`.
+    #[must_use]
     pub const fn is_empty(self) -> bool {
         self.end == 0
     }
@@ -66,14 +69,17 @@ pub struct Run {
 
 impl Run {
     /// Returns the first virtual cluster of the run.
+    #[must_use]
     pub const fn vcn(self) -> u64 {
         self.vcn
     }
     /// Returns the positive number of clusters in the run.
+    #[must_use]
     pub const fn length(self) -> u64 {
         self.length
     }
     /// Returns the first physical cluster, or None for a sparse run.
+    #[must_use]
     pub const fn lcn(self) -> Option<u64> {
         self.lcn
     }
@@ -101,6 +107,7 @@ impl Run {
 /// An error is yielded once, then iteration ends. The zero terminator verifies
 /// exact VCN coverage and ignores all following padding. Exhaust the iterator
 /// to observe missing terminators and under-coverage.
+#[must_use = "exhaust the runlist to validate termination and VCN coverage"]
 #[derive(Debug, Clone)]
 pub struct Runlist<'a> {
     input: &'a [u8],

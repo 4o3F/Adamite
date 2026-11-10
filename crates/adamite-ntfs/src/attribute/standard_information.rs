@@ -39,14 +39,17 @@ impl FileAttributes {
     /// The file is encrypted.
     pub const ENCRYPTED: Self = Self(0x4000);
     /// Preserves the complete on-disk field.
+    #[must_use]
     pub const fn from_raw(raw: u32) -> Self {
         Self(raw)
     }
     /// Returns the original attribute bits.
+    #[must_use]
     pub const fn raw(self) -> u32 {
         self.0
     }
     /// Reports whether every requested attribute bit is present.
+    #[must_use]
     pub const fn contains(self, flags: Self) -> bool {
         self.0 & flags.0 == flags.0
     }
@@ -76,18 +79,22 @@ impl FileTimes {
         })
     }
     /// Returns the creation FILETIME.
+    #[must_use]
     pub const fn created(self) -> u64 {
         self.created
     }
     /// Returns the last data-modification FILETIME.
+    #[must_use]
     pub const fn modified(self) -> u64 {
         self.modified
     }
     /// Returns the last record-change FILETIME.
+    #[must_use]
     pub const fn record_changed(self) -> u64 {
         self.record_changed
     }
     /// Returns the last-access FILETIME.
+    #[must_use]
     pub const fn accessed(self) -> u64 {
         self.accessed
     }
@@ -152,26 +159,32 @@ impl StandardInformation {
         })
     }
     /// Returns the four FILETIMEs at offsets 0x00..0x20.
+    #[must_use]
     pub const fn times(self) -> FileTimes {
         self.times
     }
     /// Returns all file-attribute bits at offset 0x20.
+    #[must_use]
     pub const fn file_attributes(self) -> FileAttributes {
         self.attributes
     }
     /// Returns the owner identifier at 0x30 for an extended value.
+    #[must_use]
     pub fn owner_id(self) -> Option<u32> {
         self.extended.map(|extra| extra.owner_id)
     }
     /// Returns the security identifier at 0x34 for an extended value.
+    #[must_use]
     pub fn security_id(self) -> Option<u32> {
         self.extended.map(|extra| extra.security_id)
     }
     /// Returns quota charged at 0x38 for an extended value.
+    #[must_use]
     pub fn quota_charged(self) -> Option<u64> {
         self.extended.map(|extra| extra.quota_charged)
     }
     /// Returns the update sequence number at 0x40 for an extended value.
+    #[must_use]
     pub fn usn(self) -> Option<u64> {
         self.extended.map(|extra| extra.usn)
     }

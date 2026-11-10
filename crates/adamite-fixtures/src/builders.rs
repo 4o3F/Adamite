@@ -42,6 +42,7 @@ impl BootSectorBuilder {
     /// # Panics
     ///
     /// Panics if the configured lengths, offsets or values cannot fit the encoded format.
+    #[must_use]
     pub fn build(&self) -> [u8; 512] {
         let mut bytes = [0; 512];
         bytes[..3].copy_from_slice(&[0xeb, 0x52, 0x90]);
@@ -106,6 +107,7 @@ impl Default for RecordBuilder {
 
 impl RecordBuilder {
     /// Returns the aligned first-attribute offset after the update-sequence array.
+    #[must_use]
     pub fn first_attribute(&self) -> usize {
         (usize::from(self.usa_offset) + (self.size / 512 + 1) * 2 + 7) & !7
     }
@@ -115,6 +117,7 @@ impl RecordBuilder {
     /// # Panics
     ///
     /// Panics if the configured lengths, offsets or values cannot fit the encoded format.
+    #[must_use]
     pub fn plain(&self) -> Vec<u8> {
         let mut bytes = vec![0; self.size];
         bytes[..4].copy_from_slice(b"FILE");
@@ -149,6 +152,7 @@ impl RecordBuilder {
     /// # Panics
     ///
     /// Panics if the configured lengths, offsets or values cannot fit the encoded format.
+    #[must_use]
     pub fn protect(&self, plain: &[u8]) -> Vec<u8> {
         let mut bytes = plain.to_vec();
         let usa = usize::from(self.usa_offset);
@@ -167,6 +171,7 @@ impl RecordBuilder {
     /// # Panics
     ///
     /// Panics if the configured lengths, offsets or values cannot fit the encoded format.
+    #[must_use]
     pub fn build(&self) -> Vec<u8> {
         self.protect(&self.plain())
     }
@@ -242,6 +247,7 @@ pub struct AttrBuilder {
 
 impl AttrBuilder {
     /// Creates a resident attribute with the supplied value.
+    #[must_use]
     pub fn resident(type_code: u32, value: Vec<u8>) -> Self {
         Self {
             type_code,
@@ -255,6 +261,7 @@ impl AttrBuilder {
     }
 
     /// Creates a non-resident attribute from raw descriptor fields.
+    #[must_use]
     pub fn non_resident(type_code: u32, model: NonResidentModel) -> Self {
         Self {
             body: AttrBody::NonResident(model),
@@ -267,6 +274,7 @@ impl AttrBuilder {
     /// # Panics
     ///
     /// Panics if the configured lengths, offsets or values cannot fit the encoded format.
+    #[must_use]
     pub fn build(&self) -> Vec<u8> {
         assert!(self.name.len() <= 255);
         let header = match &self.body {
@@ -358,6 +366,7 @@ impl FileNameBuilder {
     /// # Panics
     ///
     /// Panics if the configured lengths, offsets or values cannot fit the encoded format.
+    #[must_use]
     pub fn build(&self) -> Vec<u8> {
         let mut bytes = vec![0; 66 + 2 * self.name.len()];
         bytes[..8].copy_from_slice(&self.parent.to_le_bytes());
@@ -416,6 +425,7 @@ impl AttrListBuilder {
     /// # Panics
     ///
     /// Panics if the configured lengths, offsets or values cannot fit the encoded format.
+    #[must_use]
     pub fn build(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
         for entry in &self.entries {

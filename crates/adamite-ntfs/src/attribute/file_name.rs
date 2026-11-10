@@ -59,34 +59,42 @@ impl<'a> FileName<'a> {
         })
     }
     /// Returns the parent reference at value offset 0x00.
+    #[must_use]
     pub const fn parent(self) -> FileRef {
         self.parent
     }
     /// Returns the cached FILETIMEs at offsets 0x08..0x28.
+    #[must_use]
     pub const fn times(self) -> FileTimes {
         self.times
     }
     /// Returns cached allocated bytes at 0x28, which may be stale.
+    #[must_use]
     pub const fn cached_allocated_size(self) -> u64 {
         self.allocated
     }
     /// Returns cached data bytes at 0x30, which may be stale.
+    #[must_use]
     pub const fn cached_data_size(self) -> u64 {
         self.data
     }
     /// Returns all file-attribute bits at offset 0x38.
+    #[must_use]
     pub const fn file_attributes(self) -> FileAttributes {
         self.attributes
     }
     /// Returns the uninterpreted EA-size/reparse-tag word at offset 0x3C.
+    #[must_use]
     pub const fn ea_size_or_reparse_tag(self) -> u32 {
         self.ea_or_reparse
     }
     /// Returns namespace 0 (POSIX), 1 (Win32), 2 (DOS), or 3 (Win32 and DOS).
+    #[must_use]
     pub const fn namespace(self) -> u8 {
         self.namespace
     }
     /// Borrows the original name units at offset 0x42.
+    #[must_use]
     pub const fn name(self) -> Utf16Le<'a> {
         self.name
     }

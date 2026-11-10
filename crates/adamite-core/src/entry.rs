@@ -24,7 +24,6 @@ pub(crate) struct RecordSlot {
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct NameAttribute {
-    pub attribute_id: u16,
     pub parent: FileRef,
     pub namespace: u8,
     pub name: Vec<u16>,
@@ -32,13 +31,11 @@ pub(crate) struct NameAttribute {
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct StandardAttribute {
-    pub attribute_id: u16,
     pub value: StandardInformation,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct ReparseAttribute {
-    pub attribute_id: u16,
     pub tag: u32,
 }
 
@@ -80,7 +77,7 @@ pub(crate) struct RecordContribution {
 pub(crate) struct Patch {
     pub base: FileRef,
     pub source: FileRef,
-    // Attribute ids are retained on every individual contribution above.
+    // Stream attribute ids are retained for segment identity.
     pub contribution: RecordContribution,
 }
 

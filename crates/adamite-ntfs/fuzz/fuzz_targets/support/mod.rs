@@ -1,4 +1,7 @@
-#![allow(dead_code)]
+#![expect(
+    dead_code,
+    reason = "each fuzz target uses only part of the shared decoder coverage"
+)]
 
 use adamite_ntfs::{
     Attribute, AttributeList, Bitmap, Data, FileName, IndexAllocation, NonResident, RecordHeader,

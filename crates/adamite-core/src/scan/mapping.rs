@@ -18,7 +18,6 @@ pub(super) struct MftMapping {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct ReadPiece {
-    pub virtual_offset: u64,
     pub offset: u64,
     pub len: usize,
 }
@@ -169,11 +168,7 @@ impl MftMapping {
                     .ok_or_else(|| overflow("remaining run bytes"))?;
                 let len = usize::try_from(length.min(available))
                     .map_err(|_| overflow("request length"))?;
-                return Ok(ReadPiece {
-                    virtual_offset,
-                    offset,
-                    len,
-                });
+                return Ok(ReadPiece { offset, len });
             }
         }
         Err(ScanError::UnmappedRange {
@@ -331,27 +326,31 @@ mod tests {
         )?;
         let mut assembly = RecordAssembly::new(256, 1024)?;
         let mut pieces = Vec::new();
+        let mut virtual_offsets = Vec::new();
         while let Some(piece) = assembly.next_piece(&mapping, 512)? {
-            assert_eq!(mapping.virtual_offset(piece.offset)?, piece.virtual_offset);
+            let expected = assembly
+                .start
+                .checked_add(u64::try_from(assembly.planned)?)
+                .ok_or("assembly cursor overflow")?;
+            assert_eq!(mapping.virtual_offset(piece.offset)?, expected);
+            virtual_offsets.push(expected);
             assembly.planned(piece.len)?;
             pieces.push(piece);
             assembly.append(&vec![42; piece.len])?;
         }
+        assert_eq!(virtual_offsets, vec![256, 512, 1024]);
         assert_eq!(
             pieces,
             vec![
                 ReadPiece {
-                    virtual_offset: 256,
                     offset: 4352,
                     len: 256
                 },
                 ReadPiece {
-                    virtual_offset: 512,
                     offset: 2048,
                     len: 512
                 },
                 ReadPiece {
-                    virtual_offset: 1024,
                     offset: 2560,
                     len: 256
                 },

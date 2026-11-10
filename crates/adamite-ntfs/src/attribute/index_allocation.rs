@@ -30,14 +30,17 @@ impl<'a> IndexAllocation<'a> {
         })
     }
     /// Returns any original index name, normally `$I30`.
+    #[must_use]
     pub const fn name(self) -> Utf16Le<'a> {
         self.name
     }
     /// Returns all index-stream flags.
+    #[must_use]
     pub const fn flags(self) -> AttributeFlags {
         self.flags
     }
     /// Returns the non-resident segment without interpreting index blocks.
+    #[must_use]
     pub const fn descriptor(self) -> NonResident<'a> {
         self.descriptor
     }

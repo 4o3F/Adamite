@@ -10,11 +10,13 @@ pub struct RequestId(u64);
 
 impl RequestId {
     /// Restores an identifier from its transport representation without validating liveness.
+    #[must_use]
     pub const fn from_raw(raw: u64) -> Self {
         Self(raw)
     }
 
     /// Returns the transport representation.
+    #[must_use]
     pub const fn raw(self) -> u64 {
         self.0
     }

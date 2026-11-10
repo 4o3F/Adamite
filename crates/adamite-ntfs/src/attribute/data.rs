@@ -20,22 +20,27 @@ impl<'a> Data<'a> {
         Ok(Self { attribute })
     }
     /// Returns the original stream name, empty for the unnamed stream.
+    #[must_use]
     pub const fn name(self) -> Utf16Le<'a> {
         self.attribute.name()
     }
     /// Returns all stream flags, including unknown bits.
+    #[must_use]
     pub const fn flags(self) -> AttributeFlags {
         self.attribute.flags()
     }
     /// Borrows resident stream bytes when this stream is resident.
+    #[must_use]
     pub const fn resident_value(self) -> Option<&'a [u8]> {
         self.attribute.resident_value()
     }
     /// Returns the validated segment descriptor for non-resident storage.
+    #[must_use]
     pub const fn non_resident(self) -> Option<NonResident<'a>> {
         self.attribute.non_resident()
     }
     /// Returns resident byte length or first-segment data size; continuation sizes are absent.
+    #[must_use]
     pub fn logical_size(self) -> Option<u64> {
         match self.resident_value() {
             Some(value) => u64::try_from(value.len()).ok(),

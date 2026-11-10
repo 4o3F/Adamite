@@ -13,7 +13,7 @@ use std::{
     collections::BTreeSet,
     fs,
     io::{self, Read},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 /// Image loading, manifest validation or reference MFT reconstruction failed.
@@ -22,20 +22,26 @@ use std::{
 #[non_exhaustive]
 pub enum FixtureError {
     /// Fixture I/O failed.
-    #[snafu(display("fixture I/O failed: {source}"))]
+    #[snafu(display("fixture I/O failed for {}: {source}", path.display()))]
     Io {
+        /// File being read.
+        path: PathBuf,
         /// The underlying error.
         source: io::Error,
     },
     /// Invalid fixture manifest.
-    #[snafu(display("invalid fixture manifest: {source}"))]
+    #[snafu(display("invalid fixture manifest {}: {source}", path.display()))]
     Json {
+        /// Manifest being decoded.
+        path: PathBuf,
         /// The underlying error.
         source: serde_json::Error,
     },
     /// Invalid zstd frame.
-    #[snafu(display("invalid zstd frame: {source}"))]
+    #[snafu(display("invalid zstd frame in {}: {source}", path.display()))]
     Decode {
+        /// Compressed image being decoded.
+        path: PathBuf,
         /// The underlying error.
         source: FrameDecoderError,
     },
@@ -127,8 +133,13 @@ impl Fixture {
     /// Returns an error for inaccessible files, invalid JSON, unsafe image names,
     /// decompression failures, checksum mismatches or invalid schema/length values.
     pub fn load(manifest_path: &Path) -> Result<Self> {
-        let manifest: Manifest = serde_json::from_slice(&fs::read(manifest_path).context(IoSnafu)?)
-            .context(JsonSnafu)?;
+        let manifest: Manifest =
+            serde_json::from_slice(&fs::read(manifest_path).context(IoSnafu {
+                path: manifest_path,
+            })?)
+            .context(JsonSnafu {
+                path: manifest_path,
+            })?;
         let directory = manifest_path.parent().context(InvalidSnafu {
             message: "manifest has no parent",
         })?;
@@ -141,8 +152,10 @@ impl Fixture {
                 message: "image must be a sibling filename"
             }
         );
-        let source = fs::File::open(directory.join(&manifest.image)).context(IoSnafu)?;
-        let mut decoder = StreamingDecoder::new(source).context(DecodeSnafu)?;
+        let image_path = directory.join(&manifest.image);
+        let source = fs::File::open(&image_path).context(IoSnafu { path: &image_path })?;
+        let mut decoder =
+            StreamingDecoder::new(source).context(DecodeSnafu { path: &image_path })?;
         let mut image = Vec::new();
         let limit = manifest.image_len.checked_add(1).context(InvalidSnafu {
             message: "image length overflow",
@@ -151,7 +164,7 @@ impl Fixture {
             .by_ref()
             .take(limit)
             .read_to_end(&mut image)
-            .context(IoSnafu)?;
+            .context(IoSnafu { path: &image_path })?;
         ensure!(
             u64::try_from(image.len()).ok() == Some(manifest.image_len),
             InvalidSnafu {
@@ -187,11 +200,13 @@ impl Fixture {
     }
 
     /// Borrows the complete decompressed image, without interpreting its MFT.
+    #[must_use]
     pub fn image(&self) -> &[u8] {
         &self.image
     }
 
     /// Borrows the independently generated manifest.
+    #[must_use]
     pub fn manifest(&self) -> &Manifest {
         &self.manifest
     }
@@ -274,7 +289,7 @@ impl ReferenceMft {
                         })?
                         .data();
                     ensure!(
-                        size <= 262144,
+                        size <= 262_144,
                         InvalidSnafu {
                             message: "attribute list exceeds 256 KiB"
                         }
@@ -418,11 +433,13 @@ impl ReferenceMft {
     }
 
     /// Returns the validated volume geometry.
+    #[must_use]
     pub fn geometry(&self) -> VolumeGeometry {
         self.geometry
     }
 
     /// Borrows the discovered MFT extents in VCN order.
+    #[must_use]
     pub fn extents(&self) -> &[Extent] {
         &self.extents
     }
@@ -433,6 +450,7 @@ impl ReferenceMft {
             .chunks_exact(self.geometry.file_record_size() as usize)
     }
     /// Borrows a raw record by its virtual MFT ordinal.
+    #[must_use]
     pub fn record(&self, number: u64) -> Option<&[u8]> {
         let start = usize::try_from(number)
             .ok()?
@@ -575,6 +593,74 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn loading_errors_identify_the_manifest_or_image_and_keep_the_io_source() {
+        let directory = TestDirectory::new();
+        let manifest_path = directory.0.join("basic-4k.json");
+        let error = Fixture::load(&manifest_path).unwrap_err();
+        assert!(matches!(
+            &error,
+            FixtureError::Io { path, source }
+                if path == &manifest_path && source.kind() == io::ErrorKind::NotFound
+        ));
+        assert!(error.source().unwrap().is::<io::Error>());
+        assert!(
+            error
+                .to_string()
+                .contains(&manifest_path.display().to_string())
+        );
+
+        fs::write(&manifest_path, MANIFEST).unwrap();
+        let manifest: Manifest = serde_json::from_str(MANIFEST).unwrap();
+        let image_path = directory.0.join(manifest.image);
+        let error = Fixture::load(&manifest_path).unwrap_err();
+        assert!(matches!(
+            &error,
+            FixtureError::Io { path, source }
+                if path == &image_path && source.kind() == io::ErrorKind::NotFound
+        ));
+        assert!(error.source().unwrap().is::<io::Error>());
+        assert!(
+            error
+                .to_string()
+                .contains(&image_path.display().to_string())
+        );
+    }
+
+    #[test]
+    fn decode_errors_identify_the_file_and_keep_the_decoder_source() {
+        let directory = TestDirectory::new();
+        let manifest_path = directory.0.join("basic-4k.json");
+        fs::write(&manifest_path, b"{").unwrap();
+        let error = Fixture::load(&manifest_path).unwrap_err();
+        assert!(matches!(
+            &error,
+            FixtureError::Json { path, .. } if path == &manifest_path
+        ));
+        assert!(error.source().unwrap().is::<serde_json::Error>());
+        assert!(
+            error
+                .to_string()
+                .contains(&manifest_path.display().to_string())
+        );
+
+        fs::write(&manifest_path, MANIFEST).unwrap();
+        let manifest: Manifest = serde_json::from_str(MANIFEST).unwrap();
+        let image_path = directory.0.join(manifest.image);
+        fs::write(&image_path, b"invalid zstd frame").unwrap();
+        let error = Fixture::load(&manifest_path).unwrap_err();
+        assert!(matches!(
+            &error,
+            FixtureError::Decode { path, .. } if path == &image_path
+        ));
+        assert!(error.source().unwrap().is::<FrameDecoderError>());
+        assert!(
+            error
+                .to_string()
+                .contains(&image_path.display().to_string())
+        );
     }
 
     #[test]

@@ -7,6 +7,7 @@ use crate::{
 use adamite_ntfs::{EXTEND_RECORD, FIRST_NON_RESERVED_RECORD, FileRef, ROOT_RECORD};
 use std::{char, fmt::Write, vec::IntoIter};
 
+/// Maximum graph operations performed before yielding to the caller.
 const ITEMS_PER_STEP: usize = 256;
 
 /// One node in a flat parent-index array.
@@ -82,8 +83,6 @@ pub(crate) struct Linker {
     cycle_work: CycleWork,
     emitting: IntoIter<PendingNode>,
     pub result: ParentTree,
-    #[cfg(test)]
-    pub last_batch: usize,
 }
 
 fn invalid(reason: &'static str) -> ScanError {
@@ -179,7 +178,7 @@ fn node(
 }
 
 /// Select aliases before decoding; equal parent/name links keep the smallest namespace.
-fn select_names(mut names: Vec<EntryName>) -> Result<Vec<EntryName>, ScanError> {
+fn select_names(mut names: Vec<EntryName>) -> Vec<EntryName> {
     names.sort_unstable_by(|a, b| {
         (
             a.parent.record(),
@@ -196,13 +195,9 @@ fn select_names(mut names: Vec<EntryName>) -> Result<Vec<EntryName>, ScanError> 
                 &b.name,
             ))
     });
-    let mut selected = Vec::new();
-    selected
-        .try_reserve_exact(names.len())
-        .map_err(|source| ScanError::Allocation { source })?;
     let mut parent = None;
     let mut non_dos = false;
-    for name in names {
+    names.retain(|name| {
         if parent != Some(name.parent) {
             parent = Some(name.parent);
             non_dos = false;
@@ -210,11 +205,9 @@ fn select_names(mut names: Vec<EntryName>) -> Result<Vec<EntryName>, ScanError> 
         if name.namespace != 2 {
             non_dos = true;
         }
-        if name.namespace != 2 || !non_dos {
-            selected.push(name);
-        }
-    }
-    selected.sort_unstable_by(|a, b| {
+        name.namespace != 2 || !non_dos
+    });
+    names.sort_unstable_by(|a, b| {
         (a.parent.record(), a.parent.sequence(), &a.name, a.namespace).cmp(&(
             b.parent.record(),
             b.parent.sequence(),
@@ -222,8 +215,8 @@ fn select_names(mut names: Vec<EntryName>) -> Result<Vec<EntryName>, ScanError> 
             b.namespace,
         ))
     });
-    selected.dedup_by(|a, b| a.parent == b.parent && a.name == b.name);
-    selected.sort_unstable_by(|a, b| {
+    names.dedup_by(|a, b| a.parent == b.parent && a.name == b.name);
+    names.sort_unstable_by(|a, b| {
         (a.parent.record(), &a.name, a.namespace, a.parent.sequence()).cmp(&(
             b.parent.record(),
             &b.name,
@@ -231,7 +224,7 @@ fn select_names(mut names: Vec<EntryName>) -> Result<Vec<EntryName>, ScanError> 
             b.parent.sequence(),
         ))
     });
-    Ok(selected)
+    names
 }
 
 impl Linker {
@@ -253,8 +246,6 @@ impl Linker {
             cycle_work: CycleWork::Start,
             emitting: Vec::new().into_iter(),
             result: ParentTree::default(),
-            #[cfg(test)]
-            last_batch: 0,
         })
     }
 
@@ -297,7 +288,7 @@ impl Linker {
             self.root_seen = true;
             (0, 1)
         } else {
-            let names = select_names(std::mem::take(&mut entry.names))?;
+            let names = select_names(std::mem::take(&mut entry.names));
             let primary = self.nodes.len();
             if names.is_empty() {
                 push(&mut self.nodes, node(&entry, unnamed(ordinal)?, None, 0))?;
@@ -530,10 +521,6 @@ impl Linker {
     }
 
     pub(crate) fn step(&mut self, stats: &mut ScanStats) -> Result<bool, ScanError> {
-        #[cfg(test)]
-        {
-            self.last_batch = 0;
-        }
         for _ in 0..ITEMS_PER_STEP {
             match self.stage {
                 Stage::Prepare => {
@@ -585,10 +572,6 @@ impl Linker {
                     }
                 }
                 Stage::Done => return Ok(true),
-            }
-            #[cfg(test)]
-            {
-                self.last_batch = self.last_batch.checked_add(1).ok_or_else(overflow)?;
             }
         }
         Ok(false)

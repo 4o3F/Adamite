@@ -17,28 +17,35 @@ pub struct AttributeListEntry<'a> {
 
 impl<'a> AttributeListEntry<'a> {
     /// Returns the original type code at entry offset 0x00.
+    #[must_use]
     pub const fn attribute_type(self) -> AttributeType {
         self.type_code
     }
     /// Returns the nonnegative lowest VCN at entry offset 0x08.
+    #[must_use]
     pub const fn lowest_vcn(self) -> u64 {
         self.lowest_vcn
     }
     /// Returns the complete segment reference at entry offset 0x10.
+    #[must_use]
     pub const fn segment_reference(self) -> FileRef {
         self.segment
     }
     /// Returns the segment's attribute instance identifier at entry offset 0x18.
+    #[must_use]
     pub const fn attribute_id(self) -> u16 {
         self.id
     }
     /// Borrows the original name units, empty for an unnamed entry.
+    #[must_use]
     pub const fn name(self) -> Utf16Le<'a> {
         self.name
     }
 }
 
 /// Fused iterator over one complete attribute-list value of at most 256 KiB.
+/// Exhaust the iterator to validate every entry and the trailing bytes.
+#[must_use = "exhaust the attribute list to validate the complete value"]
 #[derive(Debug, Clone)]
 pub struct AttributeList<'a> {
     input: &'a [u8],
@@ -51,11 +58,11 @@ impl<'a> AttributeList<'a> {
     ///
     /// # Errors
     ///
-    /// Returns [`AttributeListError::ValueTooLarge`] above 262144 bytes.
+    /// Returns [`AttributeListError::ValueTooLarge`] above 262_144 bytes.
     /// Entry errors are yielded lazily by the iterator.
     pub fn new(input: &'a [u8]) -> Result<Self, AttributeListError> {
         ensure!(
-            input.len() <= 262144,
+            input.len() <= 262_144,
             ValueTooLargeSnafu { len: input.len() }
         );
         Ok(Self {

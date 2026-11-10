@@ -45,10 +45,12 @@ impl AttributeType {
     /// `$REPARSE_POINT` tag and opaque data.
     pub const REPARSE_POINT: Self = Self(0xc0);
     /// Preserves an on-disk type code.
+    #[must_use]
     pub const fn from_raw(raw: u32) -> Self {
         Self(raw)
     }
     /// Returns the original type code.
+    #[must_use]
     pub const fn raw(self) -> u32 {
         self.0
     }
@@ -68,18 +70,22 @@ impl AttributeFlags {
     /// The stream has sparse extents.
     pub const SPARSE: Self = Self(0x8000);
     /// Preserves every on-disk flag bit.
+    #[must_use]
     pub const fn from_raw(raw: u16) -> Self {
         Self(raw)
     }
     /// Returns every original flag bit.
+    #[must_use]
     pub const fn raw(self) -> u16 {
         self.0
     }
     /// Reports whether every requested flag bit is present.
+    #[must_use]
     pub const fn contains(self, flags: Self) -> bool {
         self.0 & flags.0 == flags.0
     }
     /// Returns the complete compression format byte.
+    #[must_use]
     pub const fn compression_format(self) -> u8 {
         (self.0 & 0xff) as u8
     }
@@ -108,30 +114,37 @@ pub struct Attribute<'a> {
 
 impl<'a> Attribute<'a> {
     /// Returns the original complete attribute, including header and padding.
+    #[must_use]
     pub const fn as_bytes(self) -> &'a [u8] {
         self.bytes
     }
     /// Returns the raw-preserving type code at offset 0x00.
+    #[must_use]
     pub const fn attribute_type(self) -> AttributeType {
         self.type_code
     }
     /// Returns the attribute instance identifier at offset 0x0E.
+    #[must_use]
     pub const fn id(self) -> u16 {
         self.id
     }
     /// Returns all flags from offset 0x0C.
+    #[must_use]
     pub const fn flags(self) -> AttributeFlags {
         self.flags
     }
     /// Returns the original name units, including NULs and unpaired surrogates.
+    #[must_use]
     pub const fn name(self) -> Utf16Le<'a> {
         self.name
     }
     /// Reports whether the storage flag at offset 0x08 is resident.
+    #[must_use]
     pub const fn is_resident(self) -> bool {
         matches!(self.body, Body::Resident(_))
     }
     /// Borrows the declared resident value, including an empty value.
+    #[must_use]
     pub const fn resident_value(self) -> Option<&'a [u8]> {
         match self.body {
             Body::Resident(value) => Some(value),
@@ -140,6 +153,7 @@ impl<'a> Attribute<'a> {
     }
 
     /// Returns the validated non-resident segment descriptor when present.
+    #[must_use]
     pub const fn non_resident(self) -> Option<NonResident<'a>> {
         match self.body {
             Body::Resident(_) => None,
@@ -204,6 +218,8 @@ impl<'a> Attribute<'a> {
 }
 
 /// Fused attribute iterator bounded to the record's declared used-byte region.
+/// Exhaust the iterator to validate every header and the end marker.
+#[must_use = "exhaust the attribute iterator to validate the complete record"]
 #[derive(Debug, Clone)]
 pub struct AttributeIter<'a> {
     region: Option<&'a [u8]>,

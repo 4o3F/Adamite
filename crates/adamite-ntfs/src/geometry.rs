@@ -27,46 +27,57 @@ pub struct VolumeGeometry {
 
 impl VolumeGeometry {
     /// Returns bytes per sector from the u16 at boot-sector offset 0x0B.
+    #[must_use]
     pub const fn bytes_per_sector(self) -> u16 {
         self.bytes_per_sector
     }
     /// Returns decoded sectors per cluster from the byte at offset 0x0D.
+    #[must_use]
     pub const fn sectors_per_cluster(self) -> u32 {
         self.sectors_per_cluster
     }
     /// Returns cluster bytes derived from offsets 0x0B and 0x0D.
+    #[must_use]
     pub const fn cluster_size(self) -> u32 {
         self.cluster_size
     }
     /// Returns file-record bytes decoded from the signed byte at offset 0x40.
+    #[must_use]
     pub const fn file_record_size(self) -> u32 {
         self.file_record_size
     }
     /// Returns index-record bytes decoded from the signed byte at offset 0x44.
+    #[must_use]
     pub const fn index_record_size(self) -> u32 {
         self.index_record_size
     }
     /// Returns the total sector count from the u64 at offset 0x28.
+    #[must_use]
     pub const fn total_sectors(self) -> u64 {
         self.total_sectors
     }
     /// Returns complete clusters derived from sector count 0x28 and cluster encoding 0x0D.
+    #[must_use]
     pub const fn total_clusters(self) -> u64 {
         self.total_clusters
     }
     /// Returns volume bytes derived from sector count 0x28 and sector bytes 0x0B.
+    #[must_use]
     pub const fn total_bytes(self) -> u64 {
         self.total_bytes
     }
     /// Returns the `$MFT` LCN from the u64 at offset 0x30.
+    #[must_use]
     pub const fn mft_lcn(self) -> u64 {
         self.mft_lcn
     }
     /// Returns the `$MFTMirr` LCN from the u64 at offset 0x38.
+    #[must_use]
     pub const fn mftmirr_lcn(self) -> u64 {
         self.mftmirr_lcn
     }
     /// Returns the volume serial from the u64 at offset 0x48.
+    #[must_use]
     pub const fn serial(self) -> u64 {
         self.serial
     }

@@ -29,11 +29,13 @@ impl<'a> Utf16Le<'a> {
     }
 
     /// Returns the number of code units, including NULs and unpaired surrogates.
+    #[must_use]
     pub fn len_units(self) -> usize {
         self.bytes.len() / 2
     }
 
     /// Iterates the original code units without requiring aligned memory.
+    #[must_use]
     pub fn units(self) -> Units<'a> {
         Units {
             chunks: self.bytes.as_chunks::<2>().0.iter(),
@@ -41,6 +43,7 @@ impl<'a> Utf16Le<'a> {
     }
 
     /// Decodes characters and reports each unpaired surrogate with its code-unit index.
+    #[must_use]
     pub fn decode_strict(self) -> StrictChars<'a> {
         StrictChars {
             decoder: core::char::decode_utf16(self.units()),
@@ -49,6 +52,7 @@ impl<'a> Utf16Le<'a> {
     }
 
     /// Decodes characters, replacing each unpaired surrogate with U+FFFD.
+    #[must_use]
     pub fn decode_lossy(self) -> LossyChars<'a> {
         LossyChars {
             strict: self.decode_strict(),

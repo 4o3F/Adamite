@@ -15,14 +15,17 @@ impl RecordFlags {
     /// The record describes a directory.
     pub const DIRECTORY: Self = Self(0x0002);
     /// Preserves the complete u16 at record offset 0x16.
+    #[must_use]
     pub const fn from_raw(raw: u16) -> Self {
         Self(raw)
     }
     /// Returns all flag bits from record offset 0x16.
+    #[must_use]
     pub const fn raw(self) -> u16 {
         self.0
     }
     /// Reports whether every bit in `flags` is present.
+    #[must_use]
     pub const fn contains(self, flags: Self) -> bool {
         self.0 & flags.0 == flags.0
     }
@@ -86,54 +89,67 @@ impl RecordHeader {
     }
 
     /// Returns the four signature bytes at offset 0x00.
+    #[must_use]
     pub const fn signature(self) -> [u8; 4] {
         self.signature
     }
     /// Returns the update-sequence array offset at 0x04.
+    #[must_use]
     pub const fn usa_offset(self) -> u16 {
         self.usa_offset
     }
     /// Returns the update-sequence array count at 0x06.
+    #[must_use]
     pub const fn usa_count(self) -> u16 {
         self.usa_count
     }
     /// Returns the log sequence number at 0x08.
+    #[must_use]
     pub const fn lsn(self) -> u64 {
         self.lsn
     }
     /// Returns the reuse sequence number at 0x10, including zero.
+    #[must_use]
     pub const fn sequence(self) -> u16 {
         self.sequence
     }
     /// Returns the hard-link count at 0x12, including zero.
+    #[must_use]
     pub const fn hard_links(self) -> u16 {
         self.hard_links
     }
     /// Returns the first attribute offset at 0x14.
+    #[must_use]
     pub const fn first_attribute_offset(self) -> u16 {
         self.first_attribute_offset
     }
     /// Returns all flags at 0x16, including unknown bits.
+    #[must_use]
     pub const fn flags(self) -> RecordFlags {
         self.flags
     }
     /// Returns the used byte count at 0x18.
+    #[must_use]
     pub const fn bytes_used(self) -> u32 {
         self.bytes_used
     }
     /// Returns the allocated byte count at 0x1C.
+    #[must_use]
     pub const fn bytes_allocated(self) -> u32 {
         self.bytes_allocated
     }
     /// Returns the base reference at 0x20; only an all-zero reference means base.
+    #[must_use]
     pub const fn base_reference(self) -> FileRef {
         self.base_reference
     }
     /// Returns the next attribute instance identifier at 0x28.
+    #[must_use]
     pub const fn next_attribute_id(self) -> u16 {
         self.next_attribute_id
     }
     /// Returns the stored record number at 0x2C for the NTFS 3.1 layout only.
+    #[must_use]
     pub const fn record_number(self) -> Option<u32> {
         self.record_number
     }
@@ -238,11 +254,13 @@ impl<'a> FileRecord<'a> {
     }
 
     /// Returns the fixed header decoded when this view was created.
+    #[must_use]
     pub const fn header(&self) -> RecordHeader {
         self.header
     }
 
     /// Borrows the complete fixed-up record, including attribute bytes and slack.
+    #[must_use]
     pub const fn as_bytes(&self) -> &'a [u8] {
         self.bytes
     }

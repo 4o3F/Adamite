@@ -19,18 +19,22 @@ pub struct StreamSizes {
 
 impl StreamSizes {
     /// Returns allocated bytes at non-resident header offset 0x28.
+    #[must_use]
     pub const fn allocated(self) -> u64 {
         self.allocated
     }
     /// Returns logical data bytes at offset 0x30.
+    #[must_use]
     pub const fn data(self) -> u64 {
         self.data
     }
     /// Returns initialized data bytes at offset 0x38.
+    #[must_use]
     pub const fn initialized(self) -> u64 {
         self.initialized
     }
     /// Returns the extended size at 0x40 only for compressed or sparse storage.
+    #[must_use]
     pub const fn compressed(self) -> Option<u64> {
         self.compressed
     }
@@ -82,22 +86,27 @@ impl<'a> NonResident<'a> {
     }
 
     /// Returns the segment's lowest VCN at offset 0x10.
+    #[must_use]
     pub const fn lowest_vcn(self) -> u64 {
         self.range.lowest_vcn()
     }
     /// Returns the segment's highest VCN at offset 0x18, including empty-stream -1.
+    #[must_use]
     pub const fn highest_vcn(self) -> i64 {
         self.range.highest_vcn()
     }
     /// Returns the single compression-unit byte at offset 0x22.
+    #[must_use]
     pub const fn compression_unit(self) -> u8 {
         self.compression_unit
     }
     /// Borrows mapping pairs through the end of this attribute, including padding.
+    #[must_use]
     pub const fn mapping_pairs(self) -> &'a [u8] {
         self.mapping_pairs
     }
     /// Returns sizes only for the first segment, whose lowest VCN is zero.
+    #[must_use]
     pub const fn sizes(self) -> Option<StreamSizes> {
         self.sizes
     }

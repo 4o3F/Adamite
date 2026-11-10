@@ -22,6 +22,7 @@ impl RunlistEncoder {
     /// # Panics
     ///
     /// Panics if the configured lengths, offsets or values cannot fit the encoded format.
+    #[must_use]
     pub fn encode(&self, minimum_width: usize) -> Vec<u8> {
         assert!(minimum_width <= 8);
         let mut bytes = Vec::new();

@@ -48,14 +48,17 @@ impl<'a> ReparsePoint<'a> {
         })
     }
     /// Returns the uninterpreted u32 tag at value offset 0x00.
+    #[must_use]
     pub const fn tag(self) -> u32 {
         self.tag
     }
     /// Returns the declared u16 data length at value offset 0x04.
+    #[must_use]
     pub const fn data_length(self) -> u16 {
         self.data_length
     }
     /// Borrows every byte after offset eight, including bytes beyond the declared data length.
+    #[must_use]
     pub const fn payload(self) -> &'a [u8] {
         self.payload
     }

@@ -47,8 +47,6 @@ pub(super) struct Ingest {
     pub slots: Vec<RecordSlot>,
     pub patches: Vec<Patch>,
     pub stats: ScanStats,
-    #[cfg(test)]
-    pub peak_transport_bytes: usize,
 }
 
 impl Ingest {
@@ -65,8 +63,6 @@ impl Ingest {
             slots: Vec::new(),
             patches: Vec::new(),
             stats: ScanStats::default(),
-            #[cfg(test)]
-            peak_transport_bytes: 0,
         })
     }
 
@@ -77,17 +73,13 @@ impl Ingest {
             .ok_or_else(|| overflow("stream transport storage"))
     }
 
-    fn check_bound(&mut self, requests: &Requests, config: &ScanConfig) -> Result<(), ScanError> {
+    fn check_bound(&self, requests: &Requests, config: &ScanConfig) -> Result<(), ScanError> {
         let bound = config
             .max_outstanding
             .checked_mul(config.chunk_size)
             .and_then(|bytes| bytes.checked_add(self.record_size))
             .ok_or_else(|| overflow("stream transport bound"))?;
         let retained = self.transport_bytes(requests)?;
-        #[cfg(test)]
-        {
-            self.peak_transport_bytes = self.peak_transport_bytes.max(retained);
-        }
         if retained > bound {
             return Err(stream_error("stream transport storage exceeds its bound"));
         }
@@ -249,27 +241,7 @@ impl Ingest {
                                 contribution,
                             },
                         )?,
-                        Err(error) => {
-                            match error {
-                                decode::DecodeError::Fatal(error) => return Err(error),
-                                decode::DecodeError::Attributes => {
-                                    bump(&mut self.stats.corrupt_attributes)?
-                                }
-                                decode::DecodeError::Value(error) => {
-                                    decode::value_counter(error, &mut self.stats)?
-                                }
-                                decode::DecodeError::Runlist => {
-                                    bump(&mut self.stats.corrupt_runlists)?
-                                }
-                                decode::DecodeError::Extent => {
-                                    bump(&mut self.stats.out_of_volume_extents)?
-                                }
-                                decode::DecodeError::List => {
-                                    bump(&mut self.stats.invalid_attribute_lists)?
-                                }
-                            }
-                            bump(&mut self.stats.corrupt_records)?;
-                        }
+                        Err(error) => decode::contribution_error(error, &mut self.stats)?,
                     }
                 }
             }

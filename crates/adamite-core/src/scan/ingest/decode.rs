@@ -29,7 +29,23 @@ impl From<ScanError> for DecodeError {
     }
 }
 
-pub(super) fn value_counter(error: ValueError, stats: &mut ScanStats) -> Result<(), ScanError> {
+/// Counts a discarded contribution, propagating allocation and arithmetic failures.
+pub(super) fn contribution_error(
+    error: DecodeError,
+    stats: &mut ScanStats,
+) -> Result<(), ScanError> {
+    match error {
+        DecodeError::Fatal(error) => return Err(error),
+        DecodeError::Attributes => bump(&mut stats.corrupt_attributes)?,
+        DecodeError::Value(error) => value_counter(error, stats)?,
+        DecodeError::Runlist => bump(&mut stats.corrupt_runlists)?,
+        DecodeError::Extent => bump(&mut stats.out_of_volume_extents)?,
+        DecodeError::List => bump(&mut stats.invalid_attribute_lists)?,
+    }
+    bump(&mut stats.corrupt_records)
+}
+
+fn value_counter(error: ValueError, stats: &mut ScanStats) -> Result<(), ScanError> {
     match error {
         ValueError::WrongAttributeType { .. } | ValueError::WrongStorageForm => {
             bump(&mut stats.type_storage_mismatches)
@@ -68,7 +84,6 @@ pub(super) fn contribution(
                 push(
                     &mut owned.names,
                     NameAttribute {
-                        attribute_id: attribute.id(),
                         parent: value.parent(),
                         namespace: value.namespace(),
                         name: name(value.name())?,
@@ -78,22 +93,13 @@ pub(super) fn contribution(
             AttributeType::STANDARD_INFORMATION => {
                 let value =
                     StandardInformation::from_attribute(attribute).map_err(DecodeError::Value)?;
-                push(
-                    &mut owned.standard_information,
-                    StandardAttribute {
-                        attribute_id: attribute.id(),
-                        value,
-                    },
-                )?;
+                push(&mut owned.standard_information, StandardAttribute { value })?;
             }
             AttributeType::REPARSE_POINT => {
                 let value = ReparsePoint::from_attribute(attribute).map_err(DecodeError::Value)?;
                 push(
                     &mut owned.reparse_tags,
-                    ReparseAttribute {
-                        attribute_id: attribute.id(),
-                        tag: value.tag(),
-                    },
+                    ReparseAttribute { tag: value.tag() },
                 )?;
             }
             AttributeType::INDEX_ALLOCATION => {

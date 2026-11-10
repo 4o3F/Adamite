@@ -20,6 +20,7 @@ pub struct FixedRecord<'a> {
 
 impl<'a> FixedRecord<'a> {
     /// Borrows the restored record bytes.
+    #[must_use]
     pub fn as_bytes(&self) -> &'a [u8] {
         self.bytes
     }

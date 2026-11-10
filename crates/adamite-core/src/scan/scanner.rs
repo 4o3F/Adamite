@@ -72,6 +72,7 @@ pub struct ScanOutput {
 }
 
 /// A read request, current progress or the completed scan result.
+#[must_use = "handle the read request, progress or completed scan output"]
 #[derive(Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ScanStep {
@@ -217,9 +218,9 @@ pub enum ScanError {
     },
 }
 
-/// Bootstraps the complete MFT mapping from caller-supplied bytes.
+/// Streams, merges and resolves NTFS records from caller-supplied bytes.
 ///
-/// Stops explicitly before snapshot storage construction, implemented in M10.
+/// Stops explicitly before snapshot storage construction, which is not yet implemented.
 #[derive(Debug)]
 pub struct Scanner {
     config: ScanConfig,
@@ -234,6 +235,12 @@ pub struct Scanner {
     entries: Vec<EntryRecord>,
     linker: Option<Linker>,
     parent_tree: Option<ParentTree>,
+}
+
+#[derive(Clone, Copy)]
+enum InputStatus {
+    Ready,
+    Waiting,
 }
 
 impl Scanner {
@@ -261,6 +268,7 @@ impl Scanner {
     }
 
     /// Borrows the validated transport bounds and caller metadata.
+    #[must_use]
     pub fn config(&self) -> &ScanConfig {
         &self.config
     }
@@ -301,12 +309,12 @@ impl Scanner {
                         .map_err(|_| overflow("file record size"))?;
                     self.record_read = Some((mapping, RecordAssembly::new(0, len)?));
                     self.phase = ScanPhase::Record0;
-                    return Ok(self.progress(false));
+                    return Ok(self.progress(InputStatus::Ready));
                 }
                 if self.requests.len() == 0 {
                     return self.requests.issue(0, BOOT_BYTES).map(ScanStep::Need);
                 }
-                Ok(self.progress(true))
+                Ok(self.progress(InputStatus::Waiting))
             }
             ScanPhase::Record0 => self.read_record0(),
             ScanPhase::Discover => self.discover(),
@@ -339,7 +347,7 @@ impl Scanner {
             );
             self.bootstrap = Some(record0);
             self.phase = ScanPhase::Discover;
-            return Ok(self.progress(false));
+            return Ok(self.progress(InputStatus::Ready));
         }
         if self.requests.len() < self.config.max_outstanding
             && let Some(piece) = assembly.next_piece(mapping, self.config.chunk_size)?
@@ -348,7 +356,11 @@ impl Scanner {
             assembly.planned(piece.len)?;
             return Ok(ScanStep::Need(request));
         }
-        Ok(self.progress(!self.requests.has_ready()))
+        Ok(self.progress(if self.requests.has_ready() {
+            InputStatus::Ready
+        } else {
+            InputStatus::Waiting
+        }))
     }
 
     fn discover(&mut self) -> Result<ScanStep, ScanError> {
@@ -357,18 +369,22 @@ impl Scanner {
         })?;
         if self.discovery.is_none() {
             self.discovery = Some(Discovery::new(base)?);
-            return Ok(self.progress(false));
+            return Ok(self.progress(InputStatus::Ready));
         }
         let state = self.discovery.as_mut().ok_or(ScanError::Bootstrap {
             reason: "missing discovery state",
         })?;
         match state.step(base, &mut self.requests, &self.config)? {
             DiscoveryStep::Need(request) => Ok(ScanStep::Need(request)),
-            DiscoveryStep::Progress { waiting } => Ok(self.progress(waiting)),
+            DiscoveryStep::Progress { waiting } => Ok(self.progress(if waiting {
+                InputStatus::Waiting
+            } else {
+                InputStatus::Ready
+            })),
             DiscoveryStep::Complete => {
                 self.discovery = None;
                 self.phase = ScanPhase::Stream;
-                Ok(self.progress(false))
+                Ok(self.progress(InputStatus::Ready))
             }
         }
     }
@@ -382,17 +398,21 @@ impl Scanner {
                 base.data_size,
                 base.mapping.geometry.file_record_size(),
             )?);
-            return Ok(self.progress(false));
+            return Ok(self.progress(InputStatus::Ready));
         }
         let state = self.ingest.as_mut().ok_or(ScanError::Stream {
             reason: "missing ingestion state",
         })?;
         match state.step(&base.mapping, &mut self.requests, &self.config)? {
             IngestStep::Need(request) => Ok(ScanStep::Need(request)),
-            IngestStep::Progress { waiting } => Ok(self.progress(waiting)),
+            IngestStep::Progress { waiting } => Ok(self.progress(if waiting {
+                InputStatus::Waiting
+            } else {
+                InputStatus::Ready
+            })),
             IngestStep::Complete => {
                 self.phase = ScanPhase::Merge;
-                Ok(self.progress(false))
+                Ok(self.progress(InputStatus::Ready))
             }
         }
     }
@@ -416,7 +436,7 @@ impl Scanner {
                 std::mem::take(&mut ingest.patches),
                 cluster_size,
             ));
-            return Ok(self.progress(false));
+            return Ok(self.progress(InputStatus::Ready));
         }
         let merge = self.merge.as_mut().ok_or(ScanError::Stream {
             reason: "missing merge state",
@@ -426,13 +446,13 @@ impl Scanner {
             self.merge = None;
             self.phase = ScanPhase::Link;
         }
-        Ok(self.progress(false))
+        Ok(self.progress(InputStatus::Ready))
     }
 
     fn link(&mut self) -> Result<ScanStep, ScanError> {
         if self.linker.is_none() {
             self.linker = Some(Linker::new(std::mem::take(&mut self.entries))?);
-            return Ok(self.progress(false));
+            return Ok(self.progress(InputStatus::Ready));
         }
         let stats = &mut self
             .ingest
@@ -449,10 +469,10 @@ impl Scanner {
             self.linker = None;
             self.phase = ScanPhase::Snapshot;
         }
-        Ok(self.progress(false))
+        Ok(self.progress(InputStatus::Ready))
     }
 
-    fn progress(&self, waiting_for_input: bool) -> ScanStep {
+    fn progress(&self, input: InputStatus) -> ScanStep {
         ScanStep::Progress(ScanProgress {
             phase: self.phase,
             records_processed: self
@@ -460,7 +480,7 @@ impl Scanner {
                 .as_ref()
                 .map_or(0, |state| state.stats.records_total),
             outstanding: self.requests.len(),
-            waiting_for_input,
+            waiting_for_input: matches!(input, InputStatus::Waiting),
         })
     }
 

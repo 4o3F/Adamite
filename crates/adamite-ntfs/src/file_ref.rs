@@ -42,6 +42,7 @@ pub struct FileRef(u64);
 
 impl FileRef {
     /// Preserves every bit of an on-disk reference, including a zero sequence.
+    #[must_use]
     pub const fn from_raw(raw: u64) -> Self {
         Self(raw)
     }
@@ -57,31 +58,37 @@ impl FileRef {
     }
 
     /// Returns the complete packed reference.
+    #[must_use]
     pub const fn raw(self) -> u64 {
         self.0
     }
 
     /// Returns the low 48 bits identifying the MFT record.
+    #[must_use]
     pub const fn record(self) -> u64 {
         self.0 & RECORD_MASK
     }
 
     /// Returns the high 16 bits identifying the record's reuse sequence.
+    #[must_use]
     pub const fn sequence(self) -> u16 {
         (self.0 >> RECORD_BITS) as u16
     }
 
     /// Reports whether both the record number and sequence number are zero.
+    #[must_use]
     pub const fn is_null(self) -> bool {
         self.0 == 0
     }
 
     /// Decodes all eight little-endian bytes without validating the reference's target.
+    #[must_use]
     pub const fn from_le_bytes(bytes: [u8; 8]) -> Self {
         Self(u64::from_le_bytes(bytes))
     }
 
     /// Encodes all eight bytes in little-endian order.
+    #[must_use]
     pub const fn to_le_bytes(self) -> [u8; 8] {
         self.0.to_le_bytes()
     }
