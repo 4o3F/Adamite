@@ -151,14 +151,14 @@ Each milestone is one bounded Codex run (< 40 minutes) and one reviewed commit, 
 ### M5 — CI smoke, example and documentation
 
 - [x] Add the D11 CI step with its `check_test.ts` assertion and `examples/scan.rs`. Update documentation per D12 and tick the acceptance criteria.
-- [ ] Finish with `deno task check` green; after the commit, confirm both CI `check` matrix jobs, including the elevated raw-volume smoke step, pass.
+- [x] Finish with `deno task check` green; after the commit, confirm both CI `check` matrix jobs, including the elevated raw-volume smoke step, pass.
 
 ## Acceptance criteria
 
-- [ ] Inspect `rg -n '^(#\[cfg[^\]]*\]\s*)?(pub )?mod\b' crates/adamite-io/src/lib.rs` against D1. `rg -n '^pub use\b' crates/adamite-io/src/lib.rs`, `rg -n '^pub(\([^)]*\))?\s+(const\s+)?fn\b' crates/adamite-io/src` and `rg -n '^\s*pub(\([^)]*\))?\s+mod\b' crates/adamite-io/src/reader/mod.rs` have no matches.
-- [ ] `rg -n '\bunsafe\s*(\{|fn\b|impl\b|extern\b|trait\b)' crates/adamite-io --glob '!src/reader/windows/ffi.rs'` has no matches; `rg -n 'allow\(unsafe_code\)' crates/adamite-io` has exactly one match, in `ffi.rs`; Windows Clippy enforces `undocumented_unsafe_blocks`. `rg -n 'allow\(dead_code\)|expect\(dead_code' crates/adamite-io` has no matches.
-- [ ] For all three fixtures and all D9 configs, `SyncDriver` over `SliceReader` and `ImageReader` produces a `ScanOutput` equal to the independent baseline; driver unit tests show multi-request batches served in issue order.
-- [ ] The D9 variant-coverage list holds, with offsets, lengths and source chains asserted.
-- [ ] `deno task check` passes, including the Windows Clippy step and `cargo deny check`; `deno task check --fuzz` passes with corpora unchanged.
-- [ ] CI `check (windows-latest)` passes the ignored raw-volume smoke tests, and `check (ubuntu-latest)` passes.
-- [ ] Manual: after `zstd -d tests/fixtures/ntfs/basic-4k.img.zst -o target/basic-4k.img`, `cargo run -p adamite-io --example scan -- target/basic-4k.img` prints statistics. ARCHITECTURE and READMEs match the final code; core/parser implementation and tests, fixtures and fuzz corpora are unchanged (core diff is documentation text only).
+- [x] Inspect `rg -n '^(#\[cfg[^\]]*\]\s*)?(pub )?mod\b' crates/adamite-io/src/lib.rs` against D1. `rg -n '^pub use\b' crates/adamite-io/src/lib.rs`, `rg -n '^pub(\([^)]*\))?\s+(const\s+)?fn\b' crates/adamite-io/src` and `rg -n '^\s*pub(\([^)]*\))?\s+mod\b' crates/adamite-io/src/reader/mod.rs` have no matches.
+- [x] `rg -n '\bunsafe\s*(\{|fn\b|impl\b|extern\b|trait\b)' crates/adamite-io --glob '!src/reader/windows/ffi.rs'` has no matches; `rg -n 'allow\(unsafe_code\)' crates/adamite-io` has exactly one match, in `ffi.rs`; Windows Clippy enforces `undocumented_unsafe_blocks`. `rg -n 'allow\(dead_code\)|expect\(dead_code' crates/adamite-io` has no matches.
+- [x] For all three fixtures and all D9 configs, `SyncDriver` over `SliceReader` and `ImageReader` produces a `ScanOutput` equal to the independent baseline; driver unit tests show multi-request batches served in issue order.
+- [x] The D9 variant-coverage list holds, with offsets, lengths and source chains asserted.
+- [x] `deno task check` passes, including the Windows Clippy step and `cargo deny check`; `deno task check --fuzz` passes with corpora unchanged.
+- [x] CI `check (windows-latest)` passes the ignored raw-volume smoke tests, and `check (ubuntu-latest)` passes.
+- [x] Manual: after `zstd -d tests/fixtures/ntfs/basic-4k.img.zst -o target/basic-4k.img`, `cargo run -p adamite-io --example scan -- target/basic-4k.img` prints statistics. ARCHITECTURE and READMEs match the final code; core/parser implementation and tests, fixtures and fuzz corpora are unchanged (core diff is documentation text only).
