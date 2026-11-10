@@ -205,7 +205,7 @@ fn run(entries: Vec<EntryRecord>) -> Result<(ParentTree, ScanStats), Box<dyn Err
 }
 fn name_bytes<'a>(
     tree: &'a ParentTree,
-    node: &crate::tree::link::ResolvedNode,
+    node: &crate::snapshot::ResolvedNode,
 ) -> Result<&'a [u8], Box<dyn Error>> {
     let start = usize::try_from(node.name_off)?;
     let end = start

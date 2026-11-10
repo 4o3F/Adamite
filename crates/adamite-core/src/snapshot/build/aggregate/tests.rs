@@ -4,8 +4,8 @@ use super::*;
 use crate::{
     ScanContext, ScanStats,
     entry::{EntryName, EntryRecord},
-    snapshot::SnapshotBuilder,
-    tree::{Finalizer, link::Linker},
+    snapshot::{Finalizer, SnapshotBuilder},
+    tree::link::Linker,
 };
 use adamite_fixtures::builders::BootSectorBuilder;
 use adamite_ntfs::record::reference::FileRef;

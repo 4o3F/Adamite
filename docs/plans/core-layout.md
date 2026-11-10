@@ -118,8 +118,8 @@ Each milestone is one bounded agent run of at most 30 minutes, including verific
 
 ### M2 — Snapshot build ownership and visibility
 
-- [ ] Move build input declarations and name-range validation into `snapshot/build/input.rs`; retarget linker and builder. Move builder/aggregate/finalize and their unit tests under private build, replacing aggregate helper borrowing with Node methods.
-- [ ] Apply D3 visibility and remove crate-wide storage/checked-helper exports. Verify snapshot, aggregation and directory-sort batching regressions; finish with `deno task check` green.
+- [x] Move build input declarations and name-range validation into `snapshot/build/input.rs`; retarget linker and builder. Move builder/aggregate/finalize and their unit tests under private build, replacing aggregate helper borrowing with Node methods.
+- [x] Apply D3 visibility and remove crate-wide storage/checked-helper exports. Verify snapshot, aggregation and directory-sort batching regressions; finish with `deno task check` green.
 
 ### M3 — Graph and intermediate model separation
 

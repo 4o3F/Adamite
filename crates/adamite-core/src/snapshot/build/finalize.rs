@@ -1,9 +1,7 @@
 //! Bounded child sorting, top-file selection and extension summary ordering.
 
-use super::aggregate::{has, primary_file};
-use crate::{
-    ExtensionStat, Node, NodeFlags, NodeId, Snapshot,
-    snapshot::{SnapshotError, SnapshotStorage},
+use crate::snapshot::{
+    ExtensionStat, Node, NodeFlags, NodeId, Snapshot, SnapshotError, storage::SnapshotStorage,
 };
 use adamite_ntfs::record::reference::FileRef;
 use std::{
@@ -110,7 +108,7 @@ impl Finalizer {
             self.cursor = 0;
             return Ok(false);
         };
-        let directory = has(node, NodeFlags::DIRECTORY) || has(node, NodeFlags::SYNTHETIC);
+        let directory = node.has(NodeFlags::DIRECTORY) || node.has(NodeFlags::SYNTHETIC);
         if directory {
             let start = usize::try_from(node.child_start)
                 .map_err(|_| SnapshotError::overflow("child range start"))?;
@@ -153,7 +151,7 @@ impl Finalizer {
             .cursor
             .checked_add(1)
             .ok_or_else(|| SnapshotError::overflow("file cursor"))?;
-        if !primary_file(node) {
+        if !node.is_primary_file() {
             return Ok(());
         }
         let ranking = Ranking {

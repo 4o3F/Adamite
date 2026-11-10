@@ -1,11 +1,9 @@
 //! Bounded conversion of a parent-index array into an arena and CSR children.
 
-use super::{
-    Node, NodeId, Snapshot, SnapshotError, SnapshotStorage, VolumeInfo, checked_u32, name_range,
-};
+use super::input::{NameRange, ParentTree, ResolvedNode};
 use crate::{
     ScanContext,
-    tree::link::{ParentTree, ResolvedNode},
+    snapshot::{Node, NodeId, Snapshot, SnapshotError, VolumeInfo, storage::SnapshotStorage},
     util::VecExt,
 };
 use adamite_ntfs::boot::VolumeGeometry;
@@ -40,8 +38,8 @@ impl SnapshotBuilder {
         context: &ScanContext,
     ) -> Result<Self, SnapshotError> {
         let len = tree.nodes.len();
-        checked_u32(len, "node count")?;
-        checked_u32(tree.names.len(), "name pool length")?;
+        u32::try_from(len).map_err(|_| SnapshotError::overflow("node count"))?;
+        u32::try_from(tree.names.len()).map_err(|_| SnapshotError::overflow("name pool length"))?;
         if len == 0 {
             return Err(SnapshotError::invalid("missing root"));
         }
@@ -114,7 +112,8 @@ impl SnapshotBuilder {
                         }
                         let start = usize::try_from(source.name_off)
                             .map_err(|_| SnapshotError::overflow("host index"))?;
-                        let (_, len) = name_range(start, usize::from(source.name_len))?;
+                        let (_, len) =
+                            NameRange::new(start, usize::from(source.name_len))?.into_parts();
                         let end = start
                             .checked_add(usize::from(len))
                             .ok_or(SnapshotError::Overflow { field: "name end" })?;
@@ -132,7 +131,7 @@ impl SnapshotBuilder {
                             total_size: 0,
                             total_alloc: 0,
                             mtime: source.mtime,
-                            parent: checked_u32(source.parent, "parent id")?,
+                            parent: NodeId::try_from_index(source.parent, "parent id")?.raw(),
                             child_start: 0,
                             child_len: 0,
                             file_count: 0,
@@ -175,7 +174,8 @@ impl SnapshotBuilder {
                 }
                 Stage::Prefix => {
                     if let Some(node) = snapshot.nodes.get_mut(self.cursor) {
-                        node.child_start = checked_u32(self.child_start, "child range start")?;
+                        node.child_start = u32::try_from(self.child_start)
+                            .map_err(|_| SnapshotError::overflow("child range start"))?;
                         *self
                             .cursors
                             .get_mut(self.cursor)
@@ -190,7 +190,8 @@ impl SnapshotBuilder {
                             .ok_or(SnapshotError::Overflow {
                                 field: "child range end",
                             })?;
-                        checked_u32(self.child_start, "child range end")?;
+                        u32::try_from(self.child_start)
+                            .map_err(|_| SnapshotError::overflow("child range end"))?;
                         self.cursor =
                             self.cursor.checked_add(1).ok_or(SnapshotError::Overflow {
                                 field: "prefix cursor",
@@ -221,7 +222,7 @@ impl SnapshotBuilder {
                                     .map_err(|_| SnapshotError::overflow("host index"))?,
                             )
                             .ok_or_else(|| SnapshotError::invalid("child range outside CSR"))? =
-                            NodeId::from_raw(checked_u32(self.cursor, "child id")?);
+                            NodeId::try_from_index(self.cursor, "child id")?;
                         *cursor = cursor.checked_add(1).ok_or(SnapshotError::Overflow {
                             field: "CSR cursor",
                         })?;

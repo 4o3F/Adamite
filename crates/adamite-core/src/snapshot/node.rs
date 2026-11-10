@@ -1,5 +1,6 @@
 //! Fixed-size hot nodes, stable identifiers and read-only node views.
 
+use super::SnapshotError;
 use adamite_ntfs::record::reference::FileRef;
 
 /// Index into one snapshot's node arena; identifiers are local to that snapshot.
@@ -8,6 +9,11 @@ use adamite_ntfs::record::reference::FileRef;
 pub struct NodeId(u32);
 
 impl NodeId {
+    pub(crate) fn try_from_index(value: usize, field: &'static str) -> Result<Self, SnapshotError> {
+        u32::try_from(value)
+            .map(Self)
+            .map_err(|_| SnapshotError::overflow(field))
+    }
     /// The filesystem root in every nonempty snapshot.
     pub const ROOT: Self = Self(0);
     /// Wraps an arena index; lookup checks whether it exists in a particular snapshot.
@@ -63,21 +69,33 @@ impl NodeFlags {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Node {
-    pub(crate) size: u64,
-    pub(crate) alloc: u64,
-    pub(crate) total_size: u64,
-    pub(crate) total_alloc: u64,
+    pub(super) size: u64,
+    pub(super) alloc: u64,
+    pub(super) total_size: u64,
+    pub(super) total_alloc: u64,
     pub(super) mtime: u64,
-    pub(crate) parent: u32,
-    pub(crate) child_start: u32,
-    pub(crate) child_len: u32,
-    pub(crate) file_count: u32,
-    pub(crate) name_off: u32,
-    pub(crate) name_len: u16,
-    pub(crate) flags: u16,
+    pub(super) parent: u32,
+    pub(super) child_start: u32,
+    pub(super) child_len: u32,
+    pub(super) file_count: u32,
+    pub(super) name_off: u32,
+    pub(super) name_len: u16,
+    pub(super) flags: u16,
 }
 
 const _: () = assert!(std::mem::size_of::<Node>() == 64);
+
+impl Node {
+    pub(super) fn has(&self, flag: NodeFlags) -> bool {
+        self.flags & flag.raw() != 0
+    }
+
+    pub(super) fn is_primary_file(&self) -> bool {
+        !self.has(NodeFlags::DIRECTORY)
+            && !self.has(NodeFlags::SYNTHETIC)
+            && !self.has(NodeFlags::HARDLINK_DUP)
+    }
+}
 
 /// Borrowed hot fields and the corresponding cold metadata for one arena node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

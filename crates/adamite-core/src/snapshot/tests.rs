@@ -5,7 +5,7 @@ use crate::ScanContext;
 use crate::{
     ScanStats,
     entry::{EntryName, EntryRecord},
-    tree::link::{Linker, ParentTree, ResolvedNode},
+    tree::link::Linker,
 };
 use adamite_fixtures::builders::BootSectorBuilder;
 use adamite_ntfs::record::reference::FileRef;
@@ -159,27 +159,30 @@ fn snapshot_ten_thousand_deep_path_is_iterative() -> TestResult {
 #[test]
 fn snapshot_representational_overflows_are_rejected() -> TestResult {
     let max = usize::try_from(u32::MAX)?;
-    assert_eq!(checked_u32(max, "test")?, u32::MAX);
+    assert_eq!(NodeId::try_from_index(max, "test")?.raw(), u32::MAX);
     let over = max
         .checked_add(1)
         .ok_or("host must represent u32 overflow")?;
     assert!(matches!(
-        checked_u32(over, "node count"),
+        NodeId::try_from_index(over, "node count"),
         Err(SnapshotError::Overflow {
             field: "node count"
         })
     ));
     assert!(matches!(
-        name_range(max, 1),
+        NameRange::new(max, 1),
         Err(SnapshotError::Overflow { .. })
     ));
     assert!(matches!(
-        name_range(usize::MAX, 1),
+        NameRange::new(usize::MAX, 1),
         Err(SnapshotError::Overflow { .. })
     ));
-    assert_eq!(name_range(0, usize::from(u16::MAX))?, (0, u16::MAX));
+    assert_eq!(
+        NameRange::new(0, usize::from(u16::MAX))?.into_parts(),
+        (0, u16::MAX)
+    );
     assert!(matches!(
-        name_range(0, usize::from(u16::MAX).checked_add(1).ok_or("name bound")?),
+        NameRange::new(0, usize::from(u16::MAX).checked_add(1).ok_or("name bound")?),
         Err(SnapshotError::Overflow {
             field: "name length"
         })

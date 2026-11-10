@@ -3,8 +3,7 @@
 use super::*;
 use crate::{
     ScanContext,
-    snapshot::SnapshotBuilder,
-    tree::link::{ParentTree, ResolvedNode},
+    snapshot::{ParentTree, ResolvedNode, SnapshotBuilder},
 };
 use adamite_fixtures::builders::BootSectorBuilder;
 use std::error::Error;

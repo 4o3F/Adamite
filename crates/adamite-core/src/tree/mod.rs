@@ -1,8 +1,3 @@
-//! Generic parent linking and subtree aggregation.
+//! Generic parent linking before snapshot construction.
 
-mod aggregate;
-mod finalize;
-
-pub(crate) use aggregate::Aggregator;
-pub(crate) use finalize::Finalizer;
 pub(crate) mod link;

@@ -6,10 +6,10 @@
 /// Logical bytes exclude ADS, and allocation includes every non-resident stream.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct ExtensionStat {
-    pub(crate) extension: String,
-    pub(crate) count: u64,
-    pub(crate) total_size: u64,
-    pub(crate) total_alloc: u64,
+    pub(super) extension: String,
+    pub(super) count: u64,
+    pub(super) total_size: u64,
+    pub(super) total_alloc: u64,
 }
 
 impl ExtensionStat {

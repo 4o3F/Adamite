@@ -2497,11 +2497,11 @@ fn merge_fixture_native_4kn_64k_all_entries_and_metafiles() -> TestResult {
     merge_fixture("4kn-64k")
 }
 
-use crate::tree::link::ParentTree;
+use crate::snapshot::ParentTree;
 
 fn name_bytes<'a>(
     tree: &'a ParentTree,
-    node: &crate::tree::link::ResolvedNode,
+    node: &crate::snapshot::ResolvedNode,
 ) -> Result<&'a [u8], Box<dyn Error>> {
     let start = usize::try_from(node.name_off)?;
     let end = start

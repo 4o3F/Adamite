@@ -1,9 +1,6 @@
 //! Bounded breadth-first traversal and reverse accumulation over immutable CSR edges.
 
-use crate::{
-    Node, NodeFlags, NodeId, Snapshot,
-    snapshot::{SnapshotError, SnapshotStorage},
-};
+use crate::snapshot::{NodeFlags, NodeId, Snapshot, SnapshotError, storage::SnapshotStorage};
 
 /// Maximum nodes or CSR edges processed before yielding to the caller.
 const ITEMS_PER_STEP: usize = 256;
@@ -23,15 +20,6 @@ pub(crate) struct Aggregator {
     cursor: usize,
     child: usize,
     stage: Stage,
-}
-
-pub(super) fn has(node: &Node, flag: NodeFlags) -> bool {
-    node.flags & flag.raw() != 0
-}
-pub(super) fn primary_file(node: &Node) -> bool {
-    !has(node, NodeFlags::DIRECTORY)
-        && !has(node, NodeFlags::SYNTHETIC)
-        && !has(node, NodeFlags::HARDLINK_DUP)
 }
 
 impl Aggregator {
@@ -119,7 +107,7 @@ impl Aggregator {
         if let Some(node) = data.nodes.get_mut(self.cursor) {
             node.total_size = node.size;
             node.total_alloc = node.alloc;
-            node.file_count = u32::from(primary_file(node));
+            node.file_count = u32::from(node.is_primary_file());
             self.cursor = self
                 .cursor
                 .checked_add(1)
@@ -146,7 +134,7 @@ impl Aggregator {
             .get(usize::try_from((id).raw()).map_err(|_| SnapshotError::overflow("node index"))?)
             .ok_or_else(|| SnapshotError::invalid("missing accumulation node"))?;
         // Duplicate links retain their own sizes and totals, but never enter parent totals.
-        if id == NodeId::ROOT || has(&node, NodeFlags::HARDLINK_DUP) {
+        if id == NodeId::ROOT || node.has(NodeFlags::HARDLINK_DUP) {
             return Ok(());
         }
         let parent = data

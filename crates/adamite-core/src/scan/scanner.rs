@@ -13,11 +13,8 @@ use crate::{
     ScanStats, Snapshot,
     entry::EntryRecord,
     error::ScanError,
-    snapshot::SnapshotBuilder,
-    tree::{
-        Aggregator, Finalizer,
-        link::{Linker, ParentTree},
-    },
+    snapshot::{Aggregator, Finalizer, ParentTree, SnapshotBuilder},
+    tree::link::Linker,
 };
 use adamite_ntfs::boot::VolumeGeometry;
 

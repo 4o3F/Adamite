@@ -5,23 +5,6 @@ use super::{ExtensionStat, Node, NodeId, NodeView, SnapshotError};
 use crate::ScanContext;
 use adamite_ntfs::{boot::VolumeGeometry, record::reference::FileRef};
 
-pub(crate) fn checked_u32(value: usize, field: &'static str) -> Result<u32, SnapshotError> {
-    u32::try_from(value).map_err(|_| SnapshotError::Overflow { field })
-}
-
-pub(crate) fn name_range(offset: usize, len: usize) -> Result<(u32, u16), SnapshotError> {
-    let end = offset.checked_add(len).ok_or(SnapshotError::Overflow {
-        field: "name pool length",
-    })?;
-    checked_u32(end, "name pool length")?;
-    Ok((
-        checked_u32(offset, "name offset")?,
-        u16::try_from(len).map_err(|_| SnapshotError::Overflow {
-            field: "name length",
-        })?,
-    ))
-}
-
 /// Parsed volume geometry together with metadata supplied by the caller.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VolumeInfo {
@@ -49,18 +32,18 @@ pub struct Snapshot {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SnapshotStorage {
-    pub(crate) nodes: Vec<Node>,
-    pub(crate) names: Vec<u8>,
-    pub(crate) children: Vec<NodeId>,
+pub(super) struct SnapshotStorage {
+    pub(super) nodes: Vec<Node>,
+    pub(super) names: Vec<u8>,
+    pub(super) children: Vec<NodeId>,
     pub(super) ads_size: Vec<u64>,
-    pub(crate) file_refs: Vec<Option<FileRef>>,
+    pub(super) file_refs: Vec<Option<FileRef>>,
     pub(super) attrs: Vec<u32>,
     pub(super) nlink: Vec<u16>,
     pub(super) reparse_tags: Vec<Option<u32>>,
     pub(super) volume: VolumeInfo,
-    pub(crate) top_files: Vec<NodeId>,
-    pub(crate) ext_stats: Vec<ExtensionStat>,
+    pub(super) top_files: Vec<NodeId>,
+    pub(super) ext_stats: Vec<ExtensionStat>,
 }
 
 const _: fn() = || {
@@ -69,7 +52,7 @@ const _: fn() = || {
 };
 
 impl Snapshot {
-    pub(crate) fn from_storage(storage: SnapshotStorage) -> Result<Self, SnapshotError> {
+    pub(super) fn from_storage(storage: SnapshotStorage) -> Result<Self, SnapshotError> {
         // Indirection keeps ScanStep small; reserve the single storage allocation fallibly.
         let mut owned = Vec::new();
         owned.try_reserve_exact(1)?;
@@ -83,11 +66,11 @@ impl Snapshot {
                 })?;
         Ok(Self { storage })
     }
-    pub(crate) fn data(&self) -> &SnapshotStorage {
+    pub(super) fn data(&self) -> &SnapshotStorage {
         let [storage] = self.storage.as_ref();
         storage
     }
-    pub(crate) fn data_mut(&mut self) -> &mut SnapshotStorage {
+    pub(super) fn data_mut(&mut self) -> &mut SnapshotStorage {
         let [storage] = self.storage.as_mut();
         storage
     }

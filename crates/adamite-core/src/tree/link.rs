@@ -4,7 +4,7 @@ use crate::{
     ScanStats,
     entry::{EntryFlags, EntryName, EntryRecord},
     error::ScanError,
-    snapshot::{checked_u32, name_range},
+    snapshot::{NameRange, NodeId, ParentTree, ResolvedNode, SnapshotError},
     util::{CounterExt, VecExt},
 };
 use adamite_ntfs::record::{
@@ -15,31 +15,6 @@ use std::{fmt::Write, vec::IntoIter};
 
 /// Maximum graph operations performed before yielding to the caller.
 const ITEMS_PER_STEP: usize = 256;
-
-/// One node in a flat parent-index array.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ResolvedNode {
-    pub parent: usize,
-    pub file_ref: Option<FileRef>,
-    pub original_parent: Option<FileRef>,
-    pub name_off: u32,
-    pub name_len: u16,
-    pub flags: EntryFlags,
-    pub attrs: u32,
-    pub mtime: u64,
-    pub size: u64,
-    pub ads_size: u64,
-    pub alloc: u64,
-    pub nlink: u16,
-    pub reparse_tag: Option<u32>,
-}
-
-/// A flat Vec of nodes whose parent fields are indices into the same array.
-#[derive(Debug, Default, PartialEq, Eq)]
-pub(crate) struct ParentTree {
-    pub nodes: Vec<ResolvedNode>,
-    pub names: Vec<u8>,
-}
 
 #[derive(Debug, Clone, Copy)]
 struct RecordInfo {
@@ -196,7 +171,7 @@ fn append_name(
         len.checked_add(item.unwrap_or(char::REPLACEMENT_CHARACTER).len_utf8())
             .ok_or_else(ScanError::link_overflow)
     })?;
-    let range = name_range(pool.len(), len)?;
+    let range = NameRange::new(pool.len(), len)?.into_parts();
     pool.try_reserve(len)?;
     for decoded in char::decode_utf16(units) {
         let character = match decoded {
@@ -217,13 +192,11 @@ fn append_name(
 
 impl Linker {
     fn push_bounded<T>(items: &mut Vec<T>, item: T) -> Result<(), ScanError> {
-        checked_u32(
-            items
-                .len()
-                .checked_add(1)
-                .ok_or_else(ScanError::link_overflow)?,
-            "link storage length",
-        )?;
+        let len = items
+            .len()
+            .checked_add(1)
+            .ok_or_else(ScanError::link_overflow)?;
+        u32::try_from(len).map_err(|_| SnapshotError::overflow("link storage length"))?;
         items.try_push(item)?;
         Ok(())
     }
@@ -597,7 +570,8 @@ impl Linker {
         *self
             .remap
             .get_mut(old)
-            .ok_or_else(ScanError::link_overflow)? = checked_u32(self.cursor, "node id")?;
+            .ok_or_else(ScanError::link_overflow)? =
+            NodeId::try_from_index(self.cursor, "node id")?.raw();
         Self::push_bounded(&mut self.order, old)?;
         self.cursor = self
             .cursor
