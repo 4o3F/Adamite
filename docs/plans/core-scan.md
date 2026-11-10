@@ -147,8 +147,8 @@ Each automated milestone is one bounded Codex run targeting 15–30 minutes, inc
 
 ### M11 — Aggregation and finalization
 
-- [ ] M11.1 Add iterative subtree totals, duplicate contribution suppression, deterministic directory ordering, top-100 files and extension statistics; connect Finalize to one-shot Done.
-- [ ] M11.2 Test ties, directory self-allocation, ADS exclusion from logical totals, extension edge cases and a deep nonrecursive tree. Verify: `cargo test -p adamite-core --locked aggregation`.
+- [x] M11.1 Add iterative subtree totals, duplicate contribution suppression, deterministic directory ordering, top-100 files and extension statistics; connect Finalize to one-shot Done.
+- [x] M11.2 Test ties, directory self-allocation, ADS exclusion from logical totals, extension edge cases and a deep nonrecursive tree. Verify: `cargo test -p adamite-core --locked aggregation`.
 
 ### M12 — Independent fixture end-to-end oracles
 

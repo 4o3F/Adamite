@@ -71,6 +71,8 @@ impl SnapshotBuilder {
             })
             .transpose()?;
         let mut snapshot = SnapshotStorage {
+            top_files: Vec::new(),
+            ext_stats: Vec::new(),
             nodes: Vec::new(),
             names: tree.names,
             children: Vec::new(),

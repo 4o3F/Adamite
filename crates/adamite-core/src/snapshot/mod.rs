@@ -1,10 +1,12 @@
 //! Immutable snapshot storage and bounded arena construction.
 
 mod builder;
+mod indexes;
 mod node;
 mod storage;
 
-use storage::SnapshotStorage;
+pub use indexes::ExtensionStat;
+pub(crate) use storage::SnapshotStorage;
 
 pub(crate) use builder::SnapshotBuilder;
 pub use node::{Node, NodeFlags, NodeId, NodeView};

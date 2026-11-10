@@ -26,8 +26,8 @@
 //! # }
 //! ```
 //!
-//! Snapshot construction currently returns [`ScanError::PhaseNotImplemented`]
-//! for [`ScanPhase::Aggregate`]. Aggregation and scan completion are pending.
+//! Continue until [`ScanStep::Done`] transfers the frozen snapshot and final counters.
+//! Later calls return [`ScanError::Inactive`]; all reads remain owned by the caller.
 #![forbid(unsafe_code)]
 #![deny(
     clippy::indexing_slicing,
@@ -47,7 +47,9 @@ pub use scan::{
     ConfigError, FeedError, ReadRequest, RequestId, ScanConfig, ScanContext, ScanError, ScanOutput,
     ScanPhase, ScanProgress, ScanStep, Scanner,
 };
-pub use snapshot::{Node, NodeFlags, NodeId, NodeView, Snapshot, SnapshotError, VolumeInfo};
+pub use snapshot::{
+    ExtensionStat, Node, NodeFlags, NodeId, NodeView, Snapshot, SnapshotError, VolumeInfo,
+};
 pub use stats::ScanStats;
 
 const _: fn() = || {

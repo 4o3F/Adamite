@@ -13,7 +13,10 @@ use crate::{
     ScanStats, Snapshot, SnapshotError,
     entry::EntryRecord,
     snapshot::SnapshotBuilder,
-    tree::link::{Linker, ParentTree},
+    tree::{
+        Aggregator, Finalizer,
+        link::{Linker, ParentTree},
+    },
 };
 use adamite_ntfs::{
     AttributeError, AttributeListError, FileRefError, GeometryError, RecordError, RunlistError,
@@ -93,12 +96,6 @@ pub enum ScanError {
     /// A terminal scan cannot advance again.
     #[snafu(display("scan is inactive"))]
     Inactive,
-    /// The next processing phase is not implemented yet.
-    #[snafu(display("scan phase {phase:?} is not implemented"))]
-    PhaseNotImplemented {
-        /// Phase required to continue the scan.
-        phase: ScanPhase,
-    },
     /// All issued request slots remain occupied.
     #[snafu(display("outstanding request limit {max_outstanding} reached"))]
     OutstandingLimit {
@@ -211,8 +208,8 @@ pub enum ScanError {
         /// Missing virtual or physical byte offset.
         offset: u64,
     },
-    /// Snapshot representation or storage construction failed.
-    #[snafu(display("snapshot construction failed: {source}"))]
+    /// Snapshot construction, aggregation or final ordering failed.
+    #[snafu(display("snapshot processing failed: {source}"))]
     Snapshot {
         /// Snapshot construction failure.
         source: SnapshotError,
@@ -233,7 +230,7 @@ impl From<SnapshotError> for ScanError {
 
 /// Streams, merges and resolves NTFS records from caller-supplied bytes.
 ///
-/// Stops after snapshot construction, before subtree aggregation.
+/// Returns the completed immutable snapshot and diagnostics exactly once.
 #[derive(Debug)]
 pub struct Scanner {
     config: ScanConfig,
@@ -249,6 +246,8 @@ pub struct Scanner {
     linker: Option<Linker>,
     parent_tree: Option<ParentTree>,
     snapshot_builder: Option<SnapshotBuilder>,
+    aggregator: Option<Aggregator>,
+    finalizer: Option<Finalizer>,
 }
 
 #[derive(Clone, Copy)]
@@ -279,6 +278,8 @@ impl Scanner {
             linker: None,
             parent_tree: None,
             snapshot_builder: None,
+            aggregator: None,
+            finalizer: None,
         })
     }
 
@@ -293,8 +294,7 @@ impl Scanner {
     /// # Errors
     ///
     /// Invalid geometry, bootstrap data, arithmetic overflow or allocation failure
-    /// terminates the scan. Successful snapshot construction currently terminates with
-    /// [`ScanError::PhaseNotImplemented`] for Aggregate. Further calls return Inactive.
+    /// terminates the scan. Calls after the completed output is delivered return Inactive.
     pub fn step(&mut self) -> Result<ScanStep, ScanError> {
         let span = tracing::info_span!("scan_phase", phase = ?self.phase);
         let _entered = span.enter();
@@ -337,7 +337,8 @@ impl Scanner {
             ScanPhase::Merge => self.merge(),
             ScanPhase::Link => self.link(),
             ScanPhase::Snapshot => self.snapshot(),
-            phase => Err(ScanError::PhaseNotImplemented { phase }),
+            ScanPhase::Aggregate => self.aggregate(),
+            ScanPhase::Finalize => self.finalize(),
         }
     }
 
@@ -524,6 +525,50 @@ impl Scanner {
         Ok(self.progress(InputStatus::Ready))
     }
 
+    fn aggregate(&mut self) -> Result<ScanStep, ScanError> {
+        let output = self.output.as_mut().ok_or(ScanError::Link {
+            reason: "missing snapshot output",
+        })?;
+        if self.aggregator.is_none() {
+            self.aggregator = Some(Aggregator::new(&output.snapshot)?);
+            return Ok(self.progress(InputStatus::Ready));
+        }
+        if self
+            .aggregator
+            .as_mut()
+            .ok_or(ScanError::Link {
+                reason: "missing aggregation state",
+            })?
+            .step(&mut output.snapshot)?
+        {
+            self.aggregator = None;
+            self.phase = ScanPhase::Finalize;
+        }
+        Ok(self.progress(InputStatus::Ready))
+    }
+
+    fn finalize(&mut self) -> Result<ScanStep, ScanError> {
+        let output = self.output.as_mut().ok_or(ScanError::Link {
+            reason: "missing snapshot output",
+        })?;
+        if self.finalizer.is_none() {
+            self.finalizer = Some(Finalizer::new());
+            return Ok(self.progress(InputStatus::Ready));
+        }
+        if self
+            .finalizer
+            .as_mut()
+            .ok_or(ScanError::Link {
+                reason: "missing finalization state",
+            })?
+            .step(&mut output.snapshot)?
+        {
+            self.finalizer = None;
+            self.phase = ScanPhase::Done;
+        }
+        Ok(self.progress(InputStatus::Ready))
+    }
+
     fn progress(&self, input: InputStatus) -> ScanStep {
         ScanStep::Progress(ScanProgress {
             phase: self.phase,
@@ -557,6 +602,8 @@ impl Scanner {
         self.merge = None;
         self.linker = None;
         self.snapshot_builder = None;
+        self.aggregator = None;
+        self.finalizer = None;
     }
 }
 

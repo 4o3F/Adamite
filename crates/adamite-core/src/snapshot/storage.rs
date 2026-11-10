@@ -1,6 +1,6 @@
 //! Frozen node arena, shared names and compressed sparse row child storage.
 
-use super::{Node, NodeId, NodeView};
+use super::{ExtensionStat, Node, NodeId, NodeView};
 
 use crate::ScanContext;
 use adamite_ntfs::{FileRef, VolumeGeometry};
@@ -76,16 +76,18 @@ pub struct Snapshot {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct SnapshotStorage {
-    pub(super) nodes: Vec<Node>,
-    pub(super) names: Vec<u8>,
-    pub(super) children: Vec<NodeId>,
+pub(crate) struct SnapshotStorage {
+    pub(crate) nodes: Vec<Node>,
+    pub(crate) names: Vec<u8>,
+    pub(crate) children: Vec<NodeId>,
     pub(super) ads_size: Vec<u64>,
-    pub(super) file_refs: Vec<Option<FileRef>>,
+    pub(crate) file_refs: Vec<Option<FileRef>>,
     pub(super) attrs: Vec<u32>,
     pub(super) nlink: Vec<u16>,
     pub(super) reparse_tags: Vec<Option<u32>>,
     pub(super) volume: VolumeInfo,
+    pub(crate) top_files: Vec<NodeId>,
+    pub(crate) ext_stats: Vec<ExtensionStat>,
 }
 
 const _: fn() = || {
@@ -94,7 +96,7 @@ const _: fn() = || {
 };
 
 impl Snapshot {
-    pub(super) fn from_storage(storage: SnapshotStorage) -> Result<Self, SnapshotError> {
+    pub(crate) fn from_storage(storage: SnapshotStorage) -> Result<Self, SnapshotError> {
         // Indirection keeps ScanStep small; reserve the single storage allocation fallibly.
         let mut owned = Vec::new();
         owned
@@ -110,11 +112,11 @@ impl Snapshot {
                 })?;
         Ok(Self { storage })
     }
-    pub(super) fn data(&self) -> &SnapshotStorage {
+    pub(crate) fn data(&self) -> &SnapshotStorage {
         let [storage] = self.storage.as_ref();
         storage
     }
-    pub(super) fn data_mut(&mut self) -> &mut SnapshotStorage {
+    pub(crate) fn data_mut(&mut self) -> &mut SnapshotStorage {
         let [storage] = self.storage.as_mut();
         storage
     }
@@ -134,6 +136,18 @@ impl Snapshot {
     pub fn volume(&self) -> &VolumeInfo {
         &self.data().volume
     }
+    /// Borrows up to 100 primary files ordered by descending self allocation,
+    /// then UTF-16 name, file reference and identifier; metafiles are included.
+    #[must_use]
+    pub fn top_files(&self) -> &[NodeId] {
+        &self.data().top_files
+    }
+    /// Borrows primary-file extension summaries ordered by descending allocation,
+    /// then ascending extension; ADS logical bytes are excluded.
+    #[must_use]
+    pub fn ext_stats(&self) -> &[ExtensionStat] {
+        &self.data().ext_stats
+    }
     /// Borrows the hot fields and cold metadata of an existing node.
     #[must_use]
     pub fn node(&self, id: NodeId) -> Option<NodeView<'_>> {
@@ -148,7 +162,8 @@ impl Snapshot {
             reparse_tag: *self.data().reparse_tags.get(index)?,
         })
     }
-    /// Borrows immediate children in ascending NodeId order until final aggregation.
+    /// Borrows children ordered by descending subtree allocation, then UTF-16 name,
+    /// file reference and identifier; lossy names use their pooled replacement characters.
     #[must_use]
     pub fn children(&self, id: NodeId) -> Option<&[NodeId]> {
         let node = self.node(id)?;

@@ -63,18 +63,18 @@ impl NodeFlags {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Node {
-    pub(super) size: u64,
-    pub(super) alloc: u64,
-    pub(super) total_size: u64,
-    pub(super) total_alloc: u64,
+    pub(crate) size: u64,
+    pub(crate) alloc: u64,
+    pub(crate) total_size: u64,
+    pub(crate) total_alloc: u64,
     pub(super) mtime: u64,
-    pub(super) parent: u32,
-    pub(super) child_start: u32,
-    pub(super) child_len: u32,
-    pub(super) file_count: u32,
-    pub(super) name_off: u32,
-    pub(super) name_len: u16,
-    pub(super) flags: u16,
+    pub(crate) parent: u32,
+    pub(crate) child_start: u32,
+    pub(crate) child_len: u32,
+    pub(crate) file_count: u32,
+    pub(crate) name_off: u32,
+    pub(crate) name_len: u16,
+    pub(crate) flags: u16,
 }
 
 const _: () = assert!(std::mem::size_of::<Node>() == 64);
@@ -107,12 +107,12 @@ impl NodeView<'_> {
     pub const fn alloc(self) -> u64 {
         self.node.alloc
     }
-    /// Returns subtree logical bytes; zero until aggregation.
+    /// Returns subtree unnamed DATA bytes; duplicate links are excluded from ancestor totals.
     #[must_use]
     pub const fn total_size(self) -> u64 {
         self.node.total_size
     }
-    /// Returns subtree allocation bytes; zero until aggregation.
+    /// Returns subtree allocation bytes, including directory self-allocation.
     #[must_use]
     pub const fn total_alloc(self) -> u64 {
         self.node.total_alloc
@@ -137,7 +137,7 @@ impl NodeView<'_> {
     pub const fn child_len(self) -> u32 {
         self.node.child_len
     }
-    /// Returns the subtree file count; zero until aggregation.
+    /// Returns the subtree count of primary files.
     #[must_use]
     pub const fn file_count(self) -> u32 {
         self.node.file_count
