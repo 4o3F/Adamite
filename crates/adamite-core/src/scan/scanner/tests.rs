@@ -23,8 +23,8 @@ fn protocol_done_transfers_output_once_then_rejects_calls() -> Result<(), Box<dy
     Ok(())
 }
 
-use crate::scan::bootstrap::ListStorage;
-use crate::scan::mapping::OwnedRun;
+use crate::mft::bootstrap::{ListStorage, RecordParts};
+use crate::mft::mapping::OwnedRun;
 use adamite_fixtures::{
     Fixture,
     builders::{
@@ -222,9 +222,9 @@ fn bootstrap_record_and_extension_headers_precede_fixup_with_preserved_sources()
                     builder.corrupt_tail(&mut raw, 1);
                 }
                 let result = if extension {
-                    bootstrap::parse_extension(raw, extension_ref, base, geometry).map(|_| ())
+                    RecordParts::parse_extension(raw, extension_ref, base, geometry).map(|_| ())
                 } else {
-                    bootstrap::parse_record0(raw, geometry).map(|_| ())
+                    Record0::parse(raw, geometry).map(|_| ())
                 };
                 if !invalid_header && !torn {
                     result?;
@@ -924,6 +924,32 @@ fn bootstrap_multipass_discovery_caps_chunks_and_response_orders() -> TestResult
             let base = scanner.bootstrap.as_ref().ok_or("complete MFT mapping")?;
             assert_eq!(base.mapping.runs, chain_runs());
             assert_eq!(base.data_size, 6144);
+            let expected = if chunk == 512 {
+                vec![
+                    (0, 0, 512),
+                    (1, 4096, 512),
+                    (2, 4608, 512),
+                    (3, 5120, 512),
+                    (4, 5632, 512),
+                    (5, 17_408, 512),
+                    (6, 17_920, 512),
+                ]
+            } else {
+                vec![
+                    (0, 0, 512),
+                    (1, 4096, 1024),
+                    (2, 5120, 1024),
+                    (3, 17_408, 1024),
+                ]
+            };
+            assert_eq!(
+                requests
+                    .iter()
+                    .map(|request| (request.id.raw(), request.offset, request.len))
+                    .collect::<Vec<_>>(),
+                expected,
+                "bootstrap request identities and order at cap {cap}, chunk {chunk}"
+            );
             let first = requests
                 .iter()
                 .position(|request| request.offset == 5120)

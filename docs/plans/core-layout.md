@@ -83,7 +83,7 @@ Move aggregate/finalize and their tests into `snapshot/build/`. Restrict `Snapsh
 
 4. D4. Errors and utilities. Keep `ConfigError` beside validated configuration, `FeedError` beside request ids/feeds, and `SnapshotError` inside snapshot; moving all errors into one enum would couple unrelated domains. Move the existing `ScanError` definition and `From<SnapshotError>` to `error.rs`, preserving the post-NTFS baseline's parser sources and error precedence, including separate `Geometry`, `Record` and `Fixup` variants.
 
-Replace free error helpers with crate-private constructors `ScanError::{overflow,bootstrap,stream,link,link_overflow}` and `SnapshotError::{overflow,invalid}`. Pass the existing operation/reason/field literals, including link's `"tree linking"` overflow context. Map allocation failures to the caller's existing scan/feed/snapshot variant; preserve reserve-before-mutation ordering and source chains.
+Replace free error helpers with crate-private constructors `ScanError::{overflow,bootstrap,bootstrap_record,stream,link,link_overflow}` and `SnapshotError::{overflow,invalid}`. Pass the existing operation/reason/field literals, including link's `"tree linking"` overflow context. Map allocation failures to the caller's existing scan/feed/snapshot variant; preserve reserve-before-mutation ordering and source chains.
 
 Consolidate `push`, `reserve`, `copy_slice`, `bump` and `increment` into `util` extension traits: `VecExt::{try_push,try_reserve,try_reserve_exact}`, `SliceExt::try_copy` and `CounterExt::try_bump`. Use method calls where unambiguous and qualified trait calls where Vec already has an inherent reservation method. Helpers return `TryReserveError` or `CounterOverflow` without importing domain errors. `ScanError` and `SnapshotError` convert `TryReserveError` into their sole allocation variant; feed errors retain explicit allocation mapping. `ScanError::from(CounterOverflow)` supplies the existing `"scan counter"` context, while link counters explicitly retain `"tree linking"`. Preserve exact versus amortized reservations; keep link-storage u32 prechecks in private `Linker::push_bounded` and merged-contribution length prechecks in private `Merge::reserve_contribution`, both delegating collection growth to `VecExt`. Checked integer conversions use standard `try_from` plus the domain constructor rather than duplicate `index` wrappers.
 
@@ -128,8 +128,8 @@ Each milestone is one bounded agent run of at most 30 minutes, including verific
 
 ### M4 — Bootstrap and discovery without protocol dependencies
 
-- [ ] Move mapping/bootstrap/discovery into MFT, apply their D5 constructors and remove borrowed sibling helpers. Adapt the driver's record-zero/discovery handoff and read planning per D6.
-- [ ] Preserve request ordering, the 300-reference yield regression, list bounds and finite bootstrap failure. Keep ingest/merge temporarily under scan for M5. Verify bootstrap and protocol cases; finish with `deno task check` green.
+- [x] Move mapping/bootstrap/discovery into MFT, apply their D5 constructors and remove borrowed sibling helpers. Adapt the driver's record-zero/discovery handoff and read planning per D6.
+- [x] Preserve request ordering, the 300-reference yield regression, list bounds and finite bootstrap failure. Keep ingest/merge temporarily under scan for M5. Verify bootstrap and protocol cases; finish with `deno task check` green.
 
 ### M5 — Ingestion and merge ownership
 

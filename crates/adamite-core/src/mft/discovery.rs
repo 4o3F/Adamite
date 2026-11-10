@@ -1,10 +1,8 @@
 //! Finite attribute-list acquisition and reachable MFT extension discovery.
 
 use super::{
-    ReadRequest, ScanConfig,
-    bootstrap::{self, AttributeListDescriptor, ListStorage, Record0, RecordParts, check_storage},
-    mapping::{MftMapping, RecordAssembly},
-    protocol::Requests,
+    bootstrap::{AttributeListDescriptor, ListStorage, Record0, RecordParts},
+    mapping::{MftMapping, ReadPiece, RecordAssembly},
 };
 use crate::{
     error::ScanError,
@@ -75,14 +73,14 @@ struct Parsing {
 }
 
 #[derive(Debug)]
-pub(super) enum DiscoveryStep {
-    Need(ReadRequest),
-    Progress { waiting: bool },
+pub(crate) enum DiscoveryStep {
+    Read,
+    Progress,
     Complete,
 }
 
 #[derive(Debug)]
-pub(super) struct Discovery {
+pub(crate) struct Discovery {
     pending: Vec<Pending>,
     records: Vec<RecordParts>,
     committed: Vec<(FileRef, u16, u64)>,
@@ -95,7 +93,7 @@ pub(super) struct Discovery {
 }
 
 impl Discovery {
-    pub(super) fn new(base: &mut Record0) -> Result<Self, ScanError> {
+    pub(crate) fn new(base: &mut Record0) -> Result<Self, ScanError> {
         let mut state = Self {
             pending: Vec::new(),
             records: Vec::new(),
@@ -148,9 +146,9 @@ impl Discovery {
                     "conflicting attribute-list descriptor identity",
                 ));
             }
+            descriptor.validate_storage()?;
             let value = match &descriptor.storage {
                 ListStorage::Resident(bytes) => {
-                    check_storage(descriptor.flags, 0)?;
                     // Check the value bound here; entries are parsed in bounded steps later.
                     let _ = AttributeList::new(bytes)
                         .map_err(|source| ScanError::AttributeList { source })?;
@@ -159,19 +157,16 @@ impl Discovery {
                 ListStorage::NonResident {
                     lowest_vcn,
                     highest_vcn,
-                    compression_unit,
+                    compression_unit: _,
                     sizes,
                     mapping_pairs,
                 } => {
-                    check_storage(descriptor.flags, *compression_unit)?;
                     let lowest = i64::try_from(*lowest_vcn)
                         .map_err(|_| ScanError::overflow("attribute-list lowest VCN"))?;
                     let range = VcnRange::new(lowest, *highest_vcn)
                         .map_err(|source| ScanError::Runlist { source })?;
-                    let mapping = bootstrap::collect_mapping(
-                        Runlist::new(mapping_pairs, range),
-                        mft.geometry,
-                    )?;
+                    let mapping =
+                        MftMapping::from_runlist(Runlist::new(mapping_pairs, range), mft.geometry)?;
                     let len = sizes.map(|sizes| sizes.data());
                     if let Some(size) = len.filter(|size| *size > MAX_LIST_BYTES) {
                         return Err(ScanError::AttributeListTooLarge { size });
@@ -298,12 +293,12 @@ impl Discovery {
             record.lists.iter().any(|descriptor| {
                 descriptor.id == key.id
                     && descriptor.name == key.name
-                    && list_lowest(descriptor) == key.lowest
+                    && descriptor.lowest_vcn() == key.lowest
             }) || self.descriptors.iter().any(|(origin, descriptor)| {
                 *origin == key.source
                     && descriptor.id == key.id
                     && descriptor.name == key.name
-                    && list_lowest(descriptor) == key.lowest
+                    && descriptor.lowest_vcn() == key.lowest
             })
         }
     }
@@ -348,19 +343,11 @@ impl Discovery {
         Ok(true)
     }
 
-    fn read_step(
-        &mut self,
-        base: &mut Record0,
-        requests: &mut Requests,
-        config: &ScanConfig,
-    ) -> Result<DiscoveryStep, ScanError> {
+    fn read_step(&mut self, base: &mut Record0) -> Result<DiscoveryStep, ScanError> {
         let active = self
             .active
             .as_mut()
             .ok_or_else(|| ScanError::bootstrap("missing discovery read"))?;
-        if let Some((_, bytes)) = requests.take_ready() {
-            active.assembly.append(&bytes)?;
-        }
         if active.assembly.complete() {
             let active = self
                 .active
@@ -381,7 +368,7 @@ impl Discovery {
                         .get(index)
                         .ok_or_else(|| ScanError::overflow("pending reference index"))?
                         .key;
-                    let mut record = bootstrap::parse_extension(
+                    let mut record = RecordParts::parse_extension(
                         bytes,
                         key.source,
                         base.reference,
@@ -401,44 +388,54 @@ impl Discovery {
                     self.commit_cached(index, base)?;
                 }
             }
-            return Ok(DiscoveryStep::Progress { waiting: false });
+            return Ok(DiscoveryStep::Progress);
         }
-        let mapping = match active.target {
-            ReadTarget::Extension(_) => &base.mapping,
-            ReadTarget::List(index) => match &self
-                .lists
-                .get(index)
-                .ok_or_else(|| ScanError::overflow("list index"))?
-                .value
-            {
-                ListValue::NonResident { mapping, .. } => mapping,
-                _ => return Err(ScanError::bootstrap("resident list scheduled for I/O")),
-            },
-        };
-        if requests.len() < config.max_outstanding
-            && let Some(piece) = active.assembly.next_piece(mapping, config.chunk_size)?
-        {
-            let request = requests.issue(piece.offset, piece.len)?;
-            active.assembly.planned(piece.len)?;
-            return Ok(DiscoveryStep::Need(request));
-        }
-        Ok(DiscoveryStep::Progress {
-            waiting: !requests.has_ready(),
-        })
+        active.mapping(&self.lists, base)?;
+        Ok(DiscoveryStep::Read)
     }
 
-    pub(super) fn step(
-        &mut self,
-        base: &mut Record0,
-        requests: &mut Requests,
-        config: &ScanConfig,
-    ) -> Result<DiscoveryStep, ScanError> {
+    pub(crate) fn is_reading(&self) -> bool {
+        self.active.is_some()
+    }
+
+    pub(crate) fn accept_bytes(&mut self, bytes: &[u8]) -> Result<(), ScanError> {
+        self.active
+            .as_mut()
+            .ok_or_else(|| ScanError::bootstrap("missing discovery read"))?
+            .assembly
+            .append(bytes)
+    }
+
+    /// Plans without advancing the assembly; the driver commits after issuing the read.
+    pub(crate) fn next_piece(
+        &self,
+        base: &Record0,
+        chunk: usize,
+    ) -> Result<Option<ReadPiece>, ScanError> {
+        let active = self
+            .active
+            .as_ref()
+            .ok_or_else(|| ScanError::bootstrap("missing discovery read"))?;
+        active
+            .assembly
+            .next_piece(active.mapping(&self.lists, base)?, chunk)
+    }
+
+    pub(crate) fn planned(&mut self, len: usize) -> Result<(), ScanError> {
+        self.active
+            .as_mut()
+            .ok_or_else(|| ScanError::bootstrap("missing discovery read"))?
+            .assembly
+            .planned(len)
+    }
+
+    pub(crate) fn step(&mut self, base: &mut Record0) -> Result<DiscoveryStep, ScanError> {
         if self.active.is_some() {
-            return self.read_step(base, requests, config);
+            return self.read_step(base);
         }
         if self.parsing.is_some() {
             self.parse_list()?;
-            return Ok(DiscoveryStep::Progress { waiting: false });
+            return Ok(DiscoveryStep::Progress);
         }
         for (index, stream) in self.lists.iter_mut().enumerate() {
             if stream.parsed {
@@ -453,7 +450,7 @@ impl Discovery {
                         })?,
                         cursor: 0,
                     });
-                    return Ok(DiscoveryStep::Progress { waiting: false });
+                    return Ok(DiscoveryStep::Progress);
                 }
                 ListValue::NonResident {
                     mapping,
@@ -467,7 +464,7 @@ impl Discovery {
                                 .map_err(|_| ScanError::overflow("attribute-list length"))?,
                         )?,
                     });
-                    return Ok(DiscoveryStep::Progress { waiting: false });
+                    return Ok(DiscoveryStep::Progress);
                 }
                 _ => {}
             }
@@ -509,7 +506,7 @@ impl Discovery {
             if self.commit_cached(index, base)? {
                 self.pending_cursor = 0;
                 self.unresolved = false;
-                return Ok(DiscoveryStep::Progress { waiting: false });
+                return Ok(DiscoveryStep::Progress);
             }
             if base.mapping.covers(start, len)? {
                 self.active = Some(ActiveRead {
@@ -522,12 +519,12 @@ impl Discovery {
                 });
                 self.pending_cursor = 0;
                 self.unresolved = false;
-                return Ok(DiscoveryStep::Progress { waiting: false });
+                return Ok(DiscoveryStep::Progress);
             }
             self.unresolved = true;
         }
         if self.pending_cursor < self.pending.len() {
-            return Ok(DiscoveryStep::Progress { waiting: false });
+            return Ok(DiscoveryStep::Progress);
         }
         // Every eligible list and reference was considered, with no I/O or CPU work left.
         if self.lists.iter().all(|list| list.parsed)
@@ -540,23 +537,34 @@ impl Discovery {
     }
 }
 
-fn list_lowest(descriptor: &AttributeListDescriptor) -> u64 {
-    match descriptor.storage {
-        ListStorage::Resident(_) => 0,
-        ListStorage::NonResident { lowest_vcn, .. } => lowest_vcn,
+impl ActiveRead {
+    fn mapping<'a>(
+        &self,
+        lists: &'a [ListStream],
+        base: &'a Record0,
+    ) -> Result<&'a MftMapping, ScanError> {
+        match self.target {
+            ReadTarget::Extension(_) => Ok(&base.mapping),
+            ReadTarget::List(index) => match &lists
+                .get(index)
+                .ok_or_else(|| ScanError::overflow("list index"))?
+                .value
+            {
+                ListValue::NonResident { mapping, .. } => Ok(mapping),
+                _ => Err(ScanError::bootstrap("resident list scheduled for I/O")),
+            },
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scan::mapping::OwnedRun;
+    use crate::mft::mapping::OwnedRun;
     use adamite_fixtures::builders::BootSectorBuilder;
     use std::error::Error;
 
-    #[test]
-    fn bootstrap_pending_references_yield_before_no_progress_failure() -> Result<(), Box<dyn Error>>
-    {
+    fn base() -> Result<Record0, Box<dyn Error>> {
         let geometry = adamite_ntfs::boot::VolumeGeometry::from_boot_sector(
             &BootSectorBuilder {
                 cluster_encoding: 1,
@@ -565,7 +573,7 @@ mod tests {
             }
             .build(),
         )?;
-        let mut base = Record0 {
+        Ok(Record0 {
             reference: FileRef::new(0, 7)?,
             data_id: 0,
             data_size: 1_048_576,
@@ -579,7 +587,13 @@ mod tests {
             )?,
             attribute_lists: vec![],
             segments: vec![],
-        };
+        })
+    }
+
+    #[test]
+    fn bootstrap_pending_references_yield_before_no_progress_failure() -> Result<(), Box<dyn Error>>
+    {
+        let mut base = base()?;
         let mut discovery = Discovery::new(&mut base)?;
         for record in 10..310 {
             discovery.add_reference(SegmentRef {
@@ -590,21 +604,71 @@ mod tests {
                 lowest: 0,
             })?;
         }
-        let config = ScanConfig::default();
-        let mut requests = Requests::new(config.max_outstanding, config.chunk_size);
         assert!(
-            matches!(
-                discovery.step(&mut base, &mut requests, &config)?,
-                DiscoveryStep::Progress { waiting: false }
-            ),
+            matches!(discovery.step(&mut base)?, DiscoveryStep::Progress),
             "a partial reference pass must yield"
         );
+        assert_eq!(discovery.pending_cursor, 256);
         assert!(
             matches!(
-                discovery.step(&mut base, &mut requests, &config),
+                discovery.step(&mut base),
                 Err(ScanError::BootstrapIncomplete)
             ),
             "a completed pass must detect no progress"
+        );
+        assert_eq!(discovery.pending_cursor, 300);
+        Ok(())
+    }
+
+    #[test]
+    fn bootstrap_discovery_planning_waits_for_commit_before_accepting_bytes()
+    -> Result<(), Box<dyn Error>> {
+        let mut base = base()?;
+        let mut discovery = Discovery::new(&mut base)?;
+        discovery.active = Some(ActiveRead {
+            target: ReadTarget::Extension(0),
+            assembly: RecordAssembly::new(0, 1024)?,
+        });
+        assert!(discovery.is_reading());
+        assert!(matches!(discovery.step(&mut base)?, DiscoveryStep::Read));
+        let first = discovery.next_piece(&base, 512)?.ok_or("first piece")?;
+        assert_eq!(
+            first,
+            ReadPiece {
+                offset: 2048,
+                len: 512
+            }
+        );
+        assert_eq!(discovery.next_piece(&base, 512)?, Some(first));
+        let bytes = [0; 512];
+        assert!(matches!(
+            discovery.accept_bytes(&bytes),
+            Err(ScanError::Bootstrap {
+                reason: "response exceeds planned record bytes"
+            })
+        ));
+        assert_eq!(discovery.next_piece(&base, 512)?, Some(first));
+        discovery.planned(first.len)?;
+        discovery.accept_bytes(&bytes)?;
+        assert!(matches!(discovery.step(&mut base)?, DiscoveryStep::Read));
+        let second = discovery.next_piece(&base, 512)?.ok_or("second piece")?;
+        assert_eq!(
+            second,
+            ReadPiece {
+                offset: 2560,
+                len: 512
+            }
+        );
+        discovery.planned(second.len)?;
+        assert_eq!(discovery.next_piece(&base, 512)?, None);
+        discovery.accept_bytes(&bytes)?;
+        assert!(
+            discovery
+                .active
+                .as_ref()
+                .ok_or("active read")?
+                .assembly
+                .complete()
         );
         Ok(())
     }

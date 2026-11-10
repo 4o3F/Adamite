@@ -4,26 +4,26 @@ use crate::error::ScanError;
 use adamite_ntfs::boot::VolumeGeometry;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct OwnedRun {
+pub(crate) struct OwnedRun {
     pub vcn: u64,
     pub lcn: u64,
     pub clusters: u64,
 }
 
 #[derive(Debug)]
-pub(super) struct MftMapping {
+pub(crate) struct MftMapping {
     pub geometry: VolumeGeometry,
     pub runs: Vec<OwnedRun>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct ReadPiece {
+pub(crate) struct ReadPiece {
     pub offset: u64,
     pub len: usize,
 }
 
 impl MftMapping {
-    pub(super) fn new(geometry: VolumeGeometry, runs: Vec<OwnedRun>) -> Result<Self, ScanError> {
+    pub(crate) fn new(geometry: VolumeGeometry, runs: Vec<OwnedRun>) -> Result<Self, ScanError> {
         let cluster = u64::from(geometry.cluster_size());
         let mut previous_end = 0;
         for (index, run) in runs.iter().enumerate() {
@@ -66,7 +66,7 @@ impl MftMapping {
         Ok(Self { geometry, runs })
     }
 
-    pub(super) fn with_runs(&self, additional: &[OwnedRun]) -> Result<Self, ScanError> {
+    pub(crate) fn with_runs(&self, additional: &[OwnedRun]) -> Result<Self, ScanError> {
         let mut runs = Vec::new();
         let count = self
             .runs
@@ -80,7 +80,7 @@ impl MftMapping {
         Self::new(self.geometry, runs)
     }
 
-    pub(super) fn covers(&self, start: u64, len: u64) -> Result<bool, ScanError> {
+    pub(crate) fn covers(&self, start: u64, len: u64) -> Result<bool, ScanError> {
         let end = start
             .checked_add(len)
             .ok_or_else(|| ScanError::overflow("mapped range end"))?;
@@ -108,7 +108,7 @@ impl MftMapping {
     }
 
     /// The boot sector locates a contiguous record before its own runlist is available.
-    pub(super) fn record0(geometry: VolumeGeometry) -> Result<Self, ScanError> {
+    pub(crate) fn record0(geometry: VolumeGeometry) -> Result<Self, ScanError> {
         let cluster = u64::from(geometry.cluster_size());
         let clusters = u64::from(geometry.file_record_size()).div_ceil(cluster);
         let mut runs = Vec::new();
@@ -122,7 +122,7 @@ impl MftMapping {
     }
 
     /// Maps a prefix, stopping at the current extent or the supplied chunk bound.
-    pub(super) fn read_piece(
+    pub(crate) fn read_piece(
         &self,
         virtual_offset: u64,
         max_len: usize,
@@ -170,7 +170,7 @@ impl MftMapping {
         })
     }
 
-    pub(super) fn virtual_offset(&self, physical_offset: u64) -> Result<u64, ScanError> {
+    pub(crate) fn virtual_offset(&self, physical_offset: u64) -> Result<u64, ScanError> {
         let cluster = u64::from(self.geometry.cluster_size());
         for run in &self.runs {
             let start = run
@@ -201,7 +201,7 @@ impl MftMapping {
 
 /// One raw record, assembled in virtual order from chunk/extent-bounded responses.
 #[derive(Debug)]
-pub(super) struct RecordAssembly {
+pub(crate) struct RecordAssembly {
     start: u64,
     len: usize,
     planned: usize,
@@ -209,7 +209,7 @@ pub(super) struct RecordAssembly {
 }
 
 impl RecordAssembly {
-    pub(super) fn new(start: u64, len: usize) -> Result<Self, ScanError> {
+    pub(crate) fn new(start: u64, len: usize) -> Result<Self, ScanError> {
         start
             .checked_add(u64::try_from(len).map_err(|_| ScanError::overflow("record length"))?)
             .ok_or_else(|| ScanError::overflow("record end"))?;
@@ -223,7 +223,7 @@ impl RecordAssembly {
         })
     }
 
-    pub(super) fn next_piece(
+    pub(crate) fn next_piece(
         &self,
         mapping: &MftMapping,
         chunk: usize,
@@ -244,7 +244,7 @@ impl RecordAssembly {
         mapping.read_piece(offset, remaining.min(chunk)).map(Some)
     }
 
-    pub(super) fn planned(&mut self, len: usize) -> Result<(), ScanError> {
+    pub(crate) fn planned(&mut self, len: usize) -> Result<(), ScanError> {
         let end = self
             .planned
             .checked_add(len)
@@ -258,7 +258,7 @@ impl RecordAssembly {
         Ok(())
     }
 
-    pub(super) fn append(&mut self, bytes: &[u8]) -> Result<(), ScanError> {
+    pub(crate) fn append(&mut self, bytes: &[u8]) -> Result<(), ScanError> {
         let end = self
             .bytes
             .len()
@@ -273,10 +273,10 @@ impl RecordAssembly {
         Ok(())
     }
 
-    pub(super) fn complete(&self) -> bool {
+    pub(crate) fn complete(&self) -> bool {
         self.bytes.len() == self.len
     }
-    pub(super) fn into_bytes(self) -> Vec<u8> {
+    pub(crate) fn into_bytes(self) -> Vec<u8> {
         self.bytes
     }
 }

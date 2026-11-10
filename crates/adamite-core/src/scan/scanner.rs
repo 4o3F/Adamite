@@ -3,10 +3,7 @@
 use super::{ConfigError, FeedError, ScanConfig, config::BOOT_BYTES, protocol::Requests};
 use super::{ReadRequest, RequestId};
 use super::{
-    bootstrap::{self, Record0},
-    discovery::{Discovery, DiscoveryStep},
     ingest::{Ingest, IngestStep},
-    mapping::{MftMapping, RecordAssembly},
     merge::Merge,
 };
 use crate::{
@@ -14,6 +11,11 @@ use crate::{
     error::ScanError,
     graph::entry::EntryRecord,
     graph::link::Linker,
+    mft::{
+        bootstrap::Record0,
+        discovery::{Discovery, DiscoveryStep},
+        mapping::{MftMapping, RecordAssembly},
+    },
     snapshot::{Aggregator, Finalizer, ParentTree, SnapshotBuilder},
 };
 use adamite_ntfs::boot::VolumeGeometry;
@@ -206,7 +208,7 @@ impl Scanner {
             let (mapping, assembly) = self.record_read.take().ok_or(ScanError::Bootstrap {
                 reason: "missing completed record-zero assembly",
             })?;
-            let record0 = bootstrap::parse_record0(assembly.into_bytes(), mapping.geometry)?;
+            let record0 = Record0::parse(assembly.into_bytes(), mapping.geometry)?;
             tracing::debug!(
                 reference = ?record0.reference,
                 data_id = record0.data_id,
@@ -244,13 +246,27 @@ impl Scanner {
         let state = self.discovery.as_mut().ok_or(ScanError::Bootstrap {
             reason: "missing discovery state",
         })?;
-        match state.step(base, &mut self.requests, &self.config)? {
-            DiscoveryStep::Need(request) => Ok(ScanStep::Need(request)),
-            DiscoveryStep::Progress { waiting } => Ok(self.progress(if waiting {
-                InputStatus::Waiting
-            } else {
-                InputStatus::Ready
-            })),
+        if state.is_reading()
+            && let Some((_, bytes)) = self.requests.take_ready()
+        {
+            state.accept_bytes(&bytes)?;
+        }
+        match state.step(base)? {
+            DiscoveryStep::Read => {
+                if self.requests.len() < self.config.max_outstanding
+                    && let Some(piece) = state.next_piece(base, self.config.chunk_size)?
+                {
+                    let request = self.requests.issue(piece.offset, piece.len)?;
+                    state.planned(piece.len)?;
+                    return Ok(ScanStep::Need(request));
+                }
+                Ok(self.progress(if self.requests.has_ready() {
+                    InputStatus::Ready
+                } else {
+                    InputStatus::Waiting
+                }))
+            }
+            DiscoveryStep::Progress => Ok(self.progress(InputStatus::Ready)),
             DiscoveryStep::Complete => {
                 self.discovery = None;
                 self.phase = ScanPhase::Stream;

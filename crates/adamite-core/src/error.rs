@@ -171,6 +171,13 @@ impl ScanError {
         Self::Bootstrap { reason }
     }
 
+    pub(crate) fn bootstrap_record(error: RecordError) -> Self {
+        match error {
+            RecordError::Fixup { source } => Self::Fixup { source },
+            source => Self::Record { source },
+        }
+    }
+
     pub(crate) fn stream(reason: &'static str) -> Self {
         Self::Stream { reason }
     }

@@ -2,11 +2,14 @@
 
 mod decode;
 
-use super::{ReadRequest, ScanConfig, mapping::MftMapping, protocol::Requests};
+use super::{ReadRequest, ScanConfig, protocol::Requests};
 use crate::{
     ScanStats,
     error::ScanError,
-    mft::model::{Patch, RecordKind, RecordSlot},
+    mft::{
+        mapping::MftMapping,
+        model::{Patch, RecordKind, RecordSlot},
+    },
     util::{CounterExt, VecExt},
 };
 use adamite_ntfs::record::{
