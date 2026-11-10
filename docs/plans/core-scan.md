@@ -157,8 +157,8 @@ Each automated milestone is one bounded Codex run targeting 15–30 minutes, inc
 
 ### M13 — Chunk and response-order properties
 
-- [ ] M13.1 Add bounded synthetic-volume proptests varying chunk sizes, outstanding cap and response permutation; compare full snapshots and diagnostics and assert transport storage bounds.
-- [ ] M13.2 Add shrinking-friendly regressions for bootstrap/merge ordering and no-progress termination. Verify: `cargo test -p adamite-core --test properties --locked` with `PROPTEST_CASES=1024`.
+- [x] M13.1 Add bounded synthetic-volume proptests varying chunk sizes, outstanding cap and response permutation; compare full snapshots and diagnostics and assert transport storage bounds.
+- [x] M13.2 Add shrinking-friendly regressions for bootstrap/merge ordering and no-progress termination. Verify: `cargo test -p adamite-core --test properties --locked` with `PROPTEST_CASES=1024`.
 
 ### M14 — Full-scan fuzz target
 
