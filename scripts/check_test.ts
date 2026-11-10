@@ -127,6 +127,26 @@ Deno.test("normal checks run once without feature flags and keep the no_std buil
       args: ["clippy", "--workspace", "--all-targets", "--locked", "--", "-D", "warnings"],
     },
   ], "workspace Clippy");
+  equal(steps.filter((step) => step.args.includes("x86_64-pc-windows-gnu")), [
+    {
+      name: "Windows Clippy",
+      command: "cargo",
+      args: [
+        "clippy",
+        "-p",
+        "adamite-io",
+        "--target",
+        "x86_64-pc-windows-gnu",
+        "--all-targets",
+        "--locked",
+        "--",
+        "-D",
+        "warnings",
+      ],
+    },
+  ], "Windows Clippy");
+  const clippyIndex = steps.findIndex((step) => step.name === "Clippy");
+  equal(steps[clippyIndex + 1]?.name, "Windows Clippy", "Windows Clippy follows Clippy");
   equal(steps.filter((step) => step.args[0] === "test" && step.args.includes("--workspace")), [
     {
       name: "Rust tests",

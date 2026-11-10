@@ -124,6 +124,22 @@ export function checkSteps(options: { packages: readonly FuzzPackage[]; fuzz: bo
       args: ["clippy", "--workspace", "--all-targets", "--locked", "--", "-D", "warnings"],
     },
     {
+      name: "Windows Clippy",
+      command: "cargo",
+      args: [
+        "clippy",
+        "-p",
+        "adamite-io",
+        "--target",
+        "x86_64-pc-windows-gnu",
+        "--all-targets",
+        "--locked",
+        "--",
+        "-D",
+        "warnings",
+      ],
+    },
+    {
       name: "Rust tests",
       command: "cargo",
       args: ["test", "--workspace", "--locked"],

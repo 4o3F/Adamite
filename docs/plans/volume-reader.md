@@ -139,14 +139,13 @@ Each milestone is one bounded Codex run (< 40 minutes) and one reviewed commit, 
 
 - [x] Add `reader::ImageReader` and private `image::ExactRead` per D3 with its scripted unit tests. Extend equivalence to image files in `CARGO_TARGET_TMPDIR`, faults to missing, truncated and truncated-after-open images, and thread safety to `ImageReader`. Finish with `deno task check` green.
 
-### M3 — Alignment, timestamp and the Windows lint gate
+### M3 — Windows lint gate
 
-- [ ] Add private `align::{Span, AlignedBuf}` and `filetime::FileTime` per D7/D8, declared `#[cfg(test)]` until M4 gives them a production consumer, with their D9 unit tests and proptests.
-- [ ] Add the D10 toolchain targets, "Windows Clippy" step and `check_test.ts` assertion. Finish with `deno task check` green.
+- [x] Add the D10 toolchain targets, "Windows Clippy" step and `check_test.ts` assertion. Finish with `deno task check` green.
 
 ### M4 — Windows raw volume reader
 
-- [ ] Change the `align`/`filetime` declarations to `#[cfg(any(windows, test))]`. Add the Windows target dependency, `reader/windows/{mod,ffi}.rs` and `RawVolumeReader` per D6/D7 (open, DASD, length, alignment, aligned reads, `context()`), `tests/raw_volume.rs` per D9 and the `RawVolumeReader` thread-safety check.
+- [ ] Add private `align::{Span, AlignedBuf}` and `filetime::FileTime` per D7/D8, declared `#[cfg(any(windows, test))]` so they arrive together with their production consumer and their D9 unit tests and proptests run on Linux. Add the Windows target dependency, `reader/windows/{mod,ffi}.rs` and `RawVolumeReader` per D6/D7 (open, DASD, length, alignment, aligned reads, `context()`), `tests/raw_volume.rs` per D9 and the `RawVolumeReader` thread-safety check.
 - [ ] Verify the Windows Clippy gate step, `cargo deny check`, and that Linux builds compile the module out; finish with `deno task check` green. Windows execution is verified by CI after the commit (M5 adds the smoke step).
 
 ### M5 — CI smoke, example and documentation
