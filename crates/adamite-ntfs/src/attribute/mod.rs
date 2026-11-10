@@ -4,7 +4,7 @@ use core::iter::FusedIterator;
 
 use snafu::{OptionExt, Snafu, ensure};
 
-use crate::{FileRecord, Utf16Le, bytes};
+use crate::{Utf16Le, util};
 
 mod attribute_list;
 mod bitmap;
@@ -162,46 +162,46 @@ impl<'a> Attribute<'a> {
     }
 
     fn parse(input: &'a [u8]) -> Result<Self, AttributeError> {
-        let type_code = bytes::read_u32(input, 0).context(TruncatedHeaderSnafu)?;
+        let type_code = util::read_u32(input, 0).context(TruncatedHeaderSnafu)?;
         ensure!(type_code != 0, InvalidTypeSnafu);
-        let length = bytes::read_u32(input, 4).context(TruncatedHeaderSnafu)?;
-        let form = bytes::read_u8(input, 8).context(TruncatedHeaderSnafu)?;
+        let length = util::read_u32(input, 4).context(TruncatedHeaderSnafu)?;
+        let form = util::read_u8(input, 8).context(TruncatedHeaderSnafu)?;
         ensure!(form <= 1, InvalidStorageFormSnafu { value: form });
         let minimum = if form == 0 { 24 } else { 64 };
         let length_usize = usize::try_from(length)
             .ok()
             .context(InvalidLengthSnafu { length })?;
         ensure!(
-            length_usize >= minimum && bytes::is_aligned(length_usize, 8),
+            length_usize >= minimum && util::is_aligned(length_usize, 8),
             InvalidLengthSnafu { length }
         );
         let bytes = input
             .get(..length_usize)
             .context(AttributePastUsedBytesSnafu)?;
         let flags =
-            AttributeFlags::from_raw(bytes::read_u16(bytes, 12).context(TruncatedHeaderSnafu)?);
+            AttributeFlags::from_raw(util::read_u16(bytes, 12).context(TruncatedHeaderSnafu)?);
         let header_size = if form == 1 && flags.extended_header() {
             ensure!(length_usize >= 72, MissingExtendedHeaderSnafu);
             72
         } else {
             minimum
         };
-        let name_count = bytes::read_u8(bytes, 9).context(TruncatedHeaderSnafu)?;
+        let name_count = util::read_u8(bytes, 9).context(TruncatedHeaderSnafu)?;
         let name = if name_count == 0 {
             &[][..]
         } else {
-            let offset = usize::from(bytes::read_u16(bytes, 10).context(TruncatedHeaderSnafu)?);
+            let offset = usize::from(util::read_u16(bytes, 10).context(TruncatedHeaderSnafu)?);
             ensure!(offset >= header_size, InvalidNameRangeSnafu);
-            let range = bytes::scaled_range(offset, usize::from(name_count), 2)
+            let range = util::scaled_range(offset, usize::from(name_count), 2)
                 .context(InvalidNameRangeSnafu)?;
             bytes.get(range).context(InvalidNameRangeSnafu)?
         };
         let body = if form == 0 {
-            let offset = usize::from(bytes::read_u16(bytes, 20).context(TruncatedHeaderSnafu)?);
-            let len = bytes::read_u32(bytes, 16)
+            let offset = usize::from(util::read_u16(bytes, 20).context(TruncatedHeaderSnafu)?);
+            let len = util::read_u32(bytes, 16)
                 .and_then(|value| usize::try_from(value).ok())
                 .context(InvalidValueRangeSnafu)?;
-            let range = bytes::range(offset, len).context(InvalidValueRangeSnafu)?;
+            let range = util::range(offset, len).context(InvalidValueRangeSnafu)?;
             Body::Resident(bytes.get(range).context(InvalidValueRangeSnafu)?)
         } else {
             Body::NonResident(NonResident::parse(bytes, flags)?)
@@ -209,7 +209,7 @@ impl<'a> Attribute<'a> {
         Ok(Self {
             bytes,
             type_code: AttributeType(type_code),
-            id: bytes::read_u16(bytes, 14).context(TruncatedHeaderSnafu)?,
+            id: util::read_u16(bytes, 14).context(TruncatedHeaderSnafu)?,
             flags,
             name: Utf16Le::new(name).map_err(|_| InvalidNameRangeSnafu.build())?,
             body,
@@ -231,20 +231,10 @@ impl<'a> AttributeIter<'a> {
     /// Borrows an arbitrary attribute region in instrumented fuzz builds.
     #[cfg(fuzzing)]
     pub fn from_region(region: &'a [u8]) -> Self {
-        Self {
-            region: Some(region),
-            cursor: 0,
-            finished: false,
-        }
+        Self::new(Some(region))
     }
 
-    pub(crate) fn new(record: &FileRecord<'a>) -> Self {
-        let header = record.header();
-        let region = usize::try_from(header.bytes_used()).ok().and_then(|end| {
-            record
-                .as_bytes()
-                .get(usize::from(header.first_attribute_offset())..end)
-        });
+    pub(crate) fn new(region: Option<&'a [u8]>) -> Self {
         Self {
             region,
             cursor: 0,
@@ -258,12 +248,12 @@ impl<'a> AttributeIter<'a> {
             .context(InvalidRegionSnafu)?
             .get(self.cursor..)
             .context(InvalidRegionSnafu)?;
-        let kind = bytes::read_u32(input, 0).context(MissingEndMarkerSnafu)?;
+        let kind = util::read_u32(input, 0).context(MissingEndMarkerSnafu)?;
         if kind == u32::MAX {
             return Ok(None);
         }
         let attribute = Attribute::parse(input)?;
-        self.cursor = bytes::range(self.cursor, attribute.bytes.len())
+        self.cursor = util::range(self.cursor, attribute.bytes.len())
             .context(AttributePastUsedBytesSnafu)?
             .end;
         Ok(Some(attribute))
@@ -277,7 +267,7 @@ impl<'a> Iterator for AttributeIter<'a> {
             return None;
         }
         let step = self.read_next();
-        crate::iter::finish_step(step, &mut self.finished)
+        crate::util::finish_step(step, &mut self.finished)
     }
 }
 impl FusedIterator for AttributeIter<'_> {}

@@ -1,6 +1,6 @@
 //! Allocation-bit views bounded by the caller's logical bit count.
 
-use crate::bytes;
+use crate::util;
 use core::iter::FusedIterator;
 use snafu::{Snafu, ensure};
 
@@ -41,7 +41,7 @@ impl<'a> Bitmap<'a> {
         if index >= self.logical_bits {
             return None;
         }
-        bytes::read_bit(self.bytes, index)
+        util::read_bit(self.bytes, index)
     }
     /// Iterates exactly the logical bit count and remains exhausted afterward.
     #[must_use]
@@ -69,7 +69,7 @@ impl Iterator for BitmapIter<'_> {
     type Item = bool;
     fn next(&mut self) -> Option<Self::Item> {
         let bit = self.bitmap.get(self.next)?;
-        self.next = bytes::range(self.next, 1)?.end;
+        self.next = util::range(self.next, 1)?.end;
         Some(bit)
     }
     fn size_hint(&self) -> (usize, Option<usize>) {

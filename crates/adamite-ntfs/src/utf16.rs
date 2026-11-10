@@ -4,7 +4,7 @@ use core::{char::DecodeUtf16, iter::FusedIterator, slice::Iter};
 
 use snafu::{Snafu, ensure};
 
-use crate::bytes;
+use crate::util;
 
 /// A borrowed UTF-16LE byte sequence that preserves NULs and unpaired surrogates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,7 +20,7 @@ impl<'a> Utf16Le<'a> {
     /// Returns [`Utf16Error::OddLength`] if the byte length is odd.
     pub fn new(bytes: &'a [u8]) -> Result<Self, Utf16Error> {
         ensure!(
-            bytes::is_aligned(bytes.len(), 2),
+            util::is_aligned(bytes.len(), 2),
             OddLengthSnafu { len: bytes.len() }
         );
         Ok(Self { bytes })
@@ -95,7 +95,7 @@ impl Iterator for StrictChars<'_> {
         let consumed = decoded
             .as_ref()
             .map_or(1, |character| character.len_utf16());
-        self.unit_index = bytes::range(index, consumed)?.end;
+        self.unit_index = util::range(index, consumed)?.end;
         Some(decoded.map_err(|error| {
             UnpairedSurrogateSnafu {
                 index,

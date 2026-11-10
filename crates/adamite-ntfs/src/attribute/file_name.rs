@@ -4,7 +4,7 @@ use super::{
     Attribute, AttributeType, FileAttributes, FileTimes, InvalidNameLengthSnafu,
     InvalidNamespaceSnafu, TruncatedValueSnafu, ValueError,
 };
-use crate::{FileRef, Utf16Le, bytes};
+use crate::{FileRef, Utf16Le, util};
 use snafu::{OptionExt, ensure};
 
 /// One file-name value with cached sizes and its original namespace.
@@ -37,23 +37,23 @@ impl<'a> FileName<'a> {
     /// the value. Trailing bytes are ignored.
     pub fn parse(input: &'a [u8]) -> Result<Self, ValueError> {
         input.get(..0x42).context(TruncatedValueSnafu)?;
-        let namespace = bytes::read_u8(input, 0x41).context(TruncatedValueSnafu)?;
+        let namespace = util::read_u8(input, 0x41).context(TruncatedValueSnafu)?;
         ensure!(namespace <= 3, InvalidNamespaceSnafu { namespace });
-        let count = bytes::read_u8(input, 0x40).context(TruncatedValueSnafu)?;
+        let count = util::read_u8(input, 0x40).context(TruncatedValueSnafu)?;
         ensure!(count > 0, InvalidNameLengthSnafu);
         let range =
-            bytes::scaled_range(0x42, usize::from(count), 2).context(InvalidNameLengthSnafu)?;
+            util::scaled_range(0x42, usize::from(count), 2).context(InvalidNameLengthSnafu)?;
         let name = Utf16Le::new(input.get(range).context(InvalidNameLengthSnafu)?)
             .map_err(|_| InvalidNameLengthSnafu.build())?;
         Ok(Self {
-            parent: FileRef::from_raw(bytes::read_u64(input, 0).context(TruncatedValueSnafu)?),
+            parent: FileRef::from_raw(util::read_u64(input, 0).context(TruncatedValueSnafu)?),
             times: FileTimes::parse(input, 8)?,
-            allocated: bytes::read_u64(input, 0x28).context(TruncatedValueSnafu)?,
-            data: bytes::read_u64(input, 0x30).context(TruncatedValueSnafu)?,
+            allocated: util::read_u64(input, 0x28).context(TruncatedValueSnafu)?,
+            data: util::read_u64(input, 0x30).context(TruncatedValueSnafu)?,
             attributes: FileAttributes::from_raw(
-                bytes::read_u32(input, 0x38).context(TruncatedValueSnafu)?,
+                util::read_u32(input, 0x38).context(TruncatedValueSnafu)?,
             ),
-            ea_or_reparse: bytes::read_u32(input, 0x3c).context(TruncatedValueSnafu)?,
+            ea_or_reparse: util::read_u32(input, 0x3c).context(TruncatedValueSnafu)?,
             namespace,
             name,
         })

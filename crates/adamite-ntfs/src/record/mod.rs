@@ -1,9 +1,14 @@
 //! FILE record header views and record classification.
 
+pub mod fixup;
+pub mod reference;
+pub mod system;
+
 use snafu::{OptionExt, ResultExt, Snafu, ensure};
 
-use crate::fixup::{self, FixedRecord, FixupError};
-use crate::{FileRef, bytes};
+use self::fixup::{FixedRecord, FixupError};
+use self::reference::FileRef;
+use crate::util;
 
 /// Record flags retaining every unknown on-disk bit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -58,9 +63,9 @@ impl RecordHeader {
     /// bytes when the USA offset selects the NTFS 3.1 layout.
     pub fn peek(input: &[u8]) -> Result<Self, RecordError> {
         let header = input.get(..0x2a).context(TruncatedHeaderSnafu)?;
-        let usa_offset = bytes::read_u16(header, 4).context(TruncatedHeaderSnafu)?;
+        let usa_offset = util::read_u16(header, 4).context(TruncatedHeaderSnafu)?;
         let record_number = if usa_offset >= 0x30 {
-            Some(bytes::read_u32(input, 0x2c).context(TruncatedHeaderSnafu)?)
+            Some(util::read_u32(input, 0x2c).context(TruncatedHeaderSnafu)?)
         } else {
             None
         };
@@ -70,20 +75,20 @@ impl RecordHeader {
                 .and_then(|value| value.try_into().ok())
                 .context(TruncatedHeaderSnafu)?,
             usa_offset,
-            usa_count: bytes::read_u16(header, 6).context(TruncatedHeaderSnafu)?,
-            lsn: bytes::read_u64(header, 8).context(TruncatedHeaderSnafu)?,
-            sequence: bytes::read_u16(header, 0x10).context(TruncatedHeaderSnafu)?,
-            hard_links: bytes::read_u16(header, 0x12).context(TruncatedHeaderSnafu)?,
-            first_attribute_offset: bytes::read_u16(header, 0x14).context(TruncatedHeaderSnafu)?,
+            usa_count: util::read_u16(header, 6).context(TruncatedHeaderSnafu)?,
+            lsn: util::read_u64(header, 8).context(TruncatedHeaderSnafu)?,
+            sequence: util::read_u16(header, 0x10).context(TruncatedHeaderSnafu)?,
+            hard_links: util::read_u16(header, 0x12).context(TruncatedHeaderSnafu)?,
+            first_attribute_offset: util::read_u16(header, 0x14).context(TruncatedHeaderSnafu)?,
             flags: RecordFlags::from_raw(
-                bytes::read_u16(header, 0x16).context(TruncatedHeaderSnafu)?,
+                util::read_u16(header, 0x16).context(TruncatedHeaderSnafu)?,
             ),
-            bytes_used: bytes::read_u32(header, 0x18).context(TruncatedHeaderSnafu)?,
-            bytes_allocated: bytes::read_u32(header, 0x1c).context(TruncatedHeaderSnafu)?,
+            bytes_used: util::read_u32(header, 0x18).context(TruncatedHeaderSnafu)?,
+            bytes_allocated: util::read_u32(header, 0x1c).context(TruncatedHeaderSnafu)?,
             base_reference: FileRef::from_raw(
-                bytes::read_u64(header, 0x20).context(TruncatedHeaderSnafu)?,
+                util::read_u64(header, 0x20).context(TruncatedHeaderSnafu)?,
             ),
-            next_attribute_id: bytes::read_u16(header, 0x28).context(TruncatedHeaderSnafu)?,
+            next_attribute_id: util::read_u16(header, 0x28).context(TruncatedHeaderSnafu)?,
             record_number,
         })
     }
@@ -175,26 +180,26 @@ impl RecordHeader {
                 allocated: self.bytes_allocated,
             })?;
         ensure!(
-            self.bytes_used <= self.bytes_allocated && bytes::is_aligned(used, 8),
+            self.bytes_used <= self.bytes_allocated && util::is_aligned(used, 8),
             InvalidUsedSizeSnafu {
                 used: self.bytes_used,
                 allocated: self.bytes_allocated
             }
         );
         let first = usize::from(self.first_attribute_offset);
-        let minimum = bytes::range(first, 8).context(InvalidFirstAttributeSnafu {
+        let minimum = util::range(first, 8).context(InvalidFirstAttributeSnafu {
             offset: self.first_attribute_offset,
             used: self.bytes_used,
         })?;
         ensure!(
-            bytes::is_aligned(first, 8) && minimum.end <= used,
+            util::is_aligned(first, 8) && minimum.end <= used,
             InvalidFirstAttributeSnafu {
                 offset: self.first_attribute_offset,
                 used: self.bytes_used
             }
         );
         ensure!(
-            valid_usa_offset(self.usa_offset),
+            fixup::valid_usa_offset(self.usa_offset),
             InvalidUsaOffsetSnafu {
                 offset: self.usa_offset
             }
@@ -204,7 +209,10 @@ impl RecordHeader {
 }
 
 fn validate_size(len: usize) -> Result<(), RecordError> {
-    ensure!(valid_record_size(len), InvalidRecordSizeSnafu { len });
+    ensure!(
+        fixup::valid_record_size(len),
+        InvalidRecordSizeSnafu { len }
+    );
     Ok(())
 }
 
@@ -270,7 +278,13 @@ impl<'a> FileRecord<'a> {
     /// Exhaust the iterator before accepting the record: corruption can be
     /// reported after earlier attributes have already been yielded.
     pub fn attributes(&self) -> crate::AttributeIter<'a> {
-        crate::AttributeIter::new(self)
+        let region = usize::try_from(self.header.bytes_used())
+            .ok()
+            .and_then(|end| {
+                self.as_bytes()
+                    .get(usize::from(self.header.first_attribute_offset())..end)
+            });
+        crate::AttributeIter::new(region)
     }
 }
 
@@ -389,12 +403,4 @@ pub enum RecordError {
         /// Owned Copy parser error from fixup.
         source: FixupError,
     },
-}
-
-pub(crate) fn valid_record_size(len: usize) -> bool {
-    len.is_power_of_two() && (512..=65536).contains(&len)
-}
-
-pub(crate) fn valid_usa_offset(offset: u16) -> bool {
-    offset >= 0x2a && bytes::is_aligned(usize::from(offset), 2)
 }

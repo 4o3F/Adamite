@@ -97,8 +97,8 @@ Each milestone is one bounded agent run of approximately 15–30 minutes, includ
 
 ### M1 — Record, boot and private helpers
 
-- [ ] Merge util helpers and relocate their existing tests; move record, fixup, references and system constants; rename boot/error; implement the record/iterator region boundary and shared-rule ownership in D2.
-- [ ] Keep temporary root re-exports, the old public operations/token and `GeometryError` alias so existing consumers compile through M2. Keep constant names temporarily. Finish with `deno task check` green.
+- [x] Merge util helpers and relocate their existing tests; move record, fixup, references and system constants; rename boot/error; implement the record/iterator region boundary and shared-rule ownership in D2.
+- [x] Keep temporary root re-exports, the old public operations/token and `GeometryError` alias so existing consumers compile through M2. Keep constant names temporarily. Finish with `deno task check` green.
 
 ### M2 — Attribute headers and typed values
 

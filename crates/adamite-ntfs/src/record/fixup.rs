@@ -2,10 +2,7 @@
 
 use snafu::{OptionExt, Snafu, ensure};
 
-use crate::{
-    bytes,
-    record::{valid_record_size, valid_usa_offset},
-};
+use crate::util;
 
 /// Update-sequence protection uses 512-byte strides on every sector geometry.
 const STRIDE: usize = 512;
@@ -48,7 +45,7 @@ pub fn apply(input: &mut [u8]) -> Result<FixedRecord<'_>, FixupError> {
         .checked_add(1)
         .and_then(|count| u16::try_from(count).ok())
         .context(TruncatedSnafu)?;
-    let count = bytes::read_u16(input, 6).context(TruncatedSnafu)?;
+    let count = util::read_u16(input, 6).context(TruncatedSnafu)?;
     ensure!(
         count == expected,
         InvalidCountSnafu {
@@ -56,20 +53,20 @@ pub fn apply(input: &mut [u8]) -> Result<FixedRecord<'_>, FixupError> {
             actual: count
         }
     );
-    let offset = bytes::read_u16(input, 4).context(TruncatedSnafu)?;
+    let offset = util::read_u16(input, 4).context(TruncatedSnafu)?;
     ensure!(valid_usa_offset(offset), InvalidOffsetSnafu { offset });
-    let first = bytes::read_u16(input, 0x14).context(TruncatedSnafu)?;
-    let array = bytes::scaled_range(usize::from(offset), usize::from(count), 2)
+    let first = util::read_u16(input, 0x14).context(TruncatedSnafu)?;
+    let array = util::scaled_range(usize::from(offset), usize::from(count), 2)
         .context(ArrayOutOfBoundsSnafu { offset, count })?;
     ensure!(
         array.end <= 510 && array.end <= usize::from(first) && input.get(array).is_some(),
         ArrayOutOfBoundsSnafu { offset, count }
     );
-    let usn = bytes::read_u16(input, usize::from(offset)).context(TruncatedSnafu)?;
+    let usn = util::read_u16(input, usize::from(offset)).context(TruncatedSnafu)?;
     let mut replacements = [[0u8; 2]; MAX_TRAILERS];
     for (stride, replacement) in replacements.iter_mut().take(strides).enumerate() {
-        let tail = bytes::trailer_offset(stride, STRIDE, 2).context(TruncatedSnafu)?;
-        let actual = bytes::read_u16(input, tail).context(TruncatedSnafu)?;
+        let tail = util::trailer_offset(stride, STRIDE, 2).context(TruncatedSnafu)?;
+        let actual = util::read_u16(input, tail).context(TruncatedSnafu)?;
         ensure!(
             actual == usn,
             TrailerMismatchSnafu {
@@ -78,13 +75,13 @@ pub fn apply(input: &mut [u8]) -> Result<FixedRecord<'_>, FixupError> {
                 actual
             }
         );
-        let entry = bytes::element_offset(
+        let entry = util::element_offset(
             usize::from(offset),
             stride.checked_add(1).context(TruncatedSnafu)?,
             2,
         )
         .context(TruncatedSnafu)?;
-        *replacement = bytes::read_u16(input, entry)
+        *replacement = util::read_u16(input, entry)
             .context(TruncatedSnafu)?
             .to_le_bytes();
     }
@@ -150,4 +147,12 @@ pub enum FixupError {
         /// Actual trailer value.
         actual: u16,
     },
+}
+
+pub(super) fn valid_record_size(len: usize) -> bool {
+    len.is_power_of_two() && (512..=65536).contains(&len)
+}
+
+pub(super) fn valid_usa_offset(offset: u16) -> bool {
+    offset >= 0x2a && util::is_aligned(usize::from(offset), 2)
 }

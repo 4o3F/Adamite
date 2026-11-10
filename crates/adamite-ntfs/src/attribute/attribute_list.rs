@@ -1,7 +1,7 @@
 //! Complete ATTRIBUTE_LIST value decoding for MFT bootstrap segment references.
 
 use super::{Attribute, AttributeType, ValueError, resident_value};
-use crate::{FileRef, Utf16Le, bytes};
+use crate::{FileRef, Utf16Le, util};
 use core::iter::FusedIterator;
 use snafu::{OptionExt, ResultExt, Snafu, ensure};
 
@@ -87,35 +87,35 @@ impl<'a> AttributeList<'a> {
             ensure!(input.iter().all(|&byte| byte == 0), TruncatedEntrySnafu);
             return Ok(None);
         }
-        let length = bytes::read_u16(input, 4).context(TruncatedEntrySnafu)?;
+        let length = util::read_u16(input, 4).context(TruncatedEntrySnafu)?;
         ensure!(length >= 26, InvalidEntryLengthSnafu { length });
         let entry = input
             .get(..usize::from(length))
             .context(EntryPastValueSnafu)?;
-        let count = bytes::read_u8(entry, 6).context(TruncatedEntrySnafu)?;
+        let count = util::read_u8(entry, 6).context(TruncatedEntrySnafu)?;
         let name = if count == 0 {
             &[][..]
         } else {
-            let offset = usize::from(bytes::read_u8(entry, 7).context(TruncatedEntrySnafu)?);
+            let offset = usize::from(util::read_u8(entry, 7).context(TruncatedEntrySnafu)?);
             ensure!(offset >= 26, InvalidNameRangeSnafu);
-            let range = bytes::scaled_range(offset, usize::from(count), 2)
-                .context(InvalidNameRangeSnafu)?;
+            let range =
+                util::scaled_range(offset, usize::from(count), 2).context(InvalidNameRangeSnafu)?;
             entry.get(range).context(InvalidNameRangeSnafu)?
         };
-        let lowest = bytes::read_i64(entry, 8).context(TruncatedEntrySnafu)?;
+        let lowest = util::read_i64(entry, 8).context(TruncatedEntrySnafu)?;
         let lowest_vcn = u64::try_from(lowest)
             .ok()
             .context(NegativeLowestVcnSnafu { value: lowest })?;
         let result = AttributeListEntry {
             type_code: AttributeType::from_raw(
-                bytes::read_u32(entry, 0).context(TruncatedEntrySnafu)?,
+                util::read_u32(entry, 0).context(TruncatedEntrySnafu)?,
             ),
             lowest_vcn,
-            segment: FileRef::from_raw(bytes::read_u64(entry, 16).context(TruncatedEntrySnafu)?),
-            id: bytes::read_u16(entry, 24).context(TruncatedEntrySnafu)?,
+            segment: FileRef::from_raw(util::read_u64(entry, 16).context(TruncatedEntrySnafu)?),
+            id: util::read_u16(entry, 24).context(TruncatedEntrySnafu)?,
             name: Utf16Le::new(name).map_err(|_| InvalidNameRangeSnafu.build())?,
         };
-        self.cursor = bytes::range(self.cursor, usize::from(length))
+        self.cursor = util::range(self.cursor, usize::from(length))
             .context(EntryPastValueSnafu)?
             .end;
         Ok(Some(result))
@@ -128,7 +128,7 @@ impl<'a> Iterator for AttributeList<'a> {
             return None;
         }
         let step = self.read_next();
-        crate::iter::finish_step(step, &mut self.finished)
+        crate::util::finish_step(step, &mut self.finished)
     }
 }
 impl FusedIterator for AttributeList<'_> {}

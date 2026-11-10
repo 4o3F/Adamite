@@ -4,7 +4,7 @@ use super::{
     Attribute, AttributeType, InvalidStandardInformationLengthSnafu, TruncatedValueSnafu,
     ValueError,
 };
-use crate::bytes;
+use crate::util;
 use snafu::{OptionExt, ensure};
 
 /// Raw Windows file-attribute bits, preserving unknown values.
@@ -67,8 +67,8 @@ pub struct FileTimes {
 impl FileTimes {
     pub(super) fn parse(input: &[u8], base: usize) -> Result<Self, ValueError> {
         let read = |index| {
-            bytes::element_offset(base, index, 8)
-                .and_then(|offset| bytes::read_u64(input, offset))
+            util::element_offset(base, index, 8)
+                .and_then(|offset| util::read_u64(input, offset))
                 .context(TruncatedValueSnafu)
         };
         Ok(Self {
@@ -142,10 +142,10 @@ impl StandardInformation {
         );
         let extended = if input.len() >= 72 {
             Some(Extended {
-                owner_id: bytes::read_u32(input, 0x30).context(TruncatedValueSnafu)?,
-                security_id: bytes::read_u32(input, 0x34).context(TruncatedValueSnafu)?,
-                quota_charged: bytes::read_u64(input, 0x38).context(TruncatedValueSnafu)?,
-                usn: bytes::read_u64(input, 0x40).context(TruncatedValueSnafu)?,
+                owner_id: util::read_u32(input, 0x30).context(TruncatedValueSnafu)?,
+                security_id: util::read_u32(input, 0x34).context(TruncatedValueSnafu)?,
+                quota_charged: util::read_u64(input, 0x38).context(TruncatedValueSnafu)?,
+                usn: util::read_u64(input, 0x40).context(TruncatedValueSnafu)?,
             })
         } else {
             None
@@ -153,7 +153,7 @@ impl StandardInformation {
         Ok(Self {
             times: FileTimes::parse(input, 0)?,
             attributes: FileAttributes::from_raw(
-                bytes::read_u32(input, 0x20).context(TruncatedValueSnafu)?,
+                util::read_u32(input, 0x20).context(TruncatedValueSnafu)?,
             ),
             extended,
         })

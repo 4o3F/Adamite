@@ -6,7 +6,7 @@ use super::{
     AttributeError, AttributeFlags, InitializedPastDataSnafu, InvalidMappingPairsSnafu,
     InvalidVcnRangeSnafu, NegativeSizeSnafu, TruncatedHeaderSnafu,
 };
-use crate::{Runlist, VcnRange, bytes};
+use crate::{Runlist, VcnRange, util};
 
 /// Stream sizes valid only in the segment whose lowest VCN is zero.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,12 +51,12 @@ pub struct NonResident<'a> {
 
 impl<'a> NonResident<'a> {
     pub(super) fn parse(input: &'a [u8], flags: AttributeFlags) -> Result<Self, AttributeError> {
-        let offset = usize::from(bytes::read_u16(input, 0x20).context(TruncatedHeaderSnafu)?);
+        let offset = usize::from(util::read_u16(input, 0x20).context(TruncatedHeaderSnafu)?);
         let header_size = if flags.extended_header() { 72 } else { 64 };
         ensure!(offset >= header_size, InvalidMappingPairsSnafu);
         let mapping_pairs = input.get(offset..).context(InvalidMappingPairsSnafu)?;
-        let lowest = bytes::read_i64(input, 0x10).context(TruncatedHeaderSnafu)?;
-        let highest = bytes::read_i64(input, 0x18).context(TruncatedHeaderSnafu)?;
+        let lowest = util::read_i64(input, 0x10).context(TruncatedHeaderSnafu)?;
+        let highest = util::read_i64(input, 0x18).context(TruncatedHeaderSnafu)?;
         let range = VcnRange::new(lowest, highest).map_err(|_| InvalidVcnRangeSnafu.build())?;
         let sizes = if lowest == 0 {
             let allocated = read_size(input, 0x28)?;
@@ -79,7 +79,7 @@ impl<'a> NonResident<'a> {
         };
         Ok(Self {
             range,
-            compression_unit: bytes::read_u8(input, 0x22).context(TruncatedHeaderSnafu)?,
+            compression_unit: util::read_u8(input, 0x22).context(TruncatedHeaderSnafu)?,
             mapping_pairs,
             sizes,
         })
@@ -117,7 +117,7 @@ impl<'a> NonResident<'a> {
 }
 
 fn read_size(input: &[u8], offset: usize) -> Result<u64, AttributeError> {
-    let value = bytes::read_i64(input, offset).context(TruncatedHeaderSnafu)?;
+    let value = util::read_i64(input, offset).context(TruncatedHeaderSnafu)?;
     u64::try_from(value)
         .ok()
         .context(NegativeSizeSnafu { offset })

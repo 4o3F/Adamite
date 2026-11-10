@@ -4,7 +4,7 @@ use super::{
     Attribute, AttributeType, InvalidReparseLengthSnafu, ReparseValueTooLargeSnafu,
     TruncatedValueSnafu, ValueError,
 };
-use crate::bytes;
+use crate::util;
 use snafu::{OptionExt, ensure};
 
 /// A reparse tag, declared length and every byte following its eight-byte header.
@@ -38,11 +38,11 @@ impl<'a> ReparsePoint<'a> {
             input.len() <= 16384,
             ReparseValueTooLargeSnafu { len: input.len() }
         );
-        let data_length = bytes::read_u16(input, 4).context(TruncatedValueSnafu)?;
-        let range = bytes::range(8, usize::from(data_length)).context(InvalidReparseLengthSnafu)?;
+        let data_length = util::read_u16(input, 4).context(TruncatedValueSnafu)?;
+        let range = util::range(8, usize::from(data_length)).context(InvalidReparseLengthSnafu)?;
         ensure!(range.end <= input.len(), InvalidReparseLengthSnafu);
         Ok(Self {
-            tag: bytes::read_u32(input, 0).context(TruncatedValueSnafu)?,
+            tag: util::read_u32(input, 0).context(TruncatedValueSnafu)?,
             data_length,
             payload: input.get(8..).context(TruncatedValueSnafu)?,
         })

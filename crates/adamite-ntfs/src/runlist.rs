@@ -4,7 +4,7 @@ use core::iter::FusedIterator;
 
 use snafu::{OptionExt, Snafu, ensure};
 
-use crate::{VolumeGeometry, bytes};
+use crate::{VolumeGeometry, util};
 
 /// A validated inclusive on-disk VCN range, with highest VCN -1 for an empty stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,7 +130,7 @@ impl<'a> Runlist<'a> {
     }
 
     fn read_next(&mut self) -> Result<Option<Run>, RunlistError> {
-        let header = bytes::read_u8(self.input, self.cursor).context(MissingTerminatorSnafu)?;
+        let header = util::read_u8(self.input, self.cursor).context(MissingTerminatorSnafu)?;
         if header == 0 {
             ensure!(
                 self.next_vcn == self.range.end,
@@ -150,18 +150,16 @@ impl<'a> Runlist<'a> {
                 offset: offset_width
             }
         );
-        let length_start = bytes::range(self.cursor, 1)
-            .context(TruncatedPairSnafu)?
-            .end;
+        let length_start = util::range(self.cursor, 1).context(TruncatedPairSnafu)?.end;
         let length_range =
-            bytes::range(length_start, usize::from(length_width)).context(TruncatedPairSnafu)?;
-        let offset_range = bytes::range(length_range.end, usize::from(offset_width))
-            .context(TruncatedPairSnafu)?;
+            util::range(length_start, usize::from(length_width)).context(TruncatedPairSnafu)?;
+        let offset_range =
+            util::range(length_range.end, usize::from(offset_width)).context(TruncatedPairSnafu)?;
         ensure!(
             self.input.get(self.cursor..offset_range.end).is_some(),
             TruncatedPairSnafu
         );
-        let length = bytes::read_unsigned(self.input, length_start, usize::from(length_width))
+        let length = util::read_unsigned(self.input, length_start, usize::from(length_width))
             .context(TruncatedPairSnafu)?;
         ensure!(length > 0, ZeroRunLengthSnafu);
         ensure!(
@@ -177,7 +175,7 @@ impl<'a> Runlist<'a> {
             None
         } else {
             let delta =
-                bytes::read_signed(self.input, offset_range.start, usize::from(offset_width))
+                util::read_signed(self.input, offset_range.start, usize::from(offset_width))
                     .context(TruncatedPairSnafu)?;
             let lcn = self
                 .previous_lcn
@@ -221,7 +219,7 @@ impl Iterator for Runlist<'_> {
             return None;
         }
         let step = self.read_next();
-        crate::iter::finish_step(step, &mut self.finished)
+        crate::util::finish_step(step, &mut self.finished)
     }
 }
 

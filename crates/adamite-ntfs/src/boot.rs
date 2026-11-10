@@ -4,7 +4,7 @@ use core::ops::Range;
 
 use snafu::{OptionExt, Snafu, ensure};
 
-use crate::bytes;
+use crate::util;
 
 /// Largest cluster supported by the NTFS geometry contract, in bytes.
 const MAX_CLUSTER_SIZE: u32 = 2_097_152;
@@ -86,9 +86,9 @@ impl VolumeGeometry {
     ///
     /// # Errors
     ///
-    /// Returns [`GeometryError::InvalidClusterRange`] on overflow, zero count,
+    /// Returns [`BootError::InvalidClusterRange`] on overflow, zero count,
     /// or an extent extending beyond the last complete cluster.
-    pub fn cluster_byte_range(self, lcn: u64, count: u64) -> Result<Range<u64>, GeometryError> {
+    pub fn cluster_byte_range(self, lcn: u64, count: u64) -> Result<Range<u64>, BootError> {
         let error = || InvalidClusterRangeSnafu { lcn, count };
         ensure!(count > 0, InvalidClusterRangeSnafu { lcn, count });
         let end = lcn.checked_add(count).with_context(error)?;
@@ -110,22 +110,22 @@ impl VolumeGeometry {
 ///
 /// # Errors
 ///
-/// Returns [`GeometryError`] in validation order: input extent, identification,
+/// Returns [`BootError`] in validation order: input extent, identification,
 /// sector/cluster/record sizes, total sectors, then MFT and MFTMirr locations.
-pub fn parse_boot_sector(input: &[u8]) -> Result<VolumeGeometry, GeometryError> {
+pub fn parse_boot_sector(input: &[u8]) -> Result<VolumeGeometry, BootError> {
     let boot = input.get(..512).context(TruncatedSnafu)?;
     ensure!(
         boot.get(3..11) == Some(b"NTFS    ") && boot.get(510..512) == Some(&[0x55, 0xaa]),
         IdentificationSnafu
     );
-    let bytes_per_sector = bytes::read_u16(boot, 0x0b).context(TruncatedSnafu)?;
+    let bytes_per_sector = util::read_u16(boot, 0x0b).context(TruncatedSnafu)?;
     ensure!(
         matches!(bytes_per_sector, 512 | 1024 | 2048 | 4096),
         InvalidSectorSizeSnafu {
             size: bytes_per_sector
         }
     );
-    let encoded = bytes::read_u8(boot, 0x0d).context(TruncatedSnafu)?;
+    let encoded = util::read_u8(boot, 0x0d).context(TruncatedSnafu)?;
     let sectors_per_cluster = match encoded {
         1..=128 if encoded.is_power_of_two() => u32::from(encoded),
         0xf4..=0xff => 1u32
@@ -144,8 +144,8 @@ pub fn parse_boot_sector(input: &[u8]) -> Result<VolumeGeometry, GeometryError> 
         cluster_size <= MAX_CLUSTER_SIZE,
         ClusterTooLargeSnafu { size: cluster_size }
     );
-    let file_encoding = bytes::read_i8(boot, 0x40).context(TruncatedSnafu)?;
-    let index_encoding = bytes::read_i8(boot, 0x44).context(TruncatedSnafu)?;
+    let file_encoding = util::read_i8(boot, 0x40).context(TruncatedSnafu)?;
+    let index_encoding = util::read_i8(boot, 0x44).context(TruncatedSnafu)?;
     let file_record_size =
         decode_record_size(file_encoding, cluster_size).context(InvalidFileRecordSizeSnafu {
             encoding: file_encoding,
@@ -154,7 +154,7 @@ pub fn parse_boot_sector(input: &[u8]) -> Result<VolumeGeometry, GeometryError> 
         decode_record_size(index_encoding, cluster_size).context(InvalidIndexRecordSizeSnafu {
             encoding: index_encoding,
         })?;
-    let total_sectors = bytes::read_u64(boot, 0x28).context(TruncatedSnafu)?;
+    let total_sectors = util::read_u64(boot, 0x28).context(TruncatedSnafu)?;
     ensure!(
         (1..=i64::MAX as u64).contains(&total_sectors),
         InvalidTotalSectorsSnafu {
@@ -177,8 +177,8 @@ pub fn parse_boot_sector(input: &[u8]) -> Result<VolumeGeometry, GeometryError> 
             sectors: total_sectors
         }
     );
-    let mft_lcn = bytes::read_u64(boot, 0x30).context(TruncatedSnafu)?;
-    let mftmirr_lcn = bytes::read_u64(boot, 0x38).context(TruncatedSnafu)?;
+    let mft_lcn = util::read_u64(boot, 0x30).context(TruncatedSnafu)?;
+    let mftmirr_lcn = util::read_u64(boot, 0x38).context(TruncatedSnafu)?;
     let complete_bytes = total_clusters
         .checked_mul(u64::from(cluster_size))
         .context(InvalidTotalSectorsSnafu {
@@ -205,7 +205,7 @@ pub fn parse_boot_sector(input: &[u8]) -> Result<VolumeGeometry, GeometryError> 
         total_bytes,
         mft_lcn,
         mftmirr_lcn,
-        serial: bytes::read_u64(boot, 0x48).context(TruncatedSnafu)?,
+        serial: util::read_u64(boot, 0x48).context(TruncatedSnafu)?,
     })
 }
 
@@ -227,7 +227,7 @@ fn decode_record_size(encoding: i8, cluster_size: u32) -> Option<u32> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Snafu)]
 #[snafu(visibility(pub(crate)))]
 #[non_exhaustive]
-pub enum GeometryError {
+pub enum BootError {
     /// Fewer than 512 boot-sector bytes were supplied.
     #[snafu(display("boot sector is shorter than 512 bytes"))]
     Truncated,
