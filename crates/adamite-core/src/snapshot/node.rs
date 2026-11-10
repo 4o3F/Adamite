@@ -1,6 +1,6 @@
 //! Fixed-size hot nodes, stable identifiers and read-only node views.
 
-use adamite_ntfs::FileRef;
+use adamite_ntfs::record::reference::FileRef;
 
 /// Index into one snapshot's node arena; identifiers are local to that snapshot.
 #[repr(transparent)]

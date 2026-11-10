@@ -9,8 +9,12 @@
 
 use adamite_fixtures::{EntryKind, Fixture, ReferenceMft};
 use adamite_ntfs::{
-    AttributeFlags, AttributeType, FileName, FileRecord, FileRef, IndexAllocation, RecordClass,
-    RecordFlags, RecordHeader, ReparsePoint, StandardInformation,
+    attribute::{AttributeFlags, AttributeType},
+    record::{FileRecord, RecordClass, RecordFlags, RecordHeader, reference::FileRef},
+    value::{
+        file_name::FileName, index_allocation::IndexAllocation, reparse_point::ReparsePoint,
+        standard_information::StandardInformation,
+    },
 };
 use std::{
     collections::{BTreeMap, BTreeSet},

@@ -10,8 +10,18 @@
 mod support;
 use adamite_fixtures::builders::{AttrBuilder, FileNameBuilder, NonResidentModel, RecordBuilder};
 use adamite_ntfs::{
-    Attribute, AttributeList, Bitmap, BitmapError, Data, FileAttributes, FileName, FileRecord,
-    IndexAllocation, ReparsePoint, StandardInformation, ValueError,
+    attribute::Attribute,
+    record::FileRecord,
+    value::{
+        ValueError,
+        attribute_list::AttributeList,
+        bitmap::{Bitmap, BitmapError},
+        data::Data,
+        file_name::FileName,
+        index_allocation::IndexAllocation,
+        reparse_point::ReparsePoint,
+        standard_information::{FileAttributes, StandardInformation},
+    },
 };
 use proptest::prelude::*;
 
@@ -50,7 +60,7 @@ fn cached_file_name_size_and_data_size_remain_independent() {
     assert_eq!(file_name.cached_allocated_size(), 0);
 }
 
-fn exhaust_name(name: adamite_ntfs::Utf16Le<'_>) {
+fn exhaust_name(name: adamite_ntfs::utf16::Utf16Le<'_>) {
     assert_eq!(name.units().count(), name.len_units());
     let _ = name.decode_strict().count();
     let _ = name.decode_lossy().count();

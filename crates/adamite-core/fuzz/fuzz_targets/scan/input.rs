@@ -1,7 +1,7 @@
 //! Bounded input decoding and conservative guards before calling the scan driver.
 
 use adamite_core::ScanConfig;
-use adamite_ntfs::{AttributeType, RecordClass, VolumeGeometry};
+use adamite_ntfs::{attribute::AttributeType, boot::VolumeGeometry, record::RecordClass};
 use libfuzzer_sys::arbitrary::{self, Unstructured};
 
 pub(super) const MAX_IMAGE: usize = 1_048_576;

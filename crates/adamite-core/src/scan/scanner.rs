@@ -19,8 +19,10 @@ use crate::{
     },
 };
 use adamite_ntfs::{
-    AttributeError, AttributeListError, FileRefError, GeometryError, RecordError, RunlistError,
-    VolumeGeometry, fixup::FixupError,
+    attribute::{AttributeError, runlist::RunlistError},
+    boot::{BootError, VolumeGeometry},
+    record::{RecordError, fixup::FixupError, reference::FileRefError},
+    value::attribute_list::AttributeListError,
 };
 use snafu::Snafu;
 use std::collections::TryReserveError;
@@ -117,7 +119,7 @@ pub enum ScanError {
     #[snafu(display("invalid volume geometry: {source}"))]
     Geometry {
         /// Parser geometry failure.
-        source: GeometryError,
+        source: BootError,
     },
     /// Bootstrap record update-sequence protection could not be restored.
     #[snafu(display("invalid bootstrap fixup: {source}"))]

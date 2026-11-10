@@ -1,6 +1,6 @@
 #![no_main]
 mod support;
-use adamite_ntfs::{RecordClass, RecordHeader};
+use adamite_ntfs::record::{RecordClass, RecordHeader};
 use libfuzzer_sys::fuzz_target;
 fuzz_target!(|data: &[u8]| {
     if let Ok(value) = RecordHeader::peek(data) {

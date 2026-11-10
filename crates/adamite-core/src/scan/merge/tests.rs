@@ -4,7 +4,10 @@ use super::*;
 use crate::entry::{NameAttribute, ReparseAttribute, StandardAttribute};
 use adamite_fixtures::builders::{AttrBuilder, NonResidentModel, RecordBuilder};
 use adamite_fixtures::runlist_encoder::{RunModel, RunlistEncoder};
-use adamite_ntfs::{FileRecord, FileRef, StandardInformation};
+use adamite_ntfs::{
+    record::{FileRecord, reference::FileRef},
+    value::standard_information::StandardInformation,
+};
 use std::error::Error;
 
 type TestResult = Result<(), Box<dyn Error>>;
@@ -38,7 +41,7 @@ fn empty_slot() -> RecordSlot {
     }
 }
 fn base_slot(base: RecordContribution) -> RecordSlot {
-    let flags = if base.reference.record() == ROOT_RECORD {
+    let flags = if base.reference.record() == ROOT {
         3
     } else {
         1
@@ -357,7 +360,7 @@ fn merge_duplicate_resident_or_mixed_storage_discards_base() -> TestResult {
 
 #[test]
 fn merge_badclus_bad_excludes_only_its_logical_ads_size() -> TestResult {
-    for record in [6, BAD_CLUS_RECORD] {
+    for record in [6, BAD_CLUS] {
         let mut base = contribution(record);
         base.streams.push(resident(record, 0, vec![], 0));
         let mut bad = nonresident(record, 1, model(0, 7, [4096, 4096, 0, 0]), 0)?;
@@ -368,10 +371,7 @@ fn merge_badclus_bad_excludes_only_its_logical_ads_size() -> TestResult {
         let entry = find(&entries, record)?;
         assert_eq!(entry.size, 0);
         assert_eq!(entry.alloc, 4096);
-        assert_eq!(
-            entry.ads_size,
-            if record == BAD_CLUS_RECORD { 5 } else { 4101 }
-        );
+        assert_eq!(entry.ads_size, if record == BAD_CLUS { 5 } else { 4101 });
     }
     Ok(())
 }

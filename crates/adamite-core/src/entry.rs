@@ -1,7 +1,9 @@
 //! Owned NTFS contributions retained until extension merge.
 
 use adamite_ntfs::{
-    AttributeFlags, AttributeType, FileRef, RecordFlags, StandardInformation, StreamSizes,
+    attribute::{AttributeFlags, AttributeType, non_resident::StreamSizes},
+    record::{RecordFlags, reference::FileRef},
+    value::standard_information::StandardInformation,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -3,8 +3,13 @@
 mod selectors;
 mod support;
 use adamite_ntfs::{
-    AttributeIter, AttributeList, Bitmap, Data, FileName, IndexAllocation, ReparsePoint,
-    StandardInformation, Utf16Le,
+    attribute::iter::AttributeIter,
+    utf16::Utf16Le,
+    value::{
+        attribute_list::AttributeList, bitmap::Bitmap, data::Data, file_name::FileName,
+        index_allocation::IndexAllocation, reparse_point::ReparsePoint,
+        standard_information::StandardInformation,
+    },
 };
 use libfuzzer_sys::fuzz_target;
 fuzz_target!(|data: &[u8]| {

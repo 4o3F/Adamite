@@ -12,8 +12,12 @@ use adamite_fixtures::builders::{
     RecordBuilder,
 };
 use adamite_ntfs::{
-    AttributeList, Bitmap, Data, FileName, IndexAllocation, RecordClass, ReparsePoint,
-    StandardInformation,
+    record::RecordClass,
+    value::{
+        attribute_list::AttributeList, bitmap::Bitmap, data::Data, file_name::FileName,
+        index_allocation::IndexAllocation, reparse_point::ReparsePoint,
+        standard_information::StandardInformation,
+    },
 };
 use std::{
     alloc::{GlobalAlloc, Layout, System},

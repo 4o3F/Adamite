@@ -11,7 +11,10 @@ mod support;
 use adamite_fixtures::builders::{
     AttrBuilder, AttrListBuilder, AttrListEntryModel, NonResidentModel, RecordBuilder,
 };
-use adamite_ntfs::{AttributeList, AttributeListError, FileRecord};
+use adamite_ntfs::{
+    record::FileRecord,
+    value::attribute_list::{AttributeList, AttributeListError},
+};
 use proptest::prelude::*;
 
 fn default_value() -> Vec<u8> {
@@ -68,7 +71,7 @@ fn mft_extension_reference_and_resident_attribute_adapter() {
     assert!(matches!(
         AttributeList::from_attribute(record.attributes().next().unwrap().unwrap()),
         Err(AttributeListError::Value {
-            source: adamite_ntfs::ValueError::WrongAttributeType {
+            source: adamite_ntfs::value::ValueError::WrongAttributeType {
                 expected: 0x20,
                 actual: 0x80
             }
@@ -83,7 +86,7 @@ fn mft_extension_reference_and_resident_attribute_adapter() {
     assert!(matches!(
         AttributeList::from_attribute(record.attributes().next().unwrap().unwrap()),
         Err(AttributeListError::Value {
-            source: adamite_ntfs::ValueError::WrongStorageForm
+            source: adamite_ntfs::value::ValueError::WrongStorageForm
         })
     ));
 }

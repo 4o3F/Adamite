@@ -10,10 +10,13 @@
 
 use core::{any, error::Error, mem};
 
-use adamite_ntfs::fixup::FixupError;
+use adamite_ntfs::record::fixup::FixupError;
 use adamite_ntfs::{
-    AttributeError, AttributeListError, BitmapError, FileRefError, GeometryError, RecordError,
-    RunlistError, Utf16Error, ValueError,
+    attribute::{AttributeError, runlist::RunlistError},
+    boot::BootError,
+    record::{RecordError, reference::FileRefError},
+    utf16::Utf16Error,
+    value::{ValueError, attribute_list::AttributeListError, bitmap::BitmapError},
 };
 
 fn assert_parser_error<E: Error + Copy + Send + Sync + 'static>() {
@@ -32,7 +35,7 @@ fn every_public_error_is_copy_and_at_most_24_bytes() {
     assert_parser_error::<ValueError>();
     assert_parser_error::<BitmapError>();
     assert_parser_error::<AttributeListError>();
-    assert_parser_error::<GeometryError>();
+    assert_parser_error::<BootError>();
     assert_parser_error::<RecordError>();
     assert_parser_error::<FixupError>();
     assert_parser_error::<RunlistError>();

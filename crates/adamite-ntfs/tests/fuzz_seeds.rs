@@ -11,8 +11,13 @@ mod selectors;
 
 use adamite_fixtures::builders::RecordBuilder;
 use adamite_ntfs::{
-    AttributeList, Bitmap, Data, FileName, FileRecord, IndexAllocation, ReparsePoint,
-    StandardInformation, Utf16Le,
+    record::FileRecord,
+    utf16::Utf16Le,
+    value::{
+        attribute_list::AttributeList, bitmap::Bitmap, data::Data, file_name::FileName,
+        index_allocation::IndexAllocation, reparse_point::ReparsePoint,
+        standard_information::StandardInformation,
+    },
 };
 use std::{collections::BTreeSet, fs, path::Path};
 

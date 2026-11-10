@@ -8,7 +8,7 @@ use crate::{
     tree::{Finalizer, link::Linker},
 };
 use adamite_fixtures::builders::BootSectorBuilder;
-use adamite_ntfs::FileRef;
+use adamite_ntfs::record::reference::FileRef;
 use std::error::Error;
 
 type TestResult = Result<(), Box<dyn Error>>;
@@ -48,7 +48,7 @@ fn build(entries: Vec<EntryRecord>) -> Result<Snapshot, Box<dyn Error>> {
     let mut stats = ScanStats::default();
     for _ in 0..100_000 {
         if linker.step(&mut stats)? {
-            let geometry = adamite_ntfs::VolumeGeometry::from_boot_sector(
+            let geometry = adamite_ntfs::boot::VolumeGeometry::from_boot_sector(
                 &BootSectorBuilder::default().build(),
             )?;
             let mut builder =

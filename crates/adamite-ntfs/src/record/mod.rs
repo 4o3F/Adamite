@@ -8,7 +8,7 @@ use snafu::{OptionExt, ResultExt, Snafu, ensure};
 
 use self::fixup::FixupError;
 use self::reference::FileRef;
-use crate::util;
+use crate::{attribute::iter::AttributeIter, util};
 
 /// Record flags retaining every unknown on-disk bit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -221,7 +221,7 @@ fn validate_size(len: usize) -> Result<(), RecordError> {
 /// A live record view prevents mutating its backing buffer:
 ///
 /// ```compile_fail,E0499
-/// use adamite_ntfs::FileRecord;
+/// use adamite_ntfs::record::FileRecord;
 ///
 /// let mut buffer = [0u8; 1024];
 /// let record = FileRecord::parse(&mut buffer)?;
@@ -244,7 +244,7 @@ impl<'a> FileRecord<'a> {
     /// # Examples
     ///
     /// ```
-    /// use adamite_ntfs::{FileRecord, RecordError};
+    /// use adamite_ntfs::record::{FileRecord, RecordError};
     ///
     /// let mut buffer = [0u8; 1024];
     /// let before = buffer;
@@ -298,14 +298,14 @@ impl<'a> FileRecord<'a> {
     ///
     /// Exhaust the iterator before accepting the record: corruption can be
     /// reported after earlier attributes have already been yielded.
-    pub fn attributes(&self) -> crate::AttributeIter<'a> {
+    pub fn attributes(&self) -> AttributeIter<'a> {
         let region = usize::try_from(self.header.bytes_used())
             .ok()
             .and_then(|end| {
                 self.as_bytes()
                     .get(usize::from(self.header.first_attribute_offset())..end)
             });
-        crate::AttributeIter::new(region)
+        AttributeIter::new(region)
     }
 }
 

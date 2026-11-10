@@ -9,7 +9,10 @@
 
 mod support;
 use adamite_fixtures::builders::{AttrBody, AttrBuilder, NonResidentModel, RecordBuilder};
-use adamite_ntfs::{Attribute, AttributeError, FileRecord};
+use adamite_ntfs::{
+    attribute::{Attribute, AttributeError},
+    record::FileRecord,
+};
 use proptest::prelude::*;
 
 #[test]

@@ -2,7 +2,7 @@
 mod support;
 use libfuzzer_sys::fuzz_target;
 fuzz_target!(|data: &[u8]| {
-    if let Ok(value) = adamite_ntfs::VolumeGeometry::from_boot_sector(data) {
+    if let Ok(value) = adamite_ntfs::boot::VolumeGeometry::from_boot_sector(data) {
         support::geometry(value);
         let count = data
             .get(..8)

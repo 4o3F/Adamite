@@ -13,8 +13,9 @@ use crate::{
     ScanStats,
     entry::{Patch, RecordKind, RecordSlot},
 };
-use adamite_ntfs::{
-    FileRef, ROOT_RECORD, RecordClass, RecordError, RecordFlags, RecordHeader, fixup::FixupError,
+use adamite_ntfs::record::{
+    RecordClass, RecordError, RecordFlags, RecordHeader, fixup::FixupError, reference::FileRef,
+    system::ROOT,
 };
 
 const RECORDS_PER_STEP: usize = 256;
@@ -146,12 +147,10 @@ impl Ingest {
         if consumed == self.data_size {
             if self
                 .slots
-                .get(usize::try_from(ROOT_RECORD).map_err(|_| overflow("root slot index"))?)
+                .get(usize::try_from(ROOT).map_err(|_| overflow("root slot index"))?)
                 .is_none()
             {
-                return Err(ScanError::RequiredRecord {
-                    record: ROOT_RECORD,
-                });
+                return Err(ScanError::RequiredRecord { record: ROOT });
             }
             if !self.raw.is_empty() || requests.len() != 0 {
                 return Err(stream_error(
@@ -253,10 +252,8 @@ impl Ingest {
                 .flags
                 .is_some_and(|flags| flags.contains(RecordFlags::DIRECTORY));
         push(&mut self.slots, slot)?;
-        if ordinal == ROOT_RECORD && !root_valid {
-            return Err(ScanError::RequiredRecord {
-                record: ROOT_RECORD,
-            });
+        if ordinal == ROOT && !root_valid {
+            return Err(ScanError::RequiredRecord { record: ROOT });
         }
         Ok(())
     }

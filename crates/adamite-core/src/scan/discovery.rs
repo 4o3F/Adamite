@@ -10,7 +10,14 @@ use super::{
     protocol::Requests,
     scanner::ScanError,
 };
-use adamite_ntfs::{AttributeList, AttributeType, FileRef, Runlist, VcnRange};
+use adamite_ntfs::{
+    attribute::{
+        AttributeType,
+        runlist::{Runlist, VcnRange},
+    },
+    record::reference::FileRef,
+    value::attribute_list::AttributeList,
+};
 
 /// NTFS parser's complete ATTRIBUTE_LIST value bound, in bytes.
 const MAX_LIST_BYTES: u64 = 262_144;
@@ -545,7 +552,7 @@ mod tests {
     #[test]
     fn bootstrap_pending_references_yield_before_no_progress_failure() -> Result<(), Box<dyn Error>>
     {
-        let geometry = adamite_ntfs::VolumeGeometry::from_boot_sector(
+        let geometry = adamite_ntfs::boot::VolumeGeometry::from_boot_sector(
             &BootSectorBuilder {
                 cluster_encoding: 1,
                 sectors: 4096,

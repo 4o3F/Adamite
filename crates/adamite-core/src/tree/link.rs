@@ -5,7 +5,10 @@ use crate::{
     entry::{EntryFlags, EntryName, EntryRecord},
     snapshot::{checked_u32, name_range},
 };
-use adamite_ntfs::{EXTEND_RECORD, FIRST_NON_RESERVED_RECORD, FileRef, ROOT_RECORD};
+use adamite_ntfs::record::{
+    reference::FileRef,
+    system::{EXTEND, FIRST_NON_RESERVED, ROOT},
+};
 use std::{fmt::Write, vec::IntoIter};
 
 /// Maximum graph operations performed before yielding to the caller.
@@ -272,10 +275,8 @@ impl Linker {
             .records
             .binary_search_by_key(&ordinal, |record| record.reference.record())
         {
-            Ok(_) if ordinal == ROOT_RECORD => {
-                return Err(ScanError::RequiredRecord {
-                    record: ROOT_RECORD,
-                });
+            Ok(_) if ordinal == ROOT => {
+                return Err(ScanError::RequiredRecord { record: ROOT });
             }
             Ok(_) => return Err(invalid("duplicate entry record identity")),
             Err(index) => index,
@@ -283,11 +284,9 @@ impl Linker {
         self.records
             .try_reserve(1)
             .map_err(|source| ScanError::Allocation { source })?;
-        let (primary, len) = if ordinal == ROOT_RECORD {
+        let (primary, len) = if ordinal == ROOT {
             if !entry.flags.contains(EntryFlags::DIRECTORY) {
-                return Err(ScanError::RequiredRecord {
-                    record: ROOT_RECORD,
-                });
+                return Err(ScanError::RequiredRecord { record: ROOT });
             }
             *self
                 .nodes
@@ -365,12 +364,12 @@ impl Linker {
 
     fn mark_metadata(&mut self, index: usize, stats: &mut ScanStats) -> Result<(), ScanError> {
         let record = self.records.get(index).copied().ok_or_else(overflow)?;
-        if record.reference.record() == ROOT_RECORD {
+        if record.reference.record() == ROOT {
             return Ok(());
         }
-        let reserved = record.reference.record() < FIRST_NON_RESERVED_RECORD;
+        let reserved = record.reference.record() < FIRST_NON_RESERVED;
         let extend = self
-            .record(EXTEND_RECORD)
+            .record(EXTEND)
             .filter(|record| record.flags.contains(EntryFlags::DIRECTORY));
         let end = record
             .primary
@@ -530,7 +529,7 @@ impl Linker {
         } else {
             // Records are already indexed in ascending ordinal order.
             let mut record = self.records.get(self.order_record).ok_or_else(overflow)?;
-            if record.reference.record() == ROOT_RECORD {
+            if record.reference.record() == ROOT {
                 self.order_record = self.order_record.checked_add(1).ok_or_else(overflow)?;
                 record = self.records.get(self.order_record).ok_or_else(overflow)?;
             }
@@ -612,9 +611,7 @@ impl Linker {
                         self.prepare(entry, stats)?;
                     } else {
                         if !self.root_seen {
-                            return Err(ScanError::RequiredRecord {
-                                record: ROOT_RECORD,
-                            });
+                            return Err(ScanError::RequiredRecord { record: ROOT });
                         }
                         self.stage = Stage::Metadata;
                         self.cursor = 0;

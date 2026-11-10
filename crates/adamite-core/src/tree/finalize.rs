@@ -4,7 +4,7 @@ use super::aggregate::{has, invalid, overflow, primary_file};
 use crate::{
     ExtensionStat, Node, NodeFlags, NodeId, Snapshot, SnapshotError, snapshot::SnapshotStorage,
 };
-use adamite_ntfs::FileRef;
+use adamite_ntfs::record::reference::FileRef;
 use std::{
     cmp::{Ordering, Reverse},
     collections::BinaryHeap,

@@ -8,10 +8,12 @@
 
 //! File-reference encoding properties and well-known record scenarios.
 
-use adamite_ntfs::{
-    ATTR_DEF_RECORD, BAD_CLUS_RECORD, BITMAP_RECORD, BOOT_RECORD, EXTEND_RECORD,
-    FIRST_NON_RESERVED_RECORD, FileRef, FileRefError, LOG_FILE_RECORD, MFT_MIRROR_RECORD,
-    MFT_RECORD, ROOT_RECORD, SECURE_RECORD, UP_CASE_RECORD, VOLUME_RECORD,
+use adamite_ntfs::record::{
+    reference::{FileRef, FileRefError},
+    system::{
+        ATTR_DEF, BAD_CLUS, BITMAP, BOOT, EXTEND, FIRST_NON_RESERVED, LOG_FILE, MFT, MFT_MIRROR,
+        ROOT, SECURE, UP_CASE, VOLUME,
+    },
 };
 use proptest::prelude::*;
 
@@ -87,19 +89,19 @@ fn only_the_all_zero_reference_is_null() {
 fn well_known_record_numbers() {
     assert_eq!(
         [
-            MFT_RECORD,
-            MFT_MIRROR_RECORD,
-            LOG_FILE_RECORD,
-            VOLUME_RECORD,
-            ATTR_DEF_RECORD,
-            ROOT_RECORD,
-            BITMAP_RECORD,
-            BOOT_RECORD,
-            BAD_CLUS_RECORD,
-            SECURE_RECORD,
-            UP_CASE_RECORD,
-            EXTEND_RECORD,
-            FIRST_NON_RESERVED_RECORD,
+            MFT,
+            MFT_MIRROR,
+            LOG_FILE,
+            VOLUME,
+            ATTR_DEF,
+            ROOT,
+            BITMAP,
+            BOOT,
+            BAD_CLUS,
+            SECURE,
+            UP_CASE,
+            EXTEND,
+            FIRST_NON_RESERVED,
         ],
         [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 16]
     );

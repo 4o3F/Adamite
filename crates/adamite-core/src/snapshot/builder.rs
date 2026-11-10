@@ -7,7 +7,7 @@ use crate::{
     ScanContext,
     tree::link::{ParentTree, ResolvedNode},
 };
-use adamite_ntfs::VolumeGeometry;
+use adamite_ntfs::boot::VolumeGeometry;
 use std::vec::IntoIter;
 
 /// Maximum nodes or edges processed in one driver call.
@@ -303,8 +303,9 @@ mod tests {
             nodes,
             names: b"/x".to_vec(),
         };
-        let geometry =
-            adamite_ntfs::VolumeGeometry::from_boot_sector(&BootSectorBuilder::default().build())?;
+        let geometry = adamite_ntfs::boot::VolumeGeometry::from_boot_sector(
+            &BootSectorBuilder::default().build(),
+        )?;
         let mut builder = SnapshotBuilder::new(tree, geometry, &ScanContext::default())?;
         for _ in 0..100 {
             let before = observed_work(&builder, count)?;

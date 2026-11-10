@@ -8,7 +8,7 @@
 
 //! Raw-unit preservation and agreement with the standard UTF-16 decoder.
 
-use adamite_ntfs::{Utf16Error, Utf16Le};
+use adamite_ntfs::utf16::{Utf16Error, Utf16Le};
 use proptest::prelude::*;
 
 fn encode(units: &[u16]) -> Vec<u8> {

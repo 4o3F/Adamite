@@ -5,8 +5,12 @@ use super::{
     scanner::ScanError,
 };
 use adamite_ntfs::{
-    Attribute, AttributeFlags, AttributeType, FileRecord, FileRef, NonResident, RecordError,
-    RecordFlags, StreamSizes, VolumeGeometry,
+    attribute::{
+        Attribute, AttributeFlags, AttributeType,
+        non_resident::{NonResident, StreamSizes},
+    },
+    boot::VolumeGeometry,
+    record::{FileRecord, RecordError, RecordFlags, reference::FileRef},
 };
 
 #[derive(Debug, PartialEq, Eq)]
@@ -96,7 +100,7 @@ pub(super) fn collect_runs(
 }
 
 pub(super) fn collect_mapping(
-    runs: adamite_ntfs::Runlist<'_>,
+    runs: adamite_ntfs::attribute::runlist::Runlist<'_>,
     geometry: VolumeGeometry,
 ) -> Result<MftMapping, ScanError> {
     let mut owned = Vec::new();

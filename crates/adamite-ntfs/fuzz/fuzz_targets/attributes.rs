@@ -2,7 +2,7 @@
 mod support;
 use libfuzzer_sys::fuzz_target;
 fuzz_target!(|data: &[u8]| {
-    let mut attributes = adamite_ntfs::AttributeIter::from_region(data);
+    let mut attributes = adamite_ntfs::attribute::iter::AttributeIter::from_region(data);
     for value in attributes.by_ref().flatten() {
         support::attribute(value);
     }

@@ -4,8 +4,19 @@
 )]
 
 use adamite_ntfs::{
-    Attribute, AttributeList, Bitmap, Data, FileName, IndexAllocation, NonResident, RecordHeader,
-    ReparsePoint, Runlist, StandardInformation, Utf16Le, VcnRange, VolumeGeometry,
+    attribute::{
+        Attribute,
+        non_resident::NonResident,
+        runlist::{Runlist, VcnRange},
+    },
+    boot::VolumeGeometry,
+    record::RecordHeader,
+    utf16::Utf16Le,
+    value::{
+        attribute_list::AttributeList, bitmap::Bitmap, data::Data, file_name::FileName,
+        index_allocation::IndexAllocation, reparse_point::ReparsePoint,
+        standard_information::StandardInformation,
+    },
 };
 use std::hint::black_box;
 
@@ -22,8 +33,16 @@ pub fn name(value: Utf16Le<'_>) {
     }
 }
 pub fn header(value: RecordHeader) {
-    black_box(value.flags().contains(adamite_ntfs::RecordFlags::IN_USE));
-    black_box(value.flags().contains(adamite_ntfs::RecordFlags::DIRECTORY));
+    black_box(
+        value
+            .flags()
+            .contains(adamite_ntfs::record::RecordFlags::IN_USE),
+    );
+    black_box(
+        value
+            .flags()
+            .contains(adamite_ntfs::record::RecordFlags::DIRECTORY),
+    );
     black_box((
         value.signature(),
         value.usa_offset(),
@@ -76,7 +95,7 @@ pub fn runs(mut value: Runlist<'_>) {
     boot[64] = 0xf6;
     boot[68] = 0xf6;
     boot[510..].copy_from_slice(&[0x55, 0xaa]);
-    let geometry = adamite_ntfs::VolumeGeometry::from_boot_sector(&boot).ok();
+    let geometry = adamite_ntfs::boot::VolumeGeometry::from_boot_sector(&boot).ok();
     for run in value.by_ref().flatten() {
         black_box((run.vcn(), run.length(), run.lcn()));
         if let Some(geometry) = geometry {
@@ -106,7 +125,11 @@ pub fn descriptor(value: NonResident<'_>) {
     }
 }
 pub fn attribute(value: Attribute<'_>) {
-    black_box(value.flags().contains(adamite_ntfs::AttributeFlags::SPARSE));
+    black_box(
+        value
+            .flags()
+            .contains(adamite_ntfs::attribute::AttributeFlags::SPARSE),
+    );
     black_box((
         value.as_bytes(),
         value.attribute_type().raw(),
@@ -156,7 +179,7 @@ pub fn standard(value: StandardInformation) {
     black_box(
         value
             .file_attributes()
-            .contains(adamite_ntfs::FileAttributes::HIDDEN),
+            .contains(adamite_ntfs::value::standard_information::FileAttributes::HIDDEN),
     );
     let times = value.times();
     black_box((
@@ -175,7 +198,7 @@ pub fn file_name(value: FileName<'_>) {
     black_box(
         value
             .file_attributes()
-            .contains(adamite_ntfs::FileAttributes::DIRECTORY),
+            .contains(adamite_ntfs::value::standard_information::FileAttributes::DIRECTORY),
     );
     black_box((
         value.parent().record(),

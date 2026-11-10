@@ -12,7 +12,10 @@ mod support;
 
 use adamite_fixtures::builders::BootSectorBuilder;
 use adamite_fixtures::runlist_encoder::{RunModel, RunlistEncoder};
-use adamite_ntfs::{Run, Runlist, RunlistError, VcnRange, VolumeGeometry};
+use adamite_ntfs::{
+    attribute::runlist::{Run, Runlist, RunlistError, VcnRange},
+    boot::VolumeGeometry,
+};
 use proptest::prelude::*;
 
 fn decode(bytes: &[u8], lowest: i64, highest: i64) -> Result<Vec<Run>, RunlistError> {

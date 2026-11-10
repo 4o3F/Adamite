@@ -1,7 +1,7 @@
 //! Checked MFT cluster mappings and bounded record assembly.
 
 use super::scanner::ScanError;
-use adamite_ntfs::VolumeGeometry;
+use adamite_ntfs::boot::VolumeGeometry;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct OwnedRun {
@@ -291,7 +291,7 @@ impl RecordAssembly {
 mod tests {
     use super::*;
     use adamite_fixtures::builders::BootSectorBuilder;
-    use adamite_ntfs::VolumeGeometry;
+    use adamite_ntfs::boot::VolumeGeometry;
     use std::error::Error;
 
     fn geometry() -> Result<VolumeGeometry, ScanError> {

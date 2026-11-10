@@ -8,7 +8,7 @@ use crate::{
     tree::link::{Linker, ParentTree, ResolvedNode},
 };
 use adamite_fixtures::builders::BootSectorBuilder;
-use adamite_ntfs::FileRef;
+use adamite_ntfs::record::reference::FileRef;
 use std::error::Error;
 
 type TestResult = Result<(), Box<dyn Error>>;
@@ -50,8 +50,9 @@ fn link(entries: Vec<EntryRecord>) -> Result<ParentTree, Box<dyn Error>> {
 }
 fn build(entries: Vec<EntryRecord>, context: &ScanContext) -> Result<Snapshot, Box<dyn Error>> {
     let tree = link(entries)?;
-    let geometry =
-        adamite_ntfs::VolumeGeometry::from_boot_sector(&BootSectorBuilder::default().build())?;
+    let geometry = adamite_ntfs::boot::VolumeGeometry::from_boot_sector(
+        &BootSectorBuilder::default().build(),
+    )?;
     let mut builder = SnapshotBuilder::new(tree, geometry, context)?;
     for _ in 0..100_000 {
         if let Some(snapshot) = builder.step()? {
@@ -89,7 +90,9 @@ fn snapshot_root_cold_columns_and_volume_context() -> TestResult {
     assert_eq!(snapshot.volume().context(), &context);
     assert_eq!(
         snapshot.volume().geometry(),
-        adamite_ntfs::VolumeGeometry::from_boot_sector(&BootSectorBuilder::default().build())?
+        adamite_ntfs::boot::VolumeGeometry::from_boot_sector(
+            &BootSectorBuilder::default().build()
+        )?
     );
     assert_eq!(std::mem::size_of::<Node>(), 64);
     let shared = std::sync::Arc::new(snapshot);

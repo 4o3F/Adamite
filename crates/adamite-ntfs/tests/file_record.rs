@@ -11,8 +11,8 @@
 mod support;
 
 use adamite_fixtures::builders::RecordBuilder;
-use adamite_ntfs::fixup::FixupError;
-use adamite_ntfs::{FileRecord, RecordClass, RecordError, RecordFlags, RecordHeader};
+use adamite_ntfs::record::fixup::FixupError;
+use adamite_ntfs::record::{FileRecord, RecordClass, RecordError, RecordFlags, RecordHeader};
 use proptest::prelude::*;
 
 #[test]

@@ -10,8 +10,15 @@ use crate::{
     scan::{bootstrap::push, scanner::ScanError},
 };
 use adamite_ntfs::{
-    AttributeList, AttributeType, FileName, FileRecord, FileRef, IndexAllocation, ReparsePoint,
-    StandardInformation, Utf16Le, ValueError, VolumeGeometry,
+    attribute::AttributeType,
+    boot::VolumeGeometry,
+    record::{FileRecord, reference::FileRef},
+    utf16::Utf16Le,
+    value::{
+        ValueError, attribute_list::AttributeList, file_name::FileName,
+        index_allocation::IndexAllocation, reparse_point::ReparsePoint,
+        standard_information::StandardInformation,
+    },
 };
 
 pub(super) enum DecodeError {

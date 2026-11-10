@@ -31,7 +31,10 @@ use adamite_fixtures::{
         NonResidentModel, RecordBuilder,
     },
 };
-use adamite_ntfs::{AttributeType, FileRecord, FileRef};
+use adamite_ntfs::{
+    attribute::AttributeType,
+    record::{FileRecord, reference::FileRef},
+};
 use std::path::Path;
 
 type TestResult = Result<(), Box<dyn Error>>;
@@ -1741,14 +1744,14 @@ fn ingest_classification_and_patches_do_not_double_count_bootstrap() -> TestResu
     let patch = state.patches.first().ok_or("extension patch")?;
     assert_eq!(
         patch.base,
-        adamite_ntfs::FileRef::from_raw((7u64 << 48) | 6)
+        adamite_ntfs::record::reference::FileRef::from_raw((7u64 << 48) | 6)
     );
     assert_eq!(patch.source.record(), 7);
     assert_eq!(patch.contribution.reference, patch.source);
     let name = patch.contribution.names.first().ok_or("patch name")?;
     assert_eq!(
         name.parent,
-        adamite_ntfs::FileRef::from_raw((7u64 << 48) | 5)
+        adamite_ntfs::record::reference::FileRef::from_raw((7u64 << 48) | 5)
     );
     assert_eq!(name.namespace, 1);
     assert_eq!(

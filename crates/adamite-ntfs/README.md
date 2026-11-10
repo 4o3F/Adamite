@@ -16,8 +16,10 @@ The callback below copies each name into the caller's chosen storage. Its lifeti
 
 ```rust
 use adamite_ntfs::{
-    AttributeError, AttributeType, FileName, FileRef, RecordClass,
-    RecordError, RecordHeader, Utf16Le, ValueError,
+    attribute::{AttributeError, AttributeType},
+    record::{RecordClass, RecordError, RecordHeader, reference::FileRef},
+    utf16::Utf16Le,
+    value::{ValueError, file_name::FileName},
 };
 use snafu::Snafu;
 
@@ -73,7 +75,7 @@ Parser errors are non-exhaustive snafu enums implementing `core::error::Error`, 
 
 | Error | Counter categories |
 |---|---|
-| `GeometryError` | Invalid cluster extent for `InvalidClusterRange`; invalid volume geometry otherwise |
+| `BootError` | Invalid cluster extent for `InvalidClusterRange`; invalid volume geometry otherwise |
 | `FileRefError` | Invalid file reference |
 | `FixupError` | Bad fixup for `TrailerMismatch`; invalid fixup metadata otherwise |
 | `RecordError` | Nested fixup category for `Fixup`; invalid signature for `InvalidSignature`; corrupt header otherwise |

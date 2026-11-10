@@ -3,7 +3,7 @@
 use super::{ExtensionStat, Node, NodeId, NodeView};
 
 use crate::ScanContext;
-use adamite_ntfs::{FileRef, VolumeGeometry};
+use adamite_ntfs::{boot::VolumeGeometry, record::reference::FileRef};
 use snafu::Snafu;
 use std::collections::TryReserveError;
 

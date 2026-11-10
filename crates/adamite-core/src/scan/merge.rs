@@ -9,7 +9,12 @@ use crate::{
     },
 };
 use adamite_ntfs::{
-    AttributeFlags, AttributeType, BAD_CLUS_RECORD, FileAttributes, ROOT_RECORD, RecordFlags,
+    attribute::{AttributeFlags, AttributeType},
+    record::{
+        RecordFlags,
+        system::{BAD_CLUS, ROOT},
+    },
+    value::standard_information::FileAttributes,
 };
 use std::{cmp::Ordering, vec::IntoIter};
 
@@ -62,9 +67,7 @@ impl Merge {
                 Stage::Entries => {
                     let Some(slot) = self.slots.get_mut(self.cursor) else {
                         if !self.root_emitted {
-                            return Err(ScanError::RequiredRecord {
-                                record: ROOT_RECORD,
-                            });
+                            return Err(ScanError::RequiredRecord { record: ROOT });
                         }
                         return Ok(true);
                     };
@@ -81,13 +84,11 @@ impl Merge {
                             reason: "base slot has no record flags",
                         })?;
                         if let Some(entry) = entry(base, flags, self.cluster_size, stats)? {
-                            let is_root = entry.file_ref.record() == ROOT_RECORD;
+                            let is_root = entry.file_ref.record() == ROOT;
                             push(&mut self.entries, entry)?;
                             self.root_emitted |= is_root;
-                        } else if ordinal == ROOT_RECORD {
-                            return Err(ScanError::RequiredRecord {
-                                record: ROOT_RECORD,
-                            });
+                        } else if ordinal == ROOT {
+                            return Err(ScanError::RequiredRecord { record: ROOT });
                         }
                     }
                 }
@@ -379,7 +380,7 @@ fn entry(
                 if first.attribute_type == AttributeType::DATA {
                     if first.name.is_empty() {
                         size = total.logical;
-                    } else if !(base.reference.record() == BAD_CLUS_RECORD
+                    } else if !(base.reference.record() == BAD_CLUS
                         && first.name == BAD_STREAM_NAME)
                     {
                         ads_size = ads_size
@@ -400,10 +401,8 @@ fn entry(
         bump(&mut stats.corrupt_records)?;
         return Ok(None);
     }
-    if base.reference.record() == ROOT_RECORD && !flags.contains(EntryFlags::DIRECTORY) {
-        return Err(ScanError::RequiredRecord {
-            record: ROOT_RECORD,
-        });
+    if base.reference.record() == ROOT && !flags.contains(EntryFlags::DIRECTORY) {
+        return Err(ScanError::RequiredRecord { record: ROOT });
     }
     let mut names = Vec::new();
     names

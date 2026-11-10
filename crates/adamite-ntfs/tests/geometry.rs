@@ -11,7 +11,7 @@
 mod support;
 
 use adamite_fixtures::builders::BootSectorBuilder;
-use adamite_ntfs::{GeometryError, VolumeGeometry};
+use adamite_ntfs::boot::{BootError, VolumeGeometry};
 use proptest::prelude::*;
 
 fn cluster_model(sector: u16, encoding: u8) -> Option<u128> {
@@ -176,7 +176,7 @@ fn every_short_input_is_truncated_and_every_identification_byte_is_checked() {
     for length in 0..512 {
         assert_eq!(
             VolumeGeometry::from_boot_sector(&boot[..length]),
-            Err(GeometryError::Truncated)
+            Err(BootError::Truncated)
         );
     }
     for offset in (3..11).chain([510, 511]) {
@@ -184,7 +184,7 @@ fn every_short_input_is_truncated_and_every_identification_byte_is_checked() {
         changed[offset] ^= 1;
         assert_eq!(
             VolumeGeometry::from_boot_sector(&changed),
-            Err(GeometryError::Identification)
+            Err(BootError::Identification)
         );
     }
 }
@@ -224,9 +224,9 @@ fn exhaustive_sector_cluster_and_record_encodings() {
                         );
                         if !valid {
                             let expected = if file {
-                                GeometryError::InvalidFileRecordSize { encoding: record }
+                                BootError::InvalidFileRecordSize { encoding: record }
                             } else {
-                                GeometryError::InvalidIndexRecordSize { encoding: record }
+                                BootError::InvalidIndexRecordSize { encoding: record }
                             };
                             assert_eq!(parsed, Err(expected));
                         }
@@ -244,7 +244,7 @@ fn exhaustive_sector_cluster_and_record_encodings() {
                 }
                 .build()
             ),
-            Err(GeometryError::InvalidSectorSize { size: sector })
+            Err(BootError::InvalidSectorSize { size: sector })
         );
     }
 }
@@ -271,7 +271,7 @@ fn exponent_golden_cases_and_positive_record_encoding() {
     };
     assert_eq!(
         VolumeGeometry::from_boot_sector(&oversized.build()),
-        Err(GeometryError::ClusterTooLarge { size: 16_777_216 })
+        Err(BootError::ClusterTooLarge { size: 16_777_216 })
     );
     let positive = BootSectorBuilder {
         cluster_encoding: 1,
@@ -297,7 +297,7 @@ fn sector_counts_and_mft_locations_are_bounded_by_complete_clusters() {
                 }
                 .build()
             ),
-            Err(GeometryError::InvalidTotalSectors { sectors })
+            Err(BootError::InvalidTotalSectors { sectors })
         );
     }
     let max_sectors = u64::MAX / 512;
@@ -319,13 +319,13 @@ fn sector_counts_and_mft_locations_are_bounded_by_complete_clusters() {
         changed.mft = lcn;
         assert_eq!(
             VolumeGeometry::from_boot_sector(&changed.build()),
-            Err(GeometryError::MftOutOfVolume { lcn })
+            Err(BootError::MftOutOfVolume { lcn })
         );
         let mut changed = base.clone();
         changed.mirror = lcn;
         assert_eq!(
             VolumeGeometry::from_boot_sector(&changed.build()),
-            Err(GeometryError::MftMirrorOutOfVolume { lcn })
+            Err(BootError::MftMirrorOutOfVolume { lcn })
         );
     }
     let partial = BootSectorBuilder {
@@ -352,11 +352,11 @@ fn validation_order_is_stable() {
     boot[3] = 0;
     assert_eq!(
         VolumeGeometry::from_boot_sector(&boot),
-        Err(GeometryError::Identification)
+        Err(BootError::Identification)
     );
     boot[3] = b'N';
     assert_eq!(
         VolumeGeometry::from_boot_sector(&boot),
-        Err(GeometryError::InvalidSectorSize { size: 0 })
+        Err(BootError::InvalidSectorSize { size: 0 })
     );
 }

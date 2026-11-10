@@ -1,10 +1,15 @@
 //! Image loading and independent MFT reconstruction for committed NTFS fixtures.
 
 use crate::{Extent, Manifest};
-use adamite_ntfs::fixup::FixupError;
+use adamite_ntfs::record::fixup::FixupError;
 use adamite_ntfs::{
-    AttributeError, AttributeList, AttributeListError, AttributeType, FileRecord, FileRef,
-    FileRefError, GeometryError, NonResident, RecordError, RunlistError, VolumeGeometry,
+    attribute::{AttributeError, AttributeType, non_resident::NonResident, runlist::RunlistError},
+    boot::{BootError, VolumeGeometry},
+    record::{
+        FileRecord, RecordError,
+        reference::{FileRef, FileRefError},
+    },
+    value::attribute_list::{AttributeList, AttributeListError},
 };
 use ruzstd::decoding::{StreamingDecoder, errors::FrameDecoderError};
 use snafu::{OptionExt, ResultExt, Snafu, ensure};
@@ -48,7 +53,7 @@ pub enum FixtureError {
     #[snafu(display("invalid volume geometry: {source}"))]
     Geometry {
         /// The underlying error.
-        source: GeometryError,
+        source: BootError,
     },
     /// Invalid record fixup.
     #[snafu(display("invalid record fixup: {source}"))]
@@ -571,7 +576,7 @@ mod tests {
             .records()
             .enumerate()
             .find_map(|(ordinal, raw)| {
-                let header = adamite_ntfs::RecordHeader::peek(raw).ok()?;
+                let header = adamite_ntfs::record::RecordHeader::peek(raw).ok()?;
                 let base = header.base_reference();
                 (!base.is_null() && base.record() == 0).then_some(ordinal)
             })

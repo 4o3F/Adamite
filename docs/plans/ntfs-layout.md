@@ -112,8 +112,8 @@ Each milestone is one bounded agent run of approximately 15–30 minutes, includ
 
 ### M4 — Public paths and downstream migration
 
-- [ ] Remove every root re-export/compatibility alias and rename system constants. Switch parser internals/tests, core source/unit tests, fixtures, both fuzz packages and all rustdoc/README examples to D1 module paths.
-- [ ] Audit scripts for stale source paths while retaining fuzz target/selector names. Finish with `deno task check` green.
+- [x] Remove every root re-export/compatibility alias and rename system constants. Switch parser internals/tests, core source/unit tests, fixtures, both fuzz packages and all rustdoc/README examples to D1 module paths.
+- [x] Audit scripts for stale source paths while retaining fuzz target/selector names. Finish with `deno task check` green.
 
 ### M5 — Test names, documentation and final verification
 
