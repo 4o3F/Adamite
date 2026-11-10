@@ -283,7 +283,7 @@ impl RecordAssembly {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{MftMapping, OwnedRun, ReadPiece, RecordAssembly, ScanError};
     use adamite_fixtures::builders::BootSectorBuilder;
     use adamite_ntfs::boot::VolumeGeometry;
     use std::error::Error;

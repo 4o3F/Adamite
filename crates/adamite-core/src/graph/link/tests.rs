@@ -1,6 +1,6 @@
 //! Linking behavior over synthetic EntryRecord lists.
 
-use super::*;
+use super::{EntryRecord, FileRef, Linker, NodeFlags, ParentTree, ScanError, ScanStats, Stage};
 use crate::{graph::entry::EntryName, snapshot::SnapshotError};
 use std::error::Error;
 

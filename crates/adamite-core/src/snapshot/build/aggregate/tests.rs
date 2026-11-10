@@ -1,6 +1,6 @@
 //! Aggregation and final ordering observed through the frozen snapshot API.
 
-use super::*;
+use super::{Aggregator, NodeFlags, NodeId, Snapshot, SnapshotError, Stage};
 use crate::{
     graph::entry::{EntryName, EntryRecord},
     graph::link::Linker,

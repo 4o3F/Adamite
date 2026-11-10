@@ -2,6 +2,22 @@
 
 `adamite-core` scans caller-supplied NTFS bytes into an immutable `snapshot::Snapshot` and `scan::ScanStats`. It uses `std`, forbids unsafe code and depends on `adamite-ntfs`, snafu and tracing. It performs no I/O, defines no reader trait or callback, and starts no threads or timers.
 
+The public API lives under `scan::`, `snapshot::` and `error::`; the crate root exports modules only. Every scan item has one path directly under `scan::`, and its implementation children are private.
+
+```text
+src/
+  lib.rs            crate docs, attributes and module declarations
+  scan/             configuration, request protocol, status, stats and driver
+  mft/              private bootstrap, discovery, mapping, ingest/decode and merge
+  graph/            private entry model and parent/name/hard-link resolution
+  snapshot/         immutable nodes, pooled names, indexes, volume and errors
+    build/          private input, builder, aggregation and finalization passes
+  error.rs          fatal ScanError and explicit domain constructors
+  util.rs           private fallible collection and checked-counter traits
+```
+
+The driver owns request ids, queue capacity and waiting decisions. MFT stages expose byte-range planning and bounded consumption; graph produces snapshot-owned build inputs. Snapshot owns its storage and all passes that mutate it. Configuration and statistics remain independent leaves, and generic linking does not depend on NTFS contribution models.
+
 ## Driving a scan
 
 ```rust
@@ -37,10 +53,10 @@ cargo test -p adamite-core --test fixtures --locked
 PROPTEST_CASES=1024 cargo test -p adamite-core --test properties --locked
 ```
 
-The shared `adamite-fixtures` crate loads committed images and independent v3 manifests. On Linux with ntfs-3g, zstd and attr installed, `deno task fixtures` regenerates both using sudo. Normal checks need no mounts or system NTFS tools. Fixture tests compare paths, metadata, stream allocation, subtree totals and indexes; property tests vary transport configurations and response order.
+The shared `adamite-fixtures` crate loads committed images and independent v3 manifests. On Linux with ntfs-3g, zstd and attr installed, `deno task fixtures` regenerates both using sudo. Normal checks need no mounts or system NTFS tools. Fixture tests compare paths, metadata, stream allocation, subtree totals and indexes; property tests vary transport configurations and response order. Scanner unit tests are grouped by protocol, bootstrap, discovery, stream, merge, link, snapshot and done phases, with shared builders/drivers in `scan/scanner/tests/support.rs`. Other unit tests stay beside their owners; `tests/thread_safety.rs` checks public trait bounds, cross-thread scanning and concurrent shared-snapshot reads.
 
 ## Fuzzing and future work
 
-The [standalone nightly scan harness](fuzz/README.md) bounds images, advertised metadata and driver calls while checking protocol and aggregation invariants. `deno task fuzz-corpus` generates both parser/core seeds; `deno task check --fuzz` runs all six smoke targets. Restore committed corpora after exploratory fuzzing.
+The [standalone nightly scan harness](fuzz/README.md) bounds images, advertised metadata and driver calls while checking protocol and aggregation invariants. `deno task fuzz-corpus` generates both parser/core seeds; `deno task check --fuzz` runs all six smoke targets. Smoke mutations go to scratch directories under `target/fuzz-smoke`; committed seed corpora are read without changes.
 
 Next is `adamite-io`/`add-volume-reader`. Parallelism, buffer pools, `$BITMAP` skipping, general resource limits, query operations (`add-core-query`), persistence, CLI, MCP, USN and walkdir fallback remain future changes. Mirror fallback, reparse-target traversal and atomic live-volume snapshots are not provided.

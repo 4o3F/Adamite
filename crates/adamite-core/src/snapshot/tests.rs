@@ -1,6 +1,9 @@
 //! Arena, name pool and CSR behavior through the frozen read interface.
 
-use super::*;
+use super::{
+    NameRange, Node, NodeFlags, NodeId, ParentTree, ResolvedNode, Snapshot, SnapshotBuilder,
+    SnapshotError,
+};
 use crate::scan::ScanContext;
 use crate::{
     graph::entry::{EntryName, EntryRecord},

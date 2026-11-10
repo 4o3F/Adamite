@@ -559,7 +559,10 @@ impl ActiveRead {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        ActiveRead, AttributeType, Discovery, DiscoveryStep, FileRef, MftMapping, ReadPiece,
+        ReadTarget, Record0, RecordAssembly, ScanError, SegmentRef,
+    };
     use crate::mft::mapping::OwnedRun;
     use adamite_fixtures::builders::BootSectorBuilder;
     use std::error::Error;

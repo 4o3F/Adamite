@@ -1,7 +1,12 @@
 //! Merge invariants tested independently of transport.
 
-use super::*;
+use super::{
+    AttributeFlags, AttributeType, BAD_CLUS, BAD_STREAM_NAME, EntryRecord, Merge, NodeFlags, Patch,
+    ROOT, RecordContribution, RecordFlags, RecordKind, RecordSlot, ScanError, ScanStats,
+    StreamSegment, StreamStorage,
+};
 use crate::mft::model::{NameAttribute, ReparseAttribute, StandardAttribute};
+use crate::util::CounterExt;
 use adamite_fixtures::builders::{AttrBuilder, NonResidentModel, RecordBuilder};
 use adamite_fixtures::runlist_encoder::{RunModel, RunlistEncoder};
 use adamite_ntfs::{

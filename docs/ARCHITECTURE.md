@@ -30,15 +30,18 @@ The diagram includes planned components; only the parser, single-threaded scan/s
              │          └────────────┬─────────────────▲──────────┘
              │             step()/feed(id, bytes)      │ Need(id,
              │                       │                 │ offset,len)
-┌────────────▼───────────────────────▼─────────────────┴──────────┐
+┌────────────▼───────────────────────▼─────────────────┴─────────┐
 │ Core layer                                                     │
 │ adamite-core                                                   │
-│   scan/: boot → discover MFT → stream → merge                   │
-│   tree/ + snapshot/: link → arena/CSR/name pool → aggregate     │
-│                      → finalize → Done(snapshot, stats)        │
+│   scan/: request protocol + bounded phase driver               │
+│   mft/: bootstrap → discover → ingest → merge                  │
+│   graph/: entries + parent/hard-link resolution                │
+│   snapshot/build/: arena/CSR → aggregate → finalize            │
+│   snapshot/: immutable nodes, names, indexes + volume info     │
+│   error.rs / util.rs: stage errors + fallible storage helpers  │
 │   query/ (planned): summary / listing / search / subtree ranks │
 │   persist/ (planned): flat-array snapshot serialization        │
-│ adamite-ntfs: boot/record/attribute/value/utf16 decoding         │
+│ adamite-ntfs: boot/record/attribute/value/utf16 decoding       │
 └────────────────────────────────────────────────────────────────┘
 ```
 
@@ -47,7 +50,7 @@ The diagram includes planned components; only the parser, single-threaded scan/s
 ```text
 crates/
   adamite-ntfs/     # implemented: boot/record/attribute/value/utf16, no_std
-  adamite-core/     # implemented: scan/tree/snapshot; query/persist planned
+  adamite-core/     # implemented: scan/mft/graph/snapshot/error/util
   adamite-fixtures/ # implemented: shared development-only fixture support
   adamite-io/       # planned: VolumeReader + platform adapters serving requests
   adamite-service/  # planned: snapshots, jobs, privilege and resource scheduling
@@ -58,14 +61,18 @@ crates/
 | Implemented crate | Responsibility |
 |---|---|
 | `adamite-ntfs` | `no_std` byte decoding through `boot`, `record`, `attribute`, `value` and `utf16` modules; record parsing owns fixup, and attribute runlists live under `attribute::runlist` |
-| `adamite-core` | Single-threaded `std` scan driver, NTFS merge, generic linking, aggregation and snapshot storage |
+| `adamite-core` | Single-threaded `std` scan driver, private NTFS reading/merge and graph resolution, snapshot construction and immutable reads |
 | `adamite-fixtures` | Unpublished development support: image loading, independent manifests/reference MFT reconstruction and synthetic builders |
 
 Parser operations belong to their types: `boot::VolumeGeometry::from_boot_sector` decodes volume geometry, `record::FileRecord::parse` validates headers and restores protected trailers in place, and `record::RecordClass::classify` applies streaming classification precedence. Parsing errors leave record bytes unchanged. Typed attribute decoders live under `value`; record references and system record numbers live under `record::reference` and `record::system`. Every public parser item has one module path.
 
-Core performs no file, device or network I/O. It defines no reader trait or callback, starts no threads, reads no clocks and never sleeps. The caller owns transport and scheduling; `ScanContext` supplies optional label, scan FILETIME and free bytes. Core never acquires these values itself.
+Core performs no file, device or network I/O. It defines no reader trait or callback, starts no threads, reads no clocks and never sleeps. The caller owns transport and scheduling; `adamite_core::scan::ScanContext` supplies optional label, scan FILETIME and free bytes. Core never acquires these values itself.
 
-`EntryRecord` separates NTFS ingestion/merge from generic tree processing. A future fallback scanner could use this boundary, but no walkdir scanner exists yet. Future I/O, query, persistence, service, CLI, MCP and USN components are described in §4–§6.
+The public core modules are `scan`, `snapshot` and `error`. `adamite_core::scan::Scanner` drives phase changes and owns request identifiers, queue capacity, waiting decisions and the shared per-call work budget. Configuration, protocol, status and `ScanStats` definitions live in private scan children and are exported directly under `scan::`. `adamite_core::snapshot::Snapshot` exposes immutable reads, and `adamite_core::error::ScanError` carries fatal stage failures. The crate root contains module declarations without item re-exports.
+
+Private `mft/` owns bootstrap, discovery, mapping, ingestion, decoding and merge. Its stages return byte ranges, planning commits and consumption progress; only the scan driver handles request slots and ids. MFT merge constructs `graph::entry::EntryRecord` values, and `graph::link::Linker` resolves their names and parents into snapshot-owned build inputs. Private `snapshot/build/` contains separate bounded builder, aggregation and finalization passes; storage and its mutable access stay within snapshot modules. `util.rs` supplies domain-free fallible collection/counter traits, while `error.rs` wraps the snapshot error leaf. Configuration and statistics remain independent leaves.
+
+Graph depends on snapshot types/build inputs; MFT depends on graph, and the scan driver orchestrates MFT, graph and snapshot build passes. NTFS contribution-to-entry conversion stays in MFT, so graph does not depend on NTFS contribution models. Pipeline operations belong to their record, mapping, contribution, linker or pass types. Future I/O, query, persistence, service, CLI, MCP and USN components are described in §4–§6.
 
 ### Key decisions
 

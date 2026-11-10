@@ -244,7 +244,7 @@ impl SnapshotBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{NodeId, ParentTree, ResolvedNode, ScanContext, SnapshotBuilder, Stage};
     use crate::snapshot::NodeFlags;
     use adamite_fixtures::builders::BootSectorBuilder;
     use std::error::Error;

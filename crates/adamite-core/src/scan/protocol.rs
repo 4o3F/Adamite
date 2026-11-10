@@ -226,7 +226,7 @@ impl Requests {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{FeedError, RequestId, Requests, ScanError};
     use proptest::prelude::*;
     use std::error::Error;
 

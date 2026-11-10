@@ -1,6 +1,6 @@
 //! Finalization work is measured from its real cursors and collections.
 
-use super::*;
+use super::{Finalizer, NodeFlags, Snapshot, Stage};
 use crate::{
     scan::ScanContext,
     snapshot::{ParentTree, ResolvedNode, SnapshotBuilder},
