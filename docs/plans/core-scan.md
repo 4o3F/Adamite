@@ -132,8 +132,8 @@ Each automated milestone is one bounded Codex run targeting 15–30 minutes, inc
 
 ### M8 — Extension merge and accounting
 
-- [ ] M8.1 Implement stream/segment identities, FileRef patch checks, transactional merge, first-segment accounting, ADS/index/other non-resident allocation and BadClus exclusion; emit EntryRecord.
-- [ ] M8.2 Test extensions preceding bases, missing/stale bases, duplicate first segments, overlap/gap, sparse/compressed sizes and discarded-base diagnostics. Verify: `cargo test -p adamite-core --locked merge`.
+- [x] M8.1 Implement stream/segment identities, FileRef patch checks, transactional merge, first-segment accounting, ADS/index/other non-resident allocation and BadClus exclusion; emit EntryRecord.
+- [x] M8.2 Test extensions preceding bases, missing/stale bases, duplicate first segments, overlap/gap, sparse/compressed sizes and discarded-base diagnostics. Verify: `cargo test -p adamite-core --locked merge`.
 
 ### M9 — Links, aliases and damaged parent graphs
 

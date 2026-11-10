@@ -142,6 +142,7 @@ pub(super) fn contribution(
             push(
                 &mut owned.streams,
                 StreamSegment {
+                    source: reference,
                     attribute_type: attribute.attribute_type(),
                     name: name(attribute.name(), stats)?,
                     attribute_id: attribute.id(),

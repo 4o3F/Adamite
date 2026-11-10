@@ -7,8 +7,9 @@ use super::{
     discovery::{Discovery, DiscoveryStep},
     ingest::{Ingest, IngestStep},
     mapping::{MftMapping, RecordAssembly, overflow},
+    merge::Merge,
 };
-use crate::{ScanStats, Snapshot};
+use crate::{ScanStats, Snapshot, entry::EntryRecord};
 use adamite_ntfs::{
     AttributeError, AttributeListError, FileRefError, GeometryError, RecordError, RunlistError,
     fixup::FixupError, parse_boot_sector,
@@ -206,7 +207,7 @@ pub enum ScanError {
 
 /// Bootstraps the complete MFT mapping from caller-supplied bytes.
 ///
-/// Stops explicitly before extension merge, implemented in M8.
+/// Stops explicitly before tree linking, implemented in M9.
 #[derive(Debug)]
 pub struct Scanner {
     config: ScanConfig,
@@ -217,6 +218,8 @@ pub struct Scanner {
     bootstrap: Option<Record0>,
     discovery: Option<Discovery>,
     ingest: Option<Ingest>,
+    merge: Option<Merge>,
+    entries: Vec<EntryRecord>,
 }
 
 impl Scanner {
@@ -236,6 +239,8 @@ impl Scanner {
             bootstrap: None,
             discovery: None,
             ingest: None,
+            merge: None,
+            entries: Vec::new(),
         })
     }
 
@@ -249,8 +254,8 @@ impl Scanner {
     /// # Errors
     ///
     /// Invalid geometry, bootstrap data, arithmetic overflow or allocation failure
-    /// terminates the scan. Successful record ingestion currently terminates with
-    /// [`ScanError::PhaseNotImplemented`] for Merge. Further calls return Inactive.
+    /// terminates the scan. Successful record merge currently terminates with
+    /// [`ScanError::PhaseNotImplemented`] for Link. Further calls return Inactive.
     pub fn step(&mut self) -> Result<ScanStep, ScanError> {
         let span = tracing::info_span!("scan_phase", phase = ?self.phase);
         let _entered = span.enter();
@@ -290,6 +295,7 @@ impl Scanner {
             ScanPhase::Record0 => self.read_record0(),
             ScanPhase::Discover => self.discover(),
             ScanPhase::Stream => self.stream(),
+            ScanPhase::Merge => self.merge(),
             phase => Err(ScanError::PhaseNotImplemented { phase }),
         }
     }
@@ -374,6 +380,38 @@ impl Scanner {
         }
     }
 
+    fn merge(&mut self) -> Result<ScanStep, ScanError> {
+        let ingest = self.ingest.as_mut().ok_or(ScanError::Stream {
+            reason: "missing ingestion handoff",
+        })?;
+        if self.merge.is_none() {
+            let cluster_size = self
+                .bootstrap
+                .as_ref()
+                .ok_or(ScanError::Stream {
+                    reason: "missing volume geometry",
+                })?
+                .mapping
+                .geometry
+                .cluster_size();
+            self.merge = Some(Merge::new(
+                std::mem::take(&mut ingest.slots),
+                std::mem::take(&mut ingest.patches),
+                cluster_size,
+            ));
+            return Ok(self.progress(false));
+        }
+        let merge = self.merge.as_mut().ok_or(ScanError::Stream {
+            reason: "missing merge state",
+        })?;
+        if merge.step(&mut ingest.stats)? {
+            self.entries = std::mem::take(&mut merge.entries);
+            self.merge = None;
+            self.phase = ScanPhase::Link;
+        }
+        Ok(self.progress(false))
+    }
+
     fn progress(&self, waiting_for_input: bool) -> ScanStep {
         ScanStep::Progress(ScanProgress {
             phase: self.phase,
@@ -404,6 +442,7 @@ impl Scanner {
         self.requests.deactivate();
         self.record_read = None;
         self.discovery = None;
+        self.merge = None;
     }
 }
 
