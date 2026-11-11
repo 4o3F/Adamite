@@ -1,4 +1,4 @@
-//! Process-level coverage of source detection, reports and command failures.
+//! Process-level coverage of source detection, reports, snapshot saving and command failures.
 
 use adamite_core::{
     scan::{ScanConfig, ScanContext, ScanOutput, ScanStats},
@@ -64,6 +64,31 @@ impl Case {
         let path = self.directory.join(name);
         fs::write(&path, self.output.to_bytes()?)?;
         Ok(path)
+    }
+
+    fn save(&self, destination: &Path, flags: &[&str]) -> Output {
+        Command::new(env!("CARGO_BIN_EXE_adamite"))
+            .arg("scan")
+            .arg(&self.image)
+            .arg("-o")
+            .arg(destination)
+            .args(flags)
+            .output()
+            .expect("save snapshot with adamite")
+    }
+
+    fn assert_no_temporary_files(&self) -> TestResult {
+        for entry in fs::read_dir(&self.directory)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            assert!(
+                !(name.starts_with('.') && name.ends_with(".tmp")),
+                "temporary file remains: {}",
+                entry.path().display()
+            );
+        }
+        Ok(())
     }
 
     fn assert_failure(&self, command: &str, path: &Path, code: i32) -> Output {
@@ -253,6 +278,291 @@ fn scan_prints_info_with_scan_command_name() -> TestResult {
 }
 
 #[test]
+fn saved_scan_round_trips_and_matches_the_image() -> TestResult {
+    for fixture in ["basic-4k", "frag-512"] {
+        let case = Case::new(&format!("save-round-trip-{fixture}"), fixture)?;
+        let path = case.directory.join("saved.adm");
+        let output = case.save(&path, &["--json"]);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let value: Value = serde_json::from_slice(&output.stdout)?;
+        assert_eq!(value["schema"], "adamite/1");
+        assert_eq!(value["command"], "scan");
+        assert_eq!(value["units"], json!({"size": "bytes"}));
+        assert_eq!(value["saved"], path.to_string_lossy().as_ref());
+        assert_eq!(
+            value["snapshot"]["source"],
+            case.image.to_string_lossy().as_ref()
+        );
+        assert_eq!(value["bytes"], fs::metadata(&path)?.len());
+        assert_eq!(value.as_object().ok_or("save report")?.len(), 6);
+        let saved_info = case.json("info", &path);
+        assert_eq!(
+            saved_info["snapshot"]["source"],
+            path.to_string_lossy().as_ref()
+        );
+        assert_eq!(
+            saved_info["snapshot"]["scanned_at"],
+            value["snapshot"]["scanned_at"]
+        );
+        assert_eq!(
+            saved_info["snapshot"]["scanned_at_filetime"],
+            value["snapshot"]["scanned_at_filetime"]
+        );
+        assert_eq!(
+            without_source_and_time(saved_info),
+            without_source_and_time(case.json("info", &case.image))
+        );
+        let decoded = ScanOutput::from_bytes(&fs::read(&path)?)?;
+        let timestamp = decoded.snapshot.volume().context().scanned_at_filetime;
+        assert!(timestamp.is_some(), "saved scan timestamp");
+        let config = ScanConfig {
+            context: ScanContext {
+                scanned_at_filetime: timestamp,
+                ..ScanContext::default()
+            },
+            ..ScanConfig::default()
+        };
+        let image = fs::read(&case.image)?;
+        let expected = SyncDriver::new(config)?.run(&mut SliceReader::new(&image))?;
+        assert_eq!(decoded, expected, "saved scan differs from in-process scan");
+        case.assert_no_temporary_files()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn saved_scan_text_is_one_line_and_honors_bytes() -> TestResult {
+    let case = Case::new("save-text", "basic-4k")?;
+    let path = case.directory.join("saved.adm");
+    let output = Command::new(env!("CARGO_BIN_EXE_adamite"))
+        .arg("scan")
+        .arg(&case.image)
+        .arg("--output")
+        .arg(&path)
+        .output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout)?;
+    assert_eq!(text.lines().count(), 1);
+    assert!(
+        text.starts_with(&format!("saved {} (", path.display())),
+        "{text}"
+    );
+    assert!(text.ends_with(" KiB)\n"), "{text}");
+    case.assert_no_temporary_files()?;
+    let output = case.save(&path, &["--force", "--bytes"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout)?,
+        format!(
+            "saved {} ({})\n",
+            path.display(),
+            fs::metadata(&path)?.len()
+        )
+    );
+    case.assert_no_temporary_files()?;
+    Ok(())
+}
+
+#[test]
+fn existing_output_is_preserved_until_force_replaces_it() -> TestResult {
+    let case = Case::new("save-existing", "basic-4k")?;
+    let path = case.directory.join("saved.adm");
+    let original = b"existing output must survive";
+    fs::write(&path, original)?;
+    let output = case.save(&path, &["--json"]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr)?;
+    assert!(stderr.contains("already exists"), "{stderr}");
+    assert!(!stderr.contains("scanning "), "{stderr}");
+    assert_eq!(fs::read(&path)?, original);
+    case.assert_no_temporary_files()?;
+
+    let output = case.save(&path, &["--force", "--json"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    ScanOutput::from_bytes(&fs::read(&path)?)?;
+    assert_eq!(
+        without_source_and_time(case.json("info", &path)),
+        without_source_and_time(case.json("info", &case.image))
+    );
+    case.assert_no_temporary_files()?;
+    Ok(())
+}
+
+#[test]
+fn existing_drive_output_is_rejected_before_scanning() -> TestResult {
+    let case = Case::new("save-drive-existing", "basic-4k")?;
+    let path = case.directory.join("saved.adm");
+    let original = b"existing drive output";
+    fs::write(&path, original)?;
+    let output = Command::new(env!("CARGO_BIN_EXE_adamite"))
+        .arg("scan")
+        .arg("C:")
+        .arg("-o")
+        .arg(&path)
+        .arg("--json")
+        .output()?;
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr)?;
+    assert!(stderr.contains("already exists"), "{stderr}");
+    assert!(!stderr.contains("scanning "), "{stderr}");
+    assert_eq!(fs::read(&path)?, original);
+    case.assert_no_temporary_files()?;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn dangling_output_symlink_is_rejected_before_scanning() -> TestResult {
+    use std::os::unix::fs::symlink;
+    let case = Case::new("save-dangling-output", "basic-4k")?;
+    let path = case.directory.join("saved.adm");
+    let missing = case.directory.join("missing.adm");
+    symlink(&missing, &path)?;
+    let output = case.save(&path, &["--json"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr)?;
+    assert!(stderr.contains("already exists"), "{stderr}");
+    assert!(!stderr.contains("scanning "), "{stderr}");
+    assert_eq!(fs::read_link(&path)?, missing);
+    assert!(!missing.exists());
+    case.assert_no_temporary_files()?;
+    Ok(())
+}
+
+#[test]
+fn same_as_source_is_rejected_before_scanning() -> TestResult {
+    let case = Case::new("save-source", "basic-4k")?;
+    let original = fs::read(&case.image)?;
+    for path in [&case.image, &case.directory.join(".").join("source.img")] {
+        for flags in [vec!["--json"], vec!["--force", "--json"]] {
+            let output = case.save(path, &flags);
+            assert_eq!(output.status.code(), Some(1));
+            assert!(output.stdout.is_empty());
+            let stderr = String::from_utf8(output.stderr)?;
+            let expected = if flags.contains(&"--force") {
+                "resolves to the source image"
+            } else {
+                "already exists"
+            };
+            assert!(stderr.contains(expected), "{stderr}");
+            assert!(!stderr.contains("scanning "), "{stderr}");
+            assert_eq!(fs::read(&case.image)?, original);
+            case.assert_no_temporary_files()?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn output_symlink_to_source_is_rejected_before_scanning() -> TestResult {
+    use std::os::unix::fs::symlink;
+    let case = Case::new("save-source-symlink", "basic-4k")?;
+    let original = fs::read(&case.image)?;
+    let path = case.directory.join("alias.img");
+    symlink(&case.image, &path)?;
+    let output = case.save(&path, &["--force", "--json"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr)?;
+    assert!(stderr.contains("resolves to the source image"), "{stderr}");
+    assert!(!stderr.contains("scanning "), "{stderr}");
+    assert_eq!(fs::read(&case.image)?, original);
+    assert!(fs::symlink_metadata(&path)?.file_type().is_symlink());
+    case.assert_no_temporary_files()?;
+    Ok(())
+}
+
+#[test]
+fn publish_and_temporary_creation_failures_leave_no_temporary_files() -> TestResult {
+    let case = Case::new("save-io-failures", "basic-4k")?;
+    let directory = case.directory.join("directory.adm");
+    fs::create_dir(&directory)?;
+    let sentinel = directory.join("keep.txt");
+    fs::write(&sentinel, b"keep")?;
+    for destination in [
+        &directory,
+        &case.directory.join("missing").join("saved.adm"),
+    ] {
+        let output = case.save(destination, &["--force", "--json"]);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stdout.is_empty());
+        assert!(String::from_utf8(output.stderr)?.contains("caused by:"));
+        assert_eq!(fs::read(&sentinel)?, b"keep");
+        case.assert_no_temporary_files()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn concurrent_saves_publish_once_without_clobbering() -> TestResult {
+    let case = Case::new("save-concurrent", "basic-4k")?;
+    let path = case.directory.join("saved.adm");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_adamite"));
+    command
+        .arg("scan")
+        .arg(&case.image)
+        .arg("-o")
+        .arg(&path)
+        .arg("--json")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let first = command.spawn()?;
+    let second = command.spawn()?;
+    let mut published = 0;
+    for output in [first.wait_with_output()?, second.wait_with_output()?] {
+        match output.status.code() {
+            Some(0) => {
+                published += 1;
+                let value: Value = serde_json::from_slice(&output.stdout)?;
+                assert_eq!(value["bytes"], fs::metadata(&path)?.len());
+            }
+            Some(1) => {
+                assert!(output.stdout.is_empty());
+                assert!(String::from_utf8(output.stderr)?.contains("already exists"));
+            }
+            code => panic!(
+                "unexpected save exit {code:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ),
+        }
+    }
+    assert_eq!(published, 1, "exactly one save must publish");
+    ScanOutput::from_bytes(&fs::read(&path)?)?;
+    case.assert_no_temporary_files()?;
+    Ok(())
+}
+
+#[test]
 fn basic_info_text_has_stable_totals_and_nonzero_counters() -> TestResult {
     let case = Case::new("basic-text", "basic-4k")?;
     let expected = concat!(
@@ -360,7 +670,7 @@ fn drive_sources_require_windows() -> TestResult {
 fn clap_usage_help_and_version() -> TestResult {
     for args in [
         vec!["info", "unused", "--invalid"],
-        vec!["scan", "unused", "-o", "out.adm"],
+        vec!["info", "unused", "-o", "out.adm"],
         vec!["scan", "unused", "--force"],
         vec!["info"],
         vec!["--json"],
@@ -370,12 +680,18 @@ fn clap_usage_help_and_version() -> TestResult {
             .output()?;
         assert_eq!(output.status.code(), Some(2), "{args:?}");
         assert!(output.stdout.is_empty());
-        assert!(String::from_utf8(output.stderr)?.starts_with("error:"));
+        let stderr = String::from_utf8(output.stderr)?;
+        assert!(stderr.starts_with("error:"));
+        if args.contains(&"--force") {
+            assert!(stderr.contains("--output <FILE>"), "{stderr}");
+            assert!(!stderr.contains("scanning "), "{stderr}");
+        }
     }
     for args in [
         vec![],
         vec!["--help"],
         vec!["info", "--help"],
+        vec!["scan", "--help"],
         vec!["--version"],
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_adamite"))
@@ -430,5 +746,37 @@ fn unreadable_source_exits_four_when_permissions_are_enforced() -> TestResult {
         case.assert_failure("info", &case.image, 4);
     }
     fs::set_permissions(&case.image, permissions)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn unwritable_output_exits_four_when_permissions_are_enforced() -> TestResult {
+    use std::{io, os::unix::fs::PermissionsExt};
+    let case = Case::new("save-permission-failure", "basic-4k")?;
+    let permissions = fs::metadata(&case.directory)?.permissions();
+    fs::set_permissions(&case.directory, fs::Permissions::from_mode(0o500))?;
+    let path = case.directory.join("saved.adm");
+    let probe = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path);
+    let unwritable =
+        matches!(&probe, Err(error) if error.kind() == io::ErrorKind::PermissionDenied);
+    drop(probe);
+    let output = unwritable.then(|| case.save(&path, &["--json"]));
+    fs::set_permissions(&case.directory, permissions)?;
+    if let Some(output) = output {
+        assert_eq!(
+            output.status.code(),
+            Some(4),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stdout.is_empty());
+        assert!(String::from_utf8(output.stderr)?.contains("create temporary snapshot"));
+        assert!(!path.exists());
+    }
+    case.assert_no_temporary_files()?;
     Ok(())
 }

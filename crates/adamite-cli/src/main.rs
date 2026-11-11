@@ -1,4 +1,4 @@
-//! Scans NTFS images and Windows volumes and reports live or saved snapshot information.
+//! Scans NTFS images and Windows volumes, saves snapshots and reports their information.
 #![forbid(unsafe_code)]
 #![deny(
     clippy::indexing_slicing,
@@ -13,6 +13,7 @@ mod command;
 mod error;
 mod render;
 mod report;
+mod save;
 mod source;
 
 use clap::{CommandFactory, Parser};

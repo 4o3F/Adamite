@@ -24,8 +24,18 @@ pub(crate) enum CliError {
         drive: bool,
         source: VolumeError,
     },
-    #[snafu(display("cannot decode snapshot {}", path.display()))]
-    Persist { path: PathBuf, source: PersistError },
+    #[snafu(display("cannot {operation} snapshot {}", path.display()))]
+    Persist {
+        operation: &'static str,
+        path: PathBuf,
+        source: PersistError,
+    },
+    #[snafu(display("output {} already exists; use --force to replace it", path.display()))]
+    OutputExists { path: PathBuf },
+    #[snafu(display("cannot save {} without replacement: hard links are unsupported; use --force", path.display()))]
+    UnsupportedNoClobber { path: PathBuf, source: io::Error },
+    #[snafu(display("output {} resolves to the source image", path.display()))]
+    SameAsSource { path: PathBuf },
     #[snafu(display("cannot read snapshot tree"))]
     Snapshot { source: SnapshotError },
     #[snafu(display("snapshot {} is too large for this platform", path.display()))]

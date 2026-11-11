@@ -8,13 +8,27 @@ use std::{borrow::Cow, path::Path};
 
 #[derive(Debug, Serialize)]
 pub(crate) struct InfoReport<'a> {
+    #[serde(flatten)]
+    pub(crate) envelope: Envelope<'a>,
+    pub(crate) volume: Volume,
+    pub(crate) tree: Tree,
+    pub(crate) stats: Stats<'a>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct SavedReport<'a> {
+    #[serde(flatten)]
+    pub(crate) envelope: Envelope<'a>,
+    pub(crate) saved: Cow<'a, str>,
+    pub(crate) bytes: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct Envelope<'a> {
     pub(crate) schema: &'static str,
     pub(crate) command: &'static str,
     pub(crate) snapshot: SnapshotReport<'a>,
     pub(crate) units: Units,
-    pub(crate) volume: Volume,
-    pub(crate) tree: Tree,
-    pub(crate) stats: Stats<'a>,
 }
 
 #[derive(Debug, Serialize)]
@@ -65,16 +79,7 @@ impl<'a> InfoReport<'a> {
             },
         })?;
         Ok(Self {
-            schema: "adamite/1",
-            command,
-            snapshot: SnapshotReport {
-                source: source.to_string_lossy(),
-                scanned_at: ScanTime(context.scanned_at_filetime).rfc3339(),
-                scanned_at_filetime: context.scanned_at_filetime.map(|value| value.to_string()),
-                volume_serial: format!("{:016x}", geometry.serial()),
-                label: context.label.as_deref(),
-            },
-            units: Units { size: "bytes" },
+            envelope: Envelope::new(command, source, output),
             volume: Volume {
                 bytes_per_sector: geometry.bytes_per_sector(),
                 cluster_size: geometry.cluster_size(),
@@ -89,6 +94,40 @@ impl<'a> InfoReport<'a> {
             },
             stats: Stats(&output.stats),
         })
+    }
+}
+
+impl<'a> Envelope<'a> {
+    pub(crate) fn new(command: &'static str, source: &'a Path, output: &'a ScanOutput) -> Self {
+        let volume = output.snapshot.volume();
+        let context = volume.context();
+        Self {
+            schema: "adamite/1",
+            command,
+            snapshot: SnapshotReport {
+                source: source.to_string_lossy(),
+                scanned_at: ScanTime(context.scanned_at_filetime).rfc3339(),
+                scanned_at_filetime: context.scanned_at_filetime.map(|value| value.to_string()),
+                volume_serial: format!("{:016x}", volume.geometry().serial()),
+                label: context.label.as_deref(),
+            },
+            units: Units { size: "bytes" },
+        }
+    }
+}
+
+impl<'a> SavedReport<'a> {
+    pub(crate) fn new(
+        source: &'a Path,
+        output: &'a ScanOutput,
+        destination: &'a Path,
+        bytes: usize,
+    ) -> Self {
+        Self {
+            envelope: Envelope::new("scan", source, output),
+            saved: destination.to_string_lossy(),
+            bytes,
+        }
     }
 }
 

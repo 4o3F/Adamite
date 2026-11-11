@@ -113,7 +113,7 @@ Each milestone ends with one reviewed commit and `deno task check` green. A mile
 
 ### C3 — Saving
 
-- [ ] Add `save.rs` and `scan -o` per D7 with round-trip, refusal, `--force`, same-as-source and corrupt-snapshot tests.
+- [x] Add `save.rs` and `scan -o` per D7 with round-trip, refusal, `--force`, same-as-source and corrupt-snapshot tests.
 
 ### C4 — top, ext, ls and paths
 

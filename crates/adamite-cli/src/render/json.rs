@@ -1,9 +1,10 @@
-use crate::{error::CliError, report::InfoReport};
+use crate::error::CliError;
+use serde::Serialize;
 use std::io::Write;
 
-pub(crate) struct Json<'a>(pub(crate) &'a InfoReport<'a>);
+pub(crate) struct Json<'a, T>(pub(crate) &'a T);
 
-impl Json<'_> {
+impl<T: Serialize> Json<'_, T> {
     pub(crate) fn write(&self, stdout: &mut impl Write) -> Result<(), CliError> {
         let mut bytes = serde_json::to_vec(self.0).map_err(|source| CliError::Json { source })?;
         bytes.push(b'\n');

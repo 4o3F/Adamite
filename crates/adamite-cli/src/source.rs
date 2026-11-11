@@ -99,7 +99,11 @@ impl Source {
                     path: path.clone(),
                     source,
                 })?;
-                ScanOutput::from_bytes(&bytes).map_err(|source| CliError::Persist { path, source })
+                ScanOutput::from_bytes(&bytes).map_err(|source| CliError::Persist {
+                    operation: "decode",
+                    path,
+                    source,
+                })
             }
             Self::Image { path } => Self::run_scan(&path, || {
                 let reader = ImageReader::open(&path)?;

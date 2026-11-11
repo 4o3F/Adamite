@@ -1,5 +1,8 @@
 use super::{escape::Escaped, units::Size};
-use crate::{error::CliError, report::InfoReport};
+use crate::{
+    error::CliError,
+    report::{InfoReport, SavedReport},
+};
 use std::io::{self, Write};
 
 pub(crate) struct Text<'a> {
@@ -18,15 +21,20 @@ impl Text<'_> {
         writeln!(
             stdout,
             "{} — scanned {}",
-            Escaped(&report.snapshot.source),
-            report.snapshot.scanned_at.as_deref().unwrap_or("unknown")
+            Escaped(&report.envelope.snapshot.source),
+            report
+                .envelope
+                .snapshot
+                .scanned_at
+                .as_deref()
+                .unwrap_or("unknown")
         )?;
         writeln!(
             stdout,
             "  {:<24} {}",
-            "Volume serial", report.snapshot.volume_serial
+            "Volume serial", report.envelope.snapshot.volume_serial
         )?;
-        if let Some(label) = report.snapshot.label {
+        if let Some(label) = report.envelope.snapshot.label {
             writeln!(stdout, "  {:<24} {}", "Label", Escaped(label))?;
         }
         self.size_line(
@@ -60,9 +68,29 @@ impl Text<'_> {
             stdout,
             "  {label:<24} {}",
             Size {
-                value,
+                value: u128::from(value),
                 bytes: self.bytes
             }
         )
+    }
+}
+
+pub(crate) struct SavedText<'a> {
+    pub(crate) report: &'a SavedReport<'a>,
+    pub(crate) bytes: bool,
+}
+
+impl SavedText<'_> {
+    pub(crate) fn write(&self, stdout: &mut impl Write) -> Result<(), CliError> {
+        writeln!(
+            stdout,
+            "saved {} ({})",
+            Escaped(&self.report.saved),
+            Size {
+                value: self.report.bytes as u128,
+                bytes: self.bytes
+            },
+        )
+        .map_err(|source| CliError::Output { source })
     }
 }

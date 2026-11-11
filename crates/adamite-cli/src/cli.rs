@@ -19,7 +19,7 @@ pub(crate) struct Cli {
 #[derive(Debug, Subcommand)]
 pub(crate) enum Command {
     /// Scan an NTFS image or Windows drive.
-    Scan(SourceArgs),
+    Scan(ScanArgs),
     /// Show volume, tree totals and scan diagnostics.
     Info(SourceArgs),
 }
@@ -34,6 +34,18 @@ pub(crate) struct SourceArgs {
     /// Show raw byte counts in text output.
     #[arg(long)]
     pub(crate) bytes: bool,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct ScanArgs {
+    #[command(flatten)]
+    pub(crate) source: SourceArgs,
+    /// Save the scan as a snapshot file.
+    #[arg(short, long, value_name = "FILE")]
+    pub(crate) output: Option<PathBuf>,
+    /// Replace an existing output file.
+    #[arg(long, requires = "output")]
+    pub(crate) force: bool,
 }
 
 impl Command {
