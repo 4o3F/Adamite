@@ -74,8 +74,8 @@ Out of scope:
 
 Each task ends with one reviewed commit, `deno task check` green and CI green. Each Codex run covers implementation and targeted verification and stays under 40 minutes.
 
-- [ ] E1 — `ElevatedProcess` and `adamite-io::status`, with unit tests (D1, D2).
-- [ ] E2 — `scan --status-file`, automatic elevation and `--no-elevate`, with CLI tests, the READMEs and ARCHITECTURE §4.1 (D3–D5).
+- [x] E1 — `ElevatedProcess` and `adamite-io::status`, with unit tests (D1, D2).
+- [x] E2 — `scan --status-file`, automatic elevation and `--no-elevate`, with CLI tests, the READMEs and ARCHITECTURE §4.1 (D3–D5).
 
 ## Acceptance criteria
 

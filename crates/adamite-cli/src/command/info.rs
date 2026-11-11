@@ -8,7 +8,7 @@ pub(crate) struct Info(pub(crate) SourceArgs);
 
 impl Info {
     pub(crate) fn run(&self, stdout: &mut impl Write) -> Result<(), CliError> {
-        let output = Source::open(&self.0.source)?.load(self.0.limits.limits())?;
+        let output = Source::open(&self.0.source)?.load(&self.0.limits)?;
         self.render("info", &output, stdout)
     }
 

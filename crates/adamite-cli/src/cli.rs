@@ -9,7 +9,11 @@ use clap::{
     error::{ContextKind, ContextValue},
 };
 use std::num::{NonZeroU64, NonZeroUsize};
-use std::{ffi::OsStr, io::Write, path::PathBuf};
+use std::{
+    ffi::{OsStr, OsString},
+    io::Write,
+    path::PathBuf,
+};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -62,6 +66,9 @@ pub(crate) struct ScanArgs {
     /// Save the scan as a snapshot file.
     #[arg(short, long, value_name = "FILE")]
     pub(crate) output: Option<PathBuf>,
+    /// Write scan progress and the saved outcome as JSON lines to a new file.
+    #[arg(long, requires = "output", value_name = "FILE")]
+    pub(crate) status_file: Option<PathBuf>,
     /// Replace an existing output file.
     #[arg(long, requires = "output")]
     pub(crate) force: bool,
@@ -153,33 +160,66 @@ impl Command {
 #[derive(Debug, Args)]
 pub(crate) struct LimitArgs {
     /// Resource profile: background, balanced or max. Ignored for snapshots.
-    #[arg(long, default_value_t = ScanProfile::Balanced, value_name = "PROFILE")]
-    profile: ScanProfile,
+    #[arg(long, value_name = "PROFILE")]
+    profile: Option<ScanProfile>,
     /// Bytes per second; K/M/G use powers of 1024. Use --profile max to uncap.
     #[arg(long, value_name = "BYTES", value_parser = Self::parse_rate)]
-    max_read_rate: Option<NonZeroU64>,
+    max_read_rate: Option<ReadRate>,
     /// Worker ceiling (at least 1); the current scanner uses one thread.
-    #[arg(long, default_value = "1", value_name = "N")]
-    threads: NonZeroUsize,
+    #[arg(long, value_name = "N")]
+    threads: Option<NonZeroUsize>,
+    /// Scan drives without requesting administrator access.
+    #[arg(long)]
+    pub(crate) no_elevate: bool,
+}
+
+#[derive(Debug, Clone)]
+struct ReadRate {
+    argument: String,
+    bytes: NonZeroU64,
 }
 
 impl LimitArgs {
     pub(crate) fn limits(&self) -> ScanLimits {
-        let mut limits = self.profile.limits();
-        if let Some(rate) = self.max_read_rate {
-            limits.max_read_bytes_per_sec = Some(rate);
+        let mut limits = self.profile.unwrap_or_default().limits();
+        if let Some(rate) = &self.max_read_rate {
+            limits.max_read_bytes_per_sec = Some(rate.bytes);
         }
-        limits.threads = self.threads;
+        if let Some(threads) = self.threads {
+            limits.threads = threads;
+        }
         limits
     }
 
-    fn parse_rate(value: &str) -> Result<NonZeroU64, String> {
+    pub(crate) fn child_arguments(&self) -> Vec<OsString> {
+        let mut args = Vec::new();
+        if let Some(profile) = self.profile {
+            args.extend([OsString::from("--profile"), profile.to_string().into()]);
+        }
+        if let Some(rate) = &self.max_read_rate {
+            args.extend([
+                OsString::from("--max-read-rate"),
+                rate.argument.clone().into(),
+            ]);
+        }
+        if let Some(threads) = self.threads {
+            args.extend([OsString::from("--threads"), threads.to_string().into()]);
+        }
+        args
+    }
+
+    fn parse_rate(value: &str) -> Result<ReadRate, String> {
         let bytes = parse_size::Config::new()
             .with_binary()
             .parse_size(value)
             .map_err(|error| error.to_string())?;
-        NonZeroU64::new(bytes)
-            .ok_or_else(|| "rate must be positive; use --profile max for uncapped reads".to_owned())
+        let bytes = NonZeroU64::new(bytes).ok_or_else(|| {
+            "rate must be positive; use --profile max for uncapped reads".to_owned()
+        })?;
+        Ok(ReadRate {
+            argument: value.to_owned(),
+            bytes,
+        })
     }
 }
 

@@ -12,7 +12,7 @@ impl Browse {
             });
         }
         let args = &self.0;
-        let output = Source::open(&args.source)?.load(args.limits.limits())?;
+        let output = Source::open(&args.source)?.load(&args.limits)?;
         let locator = Locator::new(&output.snapshot);
         let id = locator.resolve(&args.path)?;
         locator.directory(id)?;

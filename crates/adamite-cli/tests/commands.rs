@@ -1567,3 +1567,209 @@ fn snapshot_queries_ignore_scan_limits() -> TestResult {
     }
     Ok(())
 }
+
+#[test]
+fn status_file_records_ordered_progress_and_saved_outcome() -> TestResult {
+    let case = Case::new("status-success", "basic-4k")?;
+    let destination = case.directory.join("saved.adm");
+    let status = case.directory.join("scan.jsonl");
+    let output = Command::new(env!("CARGO_BIN_EXE_adamite"))
+        .arg("scan")
+        .arg(&case.image)
+        .arg("-o")
+        .arg(&destination)
+        .arg("--status-file")
+        .arg(&status)
+        .arg("--json")
+        .output()?;
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stderr)?,
+        format!("scanning {}…\n", case.image.display())
+    );
+    let report: Value = serde_json::from_slice(&output.stdout)?;
+    let lines: Vec<Value> = fs::read_to_string(status)?
+        .lines()
+        .map(serde_json::from_str)
+        .collect::<Result<_, _>>()?;
+    let (last, progress) = lines.split_last().ok_or("empty status file")?;
+    assert_eq!(
+        last,
+        &json!({"done": {"saved": destination.to_string_lossy(), "bytes": fs::metadata(&destination)?.len()}})
+    );
+    assert_eq!(last["done"]["bytes"], report["bytes"]);
+    assert!(!progress.is_empty());
+    let phases = [
+        "boot",
+        "record0",
+        "discover",
+        "stream",
+        "merge",
+        "link",
+        "snapshot",
+        "aggregate",
+        "finalize",
+        "done",
+    ];
+    let mut previous_phase = 0;
+    let mut previous_records = 0;
+    let mut previous_bytes = 0;
+    for line in progress {
+        let value = line.get("progress").ok_or("unexpected terminal status")?;
+        let phase = phases
+            .iter()
+            .position(|phase| value["phase"] == *phase)
+            .ok_or("unknown phase")?;
+        let records = value["records"].as_u64().ok_or("missing records")?;
+        let bytes = value["bytes"].as_u64().ok_or("missing bytes")?;
+        assert!(phase >= previous_phase, "{line}");
+        assert!(records >= previous_records, "{line}");
+        assert!(bytes >= previous_bytes, "{line}");
+        previous_phase = phase;
+        previous_records = records;
+        previous_bytes = bytes;
+    }
+    Ok(())
+}
+
+#[test]
+fn status_file_failure_matches_cli_message_and_exit_code() -> TestResult {
+    let case = Case::new("status-failure", "basic-4k")?;
+    fs::write(&case.image, [0; 512])?;
+    let status = case.directory.join("scan.jsonl");
+    let destination = case.directory.join("saved.adm");
+    let output = Command::new(env!("CARGO_BIN_EXE_adamite"))
+        .arg("scan")
+        .arg(&case.image)
+        .arg("-o")
+        .arg(&destination)
+        .arg("--status-file")
+        .arg(&status)
+        .output()?;
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr)?;
+    let message = stderr
+        .split_once("error: ")
+        .ok_or("missing error line")?
+        .1
+        .lines()
+        .take_while(|line| !line.starts_with("hint: "))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(message.contains("\ncaused by: "), "{message}");
+    let lines: Vec<Value> = fs::read_to_string(status)?
+        .lines()
+        .map(serde_json::from_str)
+        .collect::<Result<_, _>>()?;
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.get("failed").is_some())
+            .count(),
+        1
+    );
+    assert_eq!(
+        lines.last(),
+        Some(&json!({"failed": {"message": message, "exit_code": output.status.code()}}))
+    );
+    assert!(lines.iter().all(|line| line.get("done").is_none()));
+    assert!(!destination.exists());
+    Ok(())
+}
+
+#[test]
+fn status_file_requires_output_and_preserves_existing_file() -> TestResult {
+    let case = Case::new("status-usage", "basic-4k")?;
+    let status = case.directory.join("scan.jsonl");
+    let output = Command::new(env!("CARGO_BIN_EXE_adamite"))
+        .arg("scan")
+        .arg(&case.image)
+        .arg("--status-file")
+        .arg(&status)
+        .output()?;
+    assert_eq!(output.status.code(), Some(2));
+    assert!(!status.exists());
+    fs::write(&status, "keep existing status\n")?;
+    let destination = case.directory.join("saved.adm");
+    let output = Command::new(env!("CARGO_BIN_EXE_adamite"))
+        .arg("scan")
+        .arg(&case.image)
+        .arg("-o")
+        .arg(&destination)
+        .arg("--status-file")
+        .arg(&status)
+        .output()?;
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(fs::read_to_string(status)?, "keep existing status\n");
+    assert!(!String::from_utf8(output.stderr)?.contains("scanning "));
+    assert!(!destination.exists());
+    Ok(())
+}
+
+#[test]
+fn no_elevate_preserves_every_command_on_images_and_snapshots() -> TestResult {
+    let case = Case::new("no-elevate", "basic-4k")?;
+    let snapshot = case.snapshot("source.adm")?;
+    for source in [&case.image, &snapshot] {
+        for name in ["scan", "info", "top", "ext", "ls", "browse"] {
+            if name == "browse" || (name == "scan" && source == &snapshot) {
+                let expected = case.command(name, source, &[]);
+                let actual = case.command(name, source, &["--no-elevate"]);
+                assert_eq!(actual.status.code(), expected.status.code(), "{name}");
+                assert_eq!(actual.stdout, expected.stdout, "{name}");
+                assert_eq!(actual.stderr, expected.stderr, "{name}");
+            } else {
+                let expected = case.json(name, source);
+                let actual = case.json_with(name, source, &["--no-elevate"]);
+                if source == &snapshot {
+                    assert_eq!(actual, expected, "{name}");
+                } else {
+                    assert_eq!(
+                        without_source_and_time(actual),
+                        without_source_and_time(expected),
+                        "{name}"
+                    );
+                }
+            }
+        }
+    }
+    let destination = case.directory.join("saved.adm");
+    let saved = case.save(&destination, &["--no-elevate", "--json"]);
+    assert!(saved.status.success(), "{saved:?}");
+    assert!(destination.exists());
+    Ok(())
+}
+
+#[test]
+fn status_file_reports_done_when_saved_output_pipe_is_closed() -> TestResult {
+    let case = Case::new("status-broken-pipe", "basic-4k")?;
+    let destination = case.directory.join("saved.adm");
+    let status = case.directory.join("scan.jsonl");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_adamite"))
+        .arg("scan")
+        .arg(&case.image)
+        .arg("-o")
+        .arg(&destination)
+        .arg("--status-file")
+        .arg(&status)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    drop(child.stdout.take());
+    let output = child.wait_with_output()?;
+    assert!(output.status.success(), "{output:?}");
+    assert!(!String::from_utf8(output.stderr)?.contains("error:"));
+    let lines: Vec<Value> = fs::read_to_string(status)?
+        .lines()
+        .map(serde_json::from_str)
+        .collect::<Result<_, _>>()?;
+    assert_eq!(
+        lines.last(),
+        Some(
+            &json!({"done": {"saved": destination.to_string_lossy(), "bytes": fs::metadata(destination)?.len()}})
+        )
+    );
+    assert!(lines.iter().all(|line| line.get("failed").is_none()));
+    Ok(())
+}

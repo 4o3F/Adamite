@@ -6,7 +6,7 @@ pub(crate) struct Top(pub(crate) TopArgs);
 impl Top {
     pub(crate) fn run(&self, stdout: &mut impl Write) -> Result<(), CliError> {
         let args = &self.0;
-        let output = Source::open(&args.source.source)?.load(args.source.limits.limits())?;
+        let output = Source::open(&args.source.source)?.load(&args.source.limits)?;
         let report = TopReport::new(&args.source.source, &output, args.n)?;
         Renderer::from(&args.source).write(&report, stdout)
     }

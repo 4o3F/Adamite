@@ -6,7 +6,7 @@
 
 | Command                                                | Behavior and options                                                                                                                                                                                                              |
 | ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `adamite scan <SOURCE> [-o <FILE>] [--force]`          | Scan an image or drive. Without `-o`/`--output`, print the info report. With it, save a snapshot and print a one-line confirmation. `--force` requires an output file and allows replacement. A snapshot source is a usage error. |
+| `adamite scan <SOURCE> [-o <FILE>] [--force] [--status-file <FILE>]` | Scan an image or drive. Without `-o`/`--output`, print the info report. With it, save a snapshot and print a one-line confirmation. `--force` requires an output file and allows replacement. `--status-file` requires an output file and writes progress and the outcome to a new JSON lines file. A snapshot source is a usage error. |
 | `adamite info <SOURCE>`                                | Show volume metadata, tree totals and scan counters.                                                                                                                                                                              |
 | `adamite top <SOURCE> [--n 20]`                        | Show files from the precomputed 100-entry index, ordered by allocation. `--n` accepts 1 through 100.                                                                                                                              |
 | `adamite ext <SOURCE> [--n 20]`                        | Show extension groups in stored allocation order. `--n` must be at least 1.                                                                                                                                                       |
@@ -79,13 +79,14 @@ Errors use text on standard error, beginning with `error:` and followed by `caus
 
 ## Scan resource limits
 
-All six commands accept the same scan flags. Loading a saved snapshot ignores them.
+All six commands accept the same scan flags. Loading a saved snapshot ignores them. Only explicitly supplied resource flags are forwarded to an elevated scan; the child uses the same defaults for omitted flags.
 
 | Flag | Default and meaning |
 |---|---|
 | `--profile background\|balanced\|max` | Balanced: 256 MiB/s and 1 MiB chunks. Background: 64 MiB/s and 1 MiB chunks. Max: uncapped reads and 4 MiB chunks. All profiles use one outstanding request. |
 | `--max-read-rate <BYTES>` | Override the profile's read budget. K/M/G and KiB/MiB/GiB use powers of 1024, for example `128M` or `128MiB`. Zero and `unlimited` are rejected; select `--profile max` to uncap. |
 | `--threads <N>` | Positive worker ceiling, default 1. The current scanner uses one thread for every ceiling; future parallel work must honour it. |
+| `--no-elevate` | Scan Windows drives in the current process without requesting administrator access. Accepted for all sources and platforms. |
 
 Adamite sleeps between reads to enforce the budget. For budgets larger than one chunk per second, the token bucket reserves one chunk from its refill rate so any one-second window stays within the requested budget. Very low custom budgets allow one indivisible chunk beyond the one-second budget. Rates count logical requested bytes; Windows sector alignment can expand native reads.
 
@@ -101,14 +102,29 @@ adamite scan volume.img --profile max
 
 Without `--force`, publication creates a hard link to the completed temporary file and removes the temporary name. This refuses a destination created concurrently. Filesystems without hard-link support return `UnsupportedNoClobber` and suggest `--force`. With `--force`, rename replaces the destination without deleting it first. Cleanup is attempted on failure; a failed temporary-name removal after successful hard-link publication emits a warning and is retried on drop.
 
+`scan <SOURCE> -o <SNAPSHOT> --status-file <STATUS>` exclusively creates STATUS before scanning. An existing status file is left untouched and returns exit code 2. The command keeps its usual standard output and standard error. Each newline-terminated JSON object reports progress or the final outcome:
+
+```json
+{"progress":{"phase":"stream","records":100,"planned":200,"bytes":1048576}}
+{"done":{"saved":"volume.adm","bytes":12345}}
+```
+
+Progress is flushed on phase changes and otherwise at most every 500 milliseconds. A failed command ends with `{"failed":{"message":"<error text>","exit_code":1}}`, using the error text the CLI prints after `error: `, including `caused by:` lines, and the same exit code. The status file remains available after the command exits.
+
 ## Exit codes and Windows elevation
 
 | Code | Condition                                                                                                                     |
 | ---- | ----------------------------------------------------------------------------------------------------------------------------- |
 | 0    | Success, help, version or a broken standard-output pipe.                                                                      |
-| 2    | Invalid arguments, scanning an existing snapshot, a raw drive on a non-Windows platform, or `browse` without terminal output. |
+| 2    | Invalid arguments, an existing status file, scanning an existing snapshot, a raw drive on a non-Windows platform, or `browse` without terminal output. |
 | 3    | Snapshot encoding or decoding (`PersistError`).                                                                               |
-| 4    | Source/output permission denial or raw-volume access denial. Drive failures include a hint to use an elevated terminal.       |
+| 4    | Source/output permission denial, raw-volume access denial, declined elevation or elevation launch failure. |
 | 1    | Other failures, including I/O, scan, allocation, path, output and terminal errors.                                            |
 
-Terminal errors return 1; snapshot codec errors take precedence over permission errors in their source chain. To inspect a Windows drive, run `adamite scan C: -o C.adm` in an elevated terminal once, then run `adamite browse C.adm` or the report commands in an ordinary terminal that can read the saved file. Loading a snapshot requires file access only. See [adamite-tui](../adamite-tui/README.md) for tabs, keys and rendering.
+Terminal errors return 1; snapshot codec errors take precedence over permission errors in their source chain. Loading a snapshot requires file access only. See [adamite-tui](../adamite-tui/README.md) for tabs, keys and rendering.
+
+On Windows, `scan`, `info`, `top`, `ext`, `ls` and `browse` automatically request UAC elevation for drive sources when the current process is unelevated. Before launching, the parent prints `requesting administrator access for <drive>…`. The elevated child scans and saves a snapshot while the parent displays progress, waits for the child to exit, then loads the snapshot and renders the requested result. `scan -o FILE` uses FILE after the normal destination checks; other commands use a unique `adamite-<pid>-<n>.adm` in the system temporary directory. The status file is `.<snapshot file>.<pid>-<n>.status.jsonl` beside the snapshot. The parent closes its reader before removing the status file and removes temporary snapshots after loading them.
+
+The child receives `--no-elevate`, the explicitly supplied `--profile`, `--max-read-rate` and `--threads` options, and `--force` only for `scan -o FILE --force`. `--trace-chrome` profiles the parent and is not forwarded. Declining the prompt prints `error: elevation was declined` and returns 4. Other elevation failures include the system error and suggest `run with --no-elevate in an elevated terminal`. A child failure returns its reported message and exit code; an exit without a final status line returns 1 and names the child's exit code.
+
+Use `--no-elevate` to scan in the current process. Access-denied drive errors then suggest `run without --no-elevate to request elevation, or use an elevated terminal`.

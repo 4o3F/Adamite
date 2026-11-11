@@ -10,6 +10,7 @@
 
 mod cli;
 mod command;
+mod elevated_scan;
 mod error;
 mod locate;
 mod render;
@@ -17,6 +18,7 @@ mod report;
 mod save;
 mod scan_progress_view;
 mod source;
+mod status_file;
 
 use adamite_profile::{ChromeProfile, CountingAllocator};
 use clap::{CommandFactory, Parser};

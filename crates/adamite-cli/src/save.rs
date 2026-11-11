@@ -31,6 +31,15 @@ impl SnapshotFile {
         Self { path, mode }
     }
 
+    pub(crate) fn len(&self) -> Result<usize, CliError> {
+        let bytes = fs::metadata(&self.path)
+            .map_err(|source| self.io_error("read saved snapshot length", source))?
+            .len();
+        usize::try_from(bytes).map_err(|_| CliError::SnapshotLength {
+            path: self.path.clone(),
+        })
+    }
+
     /// Rejects conflicting destinations before scanning an image or drive.
     pub(crate) fn preflight(&self, source: &Source) -> Result<(), CliError> {
         if fs::metadata(&self.path).is_ok_and(|metadata| metadata.is_dir()) {

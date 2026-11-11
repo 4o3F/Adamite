@@ -18,6 +18,22 @@ pub(crate) enum CliError {
     Terminal { source: TuiError },
     #[snafu(display("{message}"))]
     Usage { message: &'static str },
+    #[snafu(display("status file {} already exists", path.display()))]
+    StatusExists { path: PathBuf },
+    #[snafu(display("cannot report scan status"))]
+    Status {
+        source: adamite_io::status::StatusError,
+    },
+    #[snafu(display("elevation was declined"))]
+    ElevationDeclined,
+    #[snafu(display("cannot run elevated scan"))]
+    Elevation {
+        source: adamite_io::elevation::ElevationError,
+    },
+    #[snafu(display("{message}"))]
+    ChildFailed { message: String, exit_code: i32 },
+    #[snafu(display("elevated scan exited with code {exit_code} without a final status line"))]
+    ChildExited { exit_code: u32 },
     #[snafu(display("path component {component:?} not found in {path:?}"))]
     PathNotFound { path: String, component: String },
     #[snafu(display(
@@ -40,6 +56,7 @@ pub(crate) enum CliError {
     Volume {
         path: PathBuf,
         drive: bool,
+        no_elevate: bool,
         source: VolumeError,
     },
     #[snafu(display("cannot {operation} snapshot {}", path.display()))]
@@ -70,7 +87,12 @@ pub(crate) enum CliError {
 
 impl CliError {
     pub(crate) fn exit_code(&self) -> u8 {
-        if matches!(self, Self::Usage { .. }) {
+        match self {
+            Self::ElevationDeclined | Self::Elevation { .. } => return 4,
+            Self::ChildFailed { exit_code, .. } => return u8::try_from(*exit_code).unwrap_or(1),
+            _ => {}
+        }
+        if matches!(self, Self::Usage { .. } | Self::StatusExists { .. }) {
             return 2;
         }
         if matches!(self, Self::Terminal { .. }) {
@@ -100,14 +122,46 @@ impl CliError {
 
     pub(crate) fn print(&self) {
         let mut stderr = io::stderr().lock();
-        let _ = writeln!(stderr, "error: {self}");
+        let _ = writeln!(stderr, "error: {}", self.message());
+        if self.exit_code() == 4 && matches!(self, Self::Volume { drive: true, .. }) {
+            let hint = if matches!(
+                self,
+                Self::Volume {
+                    no_elevate: true,
+                    ..
+                }
+            ) {
+                "run without --no-elevate to request elevation, or use an elevated terminal"
+            } else {
+                "use an elevated terminal to scan a drive"
+            };
+            let _ = writeln!(stderr, "hint: {hint}");
+        }
+        if matches!(self, Self::Elevation { .. }) {
+            let _ = writeln!(
+                stderr,
+                "hint: run with --no-elevate in an elevated terminal"
+            );
+        }
+    }
+
+    /// The error and its `caused by:` chain, as printed after `error: `.
+    pub(crate) fn message(&self) -> String {
+        let mut message = self.to_string();
         let mut source = self.source();
         while let Some(cause) = source {
-            let _ = writeln!(stderr, "caused by: {cause}");
+            message.push_str("\ncaused by: ");
+            message.push_str(&cause.to_string());
             source = cause.source();
         }
-        if self.exit_code() == 4 && matches!(self, Self::Volume { drive: true, .. }) {
-            let _ = writeln!(stderr, "hint: use an elevated terminal to scan a drive");
+        message
+    }
+
+    pub(crate) fn elevation(source: adamite_io::elevation::ElevationError) -> Self {
+        if matches!(source, adamite_io::elevation::ElevationError::Declined) {
+            Self::ElevationDeclined
+        } else {
+            Self::Elevation { source }
         }
     }
 }

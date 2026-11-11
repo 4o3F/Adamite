@@ -6,13 +6,36 @@ use crate::{
     report::SavedReport,
     save::{PublishMode, SnapshotFile},
     source::Source,
+    status_file::StatusFile,
 };
+use adamite_io::status::ScanStatus;
 use std::io::Write;
 
 pub(crate) struct Scan(pub(crate) ScanArgs);
 
 impl Scan {
     pub(crate) fn run(self, stdout: &mut impl Write) -> Result<(), CliError> {
+        let mut status = self
+            .0
+            .status_file
+            .as_deref()
+            .map(StatusFile::create)
+            .transpose()?;
+        let result = self.execute(&mut status, stdout);
+        if let Some(status) = &mut status {
+            let finished = status.finish(&result);
+            if result.is_ok() {
+                finished?;
+            }
+        }
+        result.map(|_| ())
+    }
+
+    fn execute(
+        self,
+        status: &mut Option<StatusFile>,
+        stdout: &mut impl Write,
+    ) -> Result<Option<ScanStatus>, CliError> {
         let args = self.0;
         let source = Source::open(&args.source.source)?;
         if source.is_snapshot() {
@@ -21,8 +44,9 @@ impl Scan {
             });
         }
         let Some(destination) = args.output else {
-            let output = source.load(args.source.limits.limits())?;
-            return Info(args.source).render("scan", &output, stdout);
+            let output = source.load(&args.source.limits)?;
+            Info(args.source).render("scan", &output, stdout)?;
+            return Ok(None);
         };
         let mode = if args.force {
             PublishMode::Replace
@@ -31,9 +55,31 @@ impl Scan {
         };
         let file = SnapshotFile::new(destination.clone(), mode);
         file.preflight(&source)?;
-        let output = source.load(args.source.limits.limits())?;
-        let bytes = file.save(&output)?;
+        let elevated = source.elevation(&args.source.limits, Some((&destination, mode)))?;
+        let saved_by_child = elevated.is_some();
+        let output = if let Some(elevated) = elevated {
+            elevated.run(&args.source.source, &args.source.limits, status.as_mut())?
+        } else {
+            source.load_in_process(&args.source.limits, status.as_mut())?
+        };
+        if let Some(status) = status {
+            status.check()?;
+        }
+        let bytes = if saved_by_child {
+            file.len()?
+        } else {
+            file.save(&output)?
+        };
         let report = SavedReport::new(&args.source.source, &output, &destination, bytes);
-        Renderer::from(&args.source).write(&report, stdout)
+        if let Err(error) = Renderer::from(&args.source).write(&report, stdout)
+            && !error.is_broken_pipe()
+        {
+            return Err(error);
+        }
+        Ok(Some(ScanStatus::Done {
+            saved: destination.to_string_lossy().into_owned(),
+            bytes: u64::try_from(bytes)
+                .map_err(|_| CliError::SnapshotLength { path: destination })?,
+        }))
     }
 }
