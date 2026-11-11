@@ -135,16 +135,18 @@ Each milestone ends with one reviewed commit and `deno task check` green. A mile
 
 ### C8 — CI artifacts and Windows CLI smoke
 
-- [ ] Add the D12 steps, `workflow_call`, `tests/raw_volume.rs` and the D14 `ci.yml` assertions, including the workflow-model changes in `check_test.ts`.
+- [x] Add the D12 steps, `workflow_call`, `tests/raw_volume.rs` and the D14 `ci.yml` assertions, including the workflow-model changes in `check_test.ts`.
 
 ### C9 — Release workflow and documentation
 
-- [ ] Add `release.yml` per D13 with its D14 assertions; documentation per D15; delete the `adamite-io` example.
+- [x] Add `release.yml` per D13 with its D14 assertions; documentation per D15; delete the `adamite-io` example.
 
 ## Acceptance criteria
 
-- [ ] `adamite scan <fixture image> -o f.adm`, then `info/top/ext/ls --json` on `f.adm` match the image-sourced output except source and scan time; exit codes follow D8.
-- [ ] TUI tests cover navigation, tabs, edge cases and rendering per D10.
-- [ ] After the C8 commit, both CI `check` jobs upload `adamite-Linux`/`adamite-Windows` artifacts containing the binary and checksum, and `check (windows-latest)` passes the elevated CLI smoke.
-- [ ] `check_test.ts` asserts the `release.yml` structure; publication itself is verified on the first user-approved tag and is outside this plan's acceptance.
-- [ ] `deno task check` (Windows Clippy for io and cli, package tests) and `cargo deny check` pass; READMEs and ARCHITECTURE match the implementation.
+- [x] `adamite scan <fixture image> -o f.adm`, then `info/top/ext/ls --json` on `f.adm` match the image-sourced output except source and scan time; exit codes follow D8.
+- [x] TUI tests cover navigation, tabs, edge cases and rendering per D10.
+- [x] After the C8 commit, both CI `check` jobs upload `adamite-Linux`/`adamite-Windows` artifacts containing the binary and checksum, and `check (windows-latest)` passes the elevated CLI smoke.
+- [x] `check_test.ts` asserts the `release.yml` structure; publication itself is verified on the first user-approved tag and is outside this plan's acceptance.
+- [x] `deno task check` (Windows Clippy for io and cli, package tests) and `cargo deny check` pass; READMEs and ARCHITECTURE match the implementation.
+
+Verification: `deno task check` passed, including 29 CLI integration tests, 20 TUI tests, Windows cross-target Clippy, `cargo deny check`, 21 check-script tests and 8 packaging tests. `deno task ci-lint` parsed both workflows; explicit `deno fmt --check` passed for the new READMEs. Dependency policy reported the existing duplicate `syn` versions as a warning and exited successfully. [CI run 42960021876](https://github.com/4o3F/Adamite/actions/runs/42960021876) on `4b0a9da` passed both packaging/upload jobs and the elevated Windows CLI smoke; downloaded artifacts contained the four expected package/checksum files, and both SHA-256 checksums matched.

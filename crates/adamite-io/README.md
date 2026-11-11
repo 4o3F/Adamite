@@ -43,8 +43,6 @@ Sources start at volume byte zero. Decompress fixture images before opening them
 
 `ScanConfig::default()` selects one outstanding request and 1 MiB chunks. The driver validates configuration at construction and starts a fresh scanner on each `run`. Increasing `max_outstanding` batches logical requests; native reads remain synchronous with depth 1. The driver reuses its response buffer within a run. The caller supplies optional `ScanContext` before constructing the driver. `ImageReader::context()` supplies the current FILETIME scan timestamp, with `label` and `free_bytes` set to `None`; it returns `VolumeError::Overflow` if the clock cannot be converted. On Windows, `RawVolumeReader::context()` also supplies the volume label and free bytes.
 
-The [scan example](examples/scan.rs) prints `ScanStats`, `VolumeInfo` and up to ten root children in descending subtree allocation order. Child output includes names, allocated bytes and logical bytes. Errors print their complete source chain.
-
 ## Errors
 
 `error::VolumeError` is a non-exhaustive snafu enum that preserves host and core sources through `std::error::Error::source()`.
@@ -85,16 +83,8 @@ Run the ignored raw-volume tests in an elevated Windows session:
 
 ```text
 cargo test -p adamite-io --test raw_volume -- --ignored
-cargo run -p adamite-io --example scan -- --drive C
 ```
 
-CI runs these ignored tests only on Windows, after the normal workspace tests. On Linux, the example's `--drive` mode prints `raw volumes require Windows` and exits with status 2.
-
-For a manual image scan with zstd installed:
-
-```text
-zstd -d tests/fixtures/ntfs/basic-4k.img.zst -o target/basic-4k.img
-cargo run -p adamite-io --example scan -- target/basic-4k.img
-```
+CI runs these ignored tests only on Windows, after the normal workspace tests. For command-line image and raw-volume scans, use [`adamite-cli`](../adamite-cli/README.md).
 
 Parallel parsing, buffer pools, native I/O depth above 1, rate limits, priority controls and Linux block-device access remain future work.

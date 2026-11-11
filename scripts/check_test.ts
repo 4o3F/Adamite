@@ -449,6 +449,8 @@ type ReusableWorkflowJob = WorkflowJobSettings & {
 type WorkflowJob = StepsJob | ReusableWorkflowJob;
 type Workflow = {
   on: Record<string, unknown>;
+  permissions?: Record<string, string>;
+  concurrency?: { group: string; "cancel-in-progress": boolean };
   jobs: Record<string, WorkflowJob>;
 };
 
@@ -484,14 +486,16 @@ function assertOneLineRuns(workflow: Workflow, path: string): void {
 }
 
 Deno.test("every workflow's ordinary jobs use cargo/deno run one-liners", async () => {
-  let count = 0;
+  const paths: string[] = [];
   for await (const entry of Deno.readDir(".github/workflows")) {
     if (!entry.isFile || !/\.ya?ml$/.test(entry.name)) continue;
     const path = `.github/workflows/${entry.name}`;
     assertOneLineRuns(await readWorkflow(path), path);
-    count++;
+    paths.push(path);
   }
-  assert(count > 0, "no workflow files checked");
+  for (const name of ["ci", "release"]) {
+    assert(paths.includes(`.github/workflows/${name}.yml`), `${name} workflow was not checked`);
+  }
 });
 
 Deno.test("run rules allow reusable-workflow jobs and still check ordinary jobs beside them", () => {
@@ -641,6 +645,65 @@ Deno.test("CI is callable, packages both runners after tests and uploads their a
       equal(setups, [setup], `${name} must install pinned Deno before packaging`);
     }
   }
+});
+
+Deno.test("release checks CI before publishing its merged artifacts without rebuilding", async () => {
+  const release = await readWorkflow(".github/workflows/release.yml");
+  const ci = await readWorkflow(".github/workflows/ci.yml");
+  equal(release.on, { push: { tags: ["v*"] } }, "release tag filter");
+  equal(release.permissions, ci.permissions, "release and CI default permissions");
+  equal(release.permissions, { contents: "read" }, "read-only default");
+  assert(!("concurrency" in release), "release cannot share the called CI's concurrency group");
+  for (const [name, job] of Object.entries(release.jobs)) {
+    assert(!("concurrency" in job), `${name} must not acquire a caller concurrency group`);
+  }
+  equal(ci.concurrency, {
+    group: "${{ github.workflow }}-${{ github.ref }}",
+    "cancel-in-progress": true,
+  }, "only the called CI acquires the concurrency group");
+  equal(Object.keys(release.jobs).sort(), ["ci", "publish"], "release job inventory");
+  equal(release.jobs.ci, {
+    uses: "./.github/workflows/ci.yml",
+    permissions: { contents: "read" },
+  }, "reusable CI job");
+
+  const check = stepsJob(ci, "check");
+  const checkout = check.steps.find((step) => step.uses?.startsWith("actions/checkout@"));
+  const setup = check.steps.find((step) => step.uses?.startsWith("denoland/setup-deno@"));
+  const upload = check.steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
+  assert(checkout && setup && upload, "CI must check out, install Deno and upload artifacts");
+  const uploadMajor = upload.uses?.match(/^actions\/upload-artifact@(v\d+)$/)?.[1];
+  assert(uploadMajor, "upload-artifact must be pinned to a major");
+  equal(upload.with?.name, "adamite-${{ runner.os }}", "artifact names selected by adamite-*");
+  equal(
+    check.strategy?.matrix.os,
+    ["ubuntu-latest", "windows-latest"],
+    "Linux and Windows artifacts",
+  );
+
+  const publish = stepsJob(release, "publish");
+  equal(publish.needs, "ci", "publication waits for all CI jobs");
+  equal(publish.permissions, { contents: "write" }, "publication permissions");
+  equal(publish["runs-on"], "ubuntu-latest", "publication runner");
+  const ghRelease = publish.steps.at(-1);
+  assert(
+    ghRelease && /^softprops\/action-gh-release@v\d+$/.test(ghRelease.uses ?? ""),
+    "gh-release must be pinned to a major",
+  );
+  equal(publish.steps, [
+    checkout,
+    setup,
+    { run: "deno task release-check ${{ github.ref_name }}" },
+    {
+      uses: `actions/download-artifact@${uploadMajor}`,
+      with: { pattern: "adamite-*", "merge-multiple": true, path: "dist/" },
+    },
+    {
+      uses: ghRelease.uses,
+      with: { files: "dist/*", fail_on_unmatched_files: true },
+    },
+  ], "checkout, identical Deno setup, tag validation, merged downloads and publication only");
+  assertOneLineRuns(release, ".github/workflows/release.yml");
 });
 
 Deno.test("Deno tasks permit both corpus paths without broadening executable access", async () => {
