@@ -1,12 +1,26 @@
 # adamite-tui
 
-`adamite-tui` is a read-only terminal browser for an existing `adamite_core::scan::ScanOutput`. The [CLI](../adamite-cli/README.md) loads sources, resolves paths and launches it with `adamite browse <SOURCE> [PATH]`. The library depends on core and shared formatting; source I/O stays with the caller.
+`adamite-tui` provides a read-only terminal browser and a source launcher. The [CLI](../adamite-cli/README.md) loads sources, resolves paths and launches the browser with `adamite browse <SOURCE> [PATH]`. The library depends on core and shared formatting; source I/O stays with the caller.
 
 ## Public API
 
 - `Browser::new(output: &ScanOutput, start: NodeId) -> Browser<'_>` borrows a completed scan and selects the starting directory. Invalid or file identifiers fall back to the root.
 - `Browser::run(self) -> Result<(), TuiError>` initializes the terminal, draws views and reads input until quit, then restores the terminal. Restoration is attempted after partial initialization and after every event-loop result. A loop error takes precedence over a restoration error; ratatui's restoration panic hook is retained.
 - `TuiError` is a non-exhaustive error enum. `TuiError::Io { operation, source }` identifies the failed terminal operation and preserves the underlying `std::io::Error`.
+- `Launcher::new(sources: S) -> Launcher<S>` accepts a `Sources` implementation and lists its initial entries. `run(self) -> Result<(), TuiError>` uses the same terminal initialization and restoration as Browser, shows Home, polls jobs and browses completed scans.
+- `Sources::entries(&mut self) -> Vec<Entry>` supplies ordered rows. `start(&mut self, entry: &Entry, rescan: bool) -> Box<dyn ScanJob>` opens the row, scanning a drive when needed or when `rescan` is true. `open_path(&mut self, path: &str) -> Box<dyn ScanJob>` opens a typed image or snapshot path. Providers own filesystem access, elevation and worker behavior; starting and polling jobs should return promptly.
+- `Entry` is `Drive { letter: char, label: String, capacity: u64, snapshot: Option<SnapshotInfo> }` or `Snapshot(SnapshotInfo)`. `SnapshotInfo` has public `name: String`, `path: String`, `modified: Option<SystemTime>` and `error: Option<String>` fields. The path string identifies the source to the provider and can preserve a display representation of a native path.
+- `ScanJob::poll(&mut self) -> JobState` returns `Running { label: String, progress: Option<JobProgress> }`, `Done(ScanOutput)` or `Failed(String)`. `JobProgress` has public `phase: String`, `records: u64`, `planned: Option<u64>` and `bytes: u64` fields. An absent progress report retains displayed counters. Snapshot loads use this same interface and may finish on the first poll.
+
+## Home and progress
+
+Home shows drive letters, labels and capacities, with the saved snapshot's age or `not scanned`. Other snapshot rows show their name and modification age, or their listing error. The fixed last row is `Open file…`; an empty list also shows a hint. Ages use the shared, pure `adamite_format::Age::new(modified, now)` formatter: seconds, minutes, hours or days followed by `ago`, and `unknown` for missing or future timestamps.
+
+Use `↑` / `k`, `↓` / `j`, `Home`, `End`, `PgUp` and `PgDn` to select a row. Enter opens a snapshot or scans a drive that has none. On a drive, `r` requests a rescan. Enter on `Open file…` opens the same one-line editor used by the browser; Enter submits the path and Esc cancels. `?` opens Home help; `q` or `Ctrl-C` quits outside input lines.
+
+The progress screen shows the job title, phase, a records gauge when the total is known, bytes read and the byte rate since the preceding report. Unknown totals display text instead of a gauge. While a job runs, the event loop polls input with a 100 ms timeout and redraws without waiting for a key. Esc has no effect; `q` quits and drops the job. The provider controls whether that drop stops the work.
+
+On completion, Launcher owns the moved `ScanOutput` while the browser App borrows it. In this browser, `o` drops the result and returns to a refreshed Home, and `q` quits. A failed job returns to refreshed Home with its message on the status line. A standalone Browser retains its existing controls.
 
 ## Tabs and controls
 

@@ -1319,3 +1319,5 @@ fn vim_up_remains_up_in_extensions_and_grouping_uses_g() -> TestResult {
     assert_eq!(app.input.as_ref().ok_or("input")?.editor.value(), "gk");
     Ok(())
 }
+
+mod launcher;

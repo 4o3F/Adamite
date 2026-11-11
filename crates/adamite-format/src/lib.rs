@@ -1,4 +1,4 @@
-//! Display formatting for byte counts, untrusted terminal text and scan timestamps.
+//! Display formatting for byte counts, untrusted terminal text timestamps and modification ages.
 #![forbid(unsafe_code)]
 #![deny(
     clippy::indexing_slicing,
@@ -15,5 +15,5 @@ mod units;
 
 pub use escape::{Escaped, ExtensionLabel};
 pub use info::{InfoFields, VolumeSerial};
-pub use time::ScanTime;
+pub use time::{Age, ScanTime};
 pub use units::ByteSize;

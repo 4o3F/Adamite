@@ -1,5 +1,6 @@
 use crate::{
     app::{App, Cursor, Tab},
+    input::InputLine,
     queries::Groups,
 };
 use adamite_core::snapshot::{NodeFlags, NodeId, NodeView};
@@ -37,11 +38,7 @@ impl<'a> View<'a> {
             height = frame.area().height
         )
         .entered();
-        if frame.area().width < 40 || frame.area().height < 8 {
-            frame.render_widget(
-                Paragraph::new("terminal too small (minimum 40×8)"),
-                frame.area(),
-            );
+        if too_small(frame) {
             return;
         }
         let [header, tabs, content, prompt, footer] = Layout::vertical([
@@ -116,32 +113,7 @@ impl<'a> View<'a> {
             ),
         }
         if let Some(input) = &self.app.input {
-            let label = input.prompt.label();
-            let label_width = u16::try_from(label.width())
-                .unwrap_or(u16::MAX)
-                .min(prompt.width);
-            let [label_area, editor_area] =
-                Layout::horizontal([Constraint::Length(label_width), Constraint::Fill(1)])
-                    .areas(prompt);
-            frame.render_widget(Paragraph::new(label), label_area);
-            let width = usize::from(editor_area.width.saturating_sub(1));
-            let scroll = input.editor.visual_scroll(width);
-            frame.render_widget(
-                Paragraph::new(input.editor.value())
-                    .scroll((0, u16::try_from(scroll).unwrap_or(u16::MAX))),
-                editor_area,
-            );
-            let cursor = input
-                .editor
-                .visual_cursor()
-                .saturating_sub(scroll)
-                .min(width);
-            frame.set_cursor_position((
-                editor_area
-                    .x
-                    .saturating_add(u16::try_from(cursor).unwrap_or_default()),
-                editor_area.y,
-            ));
+            render_input(frame, prompt, input);
         }
         let status = if let Some(status) = &self.app.status {
             Escaped(status).to_string()
@@ -164,6 +136,12 @@ impl<'a> View<'a> {
         } else {
             "Tab/1–5: tabs  u: scope  b: bytes  ?: help  q: quit".to_owned()
         };
+        let status =
+            if self.app.return_home && self.app.input.is_none() && self.app.status.is_none() {
+                format!("{status}  o: home")
+            } else {
+                status
+            };
         frame.render_widget(Paragraph::new(status), footer);
         if self.app.help {
             self.help(frame);
@@ -191,16 +169,6 @@ impl<'a> View<'a> {
 
     fn size_width(&self) -> u16 {
         if self.app.raw_bytes { 20 } else { 11 }
-    }
-
-    fn row_style(selected: bool) -> Style {
-        if selected {
-            Style::new()
-                .bg(Color::DarkGray)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
-        }
     }
 
     fn files(&self, frame: &mut Frame<'_>, area: Rect, cursor: Cursor, items: &[NodeId]) {
@@ -235,7 +203,7 @@ impl<'a> View<'a> {
                         node.size()
                     }),
                 ])
-                .style(Self::row_style(index == table.cursor.selected)),
+                .style(row_style(index == table.cursor.selected)),
             )
         });
         table.render(frame, area, rows);
@@ -267,7 +235,7 @@ impl<'a> View<'a> {
                 self.size(logical),
                 self.size(allocated),
             ])
-            .style(Self::row_style(index == table.cursor.selected))
+            .style(row_style(index == table.cursor.selected))
         };
         match &self.app.queries.groups {
             Groups::Extensions(stats) => table.render(
@@ -308,29 +276,25 @@ impl<'a> View<'a> {
         let rows = table
             .visible(area, self.app.info_fields())
             .map(|(index, (label, value))| {
-                Row::new([label.to_owned(), value])
-                    .style(Self::row_style(index == table.cursor.selected))
+                Row::new([label.to_owned(), value]).style(row_style(index == table.cursor.selected))
             });
         table.render(frame, area, rows);
     }
 
     fn help(&self, frame: &mut Frame<'_>) {
-        let area = frame
-            .area()
-            .centered(Constraint::Length(40), Constraint::Length(8));
-        frame.render_widget(Clear, area);
-        frame.render_widget(
-            Paragraph::new(concat!(
-                "↑/↓ k/j; PgUp/PgDn; Home/End\n",
-                "Tab/1–5: tabs; Enter/→/l: open\n",
-                "←/h/Backspace: parent; b: raw bytes\n",
-                "Enter: jump; u: scope; f: filter\n",
-                "Ext g: kind; /: search; q/Ctrl-C: quit\n",
-                "?/Esc: close help; Esc: quit",
-            ))
-            .block(Block::bordered().title("Help")),
-            area,
-        );
+        let mut text = concat!(
+            "↑/↓ k/j; PgUp/PgDn; Home/End\n",
+            "Tab/1–5: tabs; Enter/→/l: open\n",
+            "←/h/Backspace: parent; b: raw bytes\n",
+            "Enter: jump; u: scope; f: filter\n",
+            "Ext g: kind; /: search; q/Ctrl-C: quit\n",
+            "?/Esc: close help; Esc: quit",
+        )
+        .to_owned();
+        if self.app.return_home {
+            text.push_str("\no: return to Home");
+        }
+        render_help(frame, &text);
     }
 
     fn tree(&self, frame: &mut Frame<'_>, area: Rect) {
@@ -379,14 +343,80 @@ impl<'a> View<'a> {
     }
 }
 
-struct Rows<'a> {
-    cursor: Cursor,
-    widths: &'a [Constraint],
-    headings: &'a [&'a str],
+pub(crate) fn too_small(frame: &mut Frame<'_>) -> bool {
+    if frame.area().width >= 40 && frame.area().height >= 8 {
+        return false;
+    }
+    frame.render_widget(
+        Paragraph::new("terminal too small (minimum 40×8)"),
+        frame.area(),
+    );
+    true
+}
+
+pub(crate) fn render_input<P: AsRef<str>>(
+    frame: &mut Frame<'_>,
+    prompt: Rect,
+    input: &InputLine<P>,
+) {
+    let label = input.prompt.as_ref();
+    let label_width = u16::try_from(label.width())
+        .unwrap_or(u16::MAX)
+        .min(prompt.width);
+    let [label_area, editor_area] =
+        Layout::horizontal([Constraint::Length(label_width), Constraint::Fill(1)]).areas(prompt);
+    frame.render_widget(Paragraph::new(label), label_area);
+    let width = usize::from(editor_area.width.saturating_sub(1));
+    let scroll = input.editor.visual_scroll(width);
+    frame.render_widget(
+        Paragraph::new(input.editor.value()).scroll((0, u16::try_from(scroll).unwrap_or(u16::MAX))),
+        editor_area,
+    );
+    let cursor = input
+        .editor
+        .visual_cursor()
+        .saturating_sub(scroll)
+        .min(width);
+    frame.set_cursor_position((
+        editor_area
+            .x
+            .saturating_add(u16::try_from(cursor).unwrap_or_default()),
+        editor_area.y,
+    ));
+}
+
+pub(crate) fn render_help(frame: &mut Frame<'_>, text: &str) {
+    let height = u16::try_from(text.lines().count())
+        .unwrap_or(u16::MAX)
+        .saturating_add(2);
+    let area = frame
+        .area()
+        .centered(Constraint::Length(40), Constraint::Length(height));
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(text).block(Block::bordered().title("Help")),
+        area,
+    );
+}
+
+pub(crate) fn row_style(selected: bool) -> Style {
+    if selected {
+        Style::new()
+            .bg(Color::DarkGray)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+    }
+}
+
+pub(crate) struct Rows<'a> {
+    pub(crate) cursor: Cursor,
+    pub(crate) widths: &'a [Constraint],
+    pub(crate) headings: &'a [&'a str],
 }
 
 impl Rows<'_> {
-    fn visible<T>(
+    pub(crate) fn visible<T>(
         &self,
         area: Rect,
         items: impl IntoIterator<Item = T>,
@@ -398,7 +428,7 @@ impl Rows<'_> {
             .take(usize::from(area.height.saturating_sub(1)))
     }
 
-    fn name_width(&self, area: Rect) -> u16 {
+    pub(crate) fn name_width(&self, area: Rect) -> u16 {
         Layout::horizontal(self.widths)
             .spacing(1)
             .split(area)
@@ -406,7 +436,7 @@ impl Rows<'_> {
             .map_or(0, |column| column.width)
     }
 
-    fn render<'a>(
+    pub(crate) fn render<'a>(
         &self,
         frame: &mut Frame<'_>,
         area: Rect,
@@ -454,7 +484,7 @@ impl TreeRow<'_> {
         } else {
             share.to_string()
         };
-        let mut style = View::row_style(selected);
+        let mut style = row_style(selected);
         if flags.contains(NodeFlags::SYNTHETIC) {
             style = style.add_modifier(Modifier::DIM);
         }
@@ -524,12 +554,12 @@ impl fmt::Display for Share {
     }
 }
 
-enum Truncation {
+pub(crate) enum Truncation {
     End,
     Middle,
 }
 
-struct DisplayText;
+pub(crate) struct DisplayText;
 
 impl DisplayText {
     fn prefix(text: &str, width: usize) -> String {
@@ -558,7 +588,7 @@ impl DisplayText {
         result
     }
 
-    fn truncate(text: &str, width: usize, placement: Truncation) -> String {
+    pub(crate) fn truncate(text: &str, width: usize, placement: Truncation) -> String {
         if text.width() <= width {
             return text.to_owned();
         }

@@ -13,6 +13,7 @@ use adamite_format::InfoFields;
 pub(crate) enum Action {
     Continue,
     Quit,
+    Home,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -67,7 +68,7 @@ pub(crate) struct Cursor {
 }
 
 impl Cursor {
-    fn move_to(&mut self, selected: usize, count: usize, page_rows: usize) {
+    pub(crate) fn move_to(&mut self, selected: usize, count: usize, page_rows: usize) {
         self.selected = selected.min(count.saturating_sub(1));
         let page_rows = page_rows.max(1);
         if self.selected < self.scroll {
@@ -78,7 +79,7 @@ impl Cursor {
         self.scroll = self.scroll.min(count.saturating_sub(page_rows));
     }
 
-    fn handle(&mut self, key: Key, count: usize, page_rows: usize) {
+    pub(crate) fn handle(&mut self, key: Key, count: usize, page_rows: usize) {
         let next = match key {
             Key::Up => self.selected.saturating_sub(1),
             Key::Down => self.selected.saturating_add(1),
@@ -136,6 +137,7 @@ pub(crate) struct App<'a> {
     pub(crate) status: Option<String>,
     pub(crate) raw_bytes: bool,
     pub(crate) help: bool,
+    pub(crate) return_home: bool,
     parents: Vec<DirectoryView>,
     page_rows: usize,
 }
@@ -160,6 +162,7 @@ impl<'a> App<'a> {
             status: None,
             raw_bytes: false,
             help: false,
+            return_home: false,
             parents: Vec::new(),
             page_rows: page_rows.max(1),
         }
@@ -184,27 +187,12 @@ impl<'a> App<'a> {
     }
 
     pub(crate) fn handle_terminal(&mut self, event: ratatui::crossterm::event::Event) -> Action {
-        use ratatui::crossterm::event::{Event as TerminalEvent, KeyCode, KeyEventKind};
-        if self.input.is_some()
-            && let TerminalEvent::Key(key) = &event
+        if let Some(input) = &mut self.input
+            && matches!(event, ratatui::crossterm::event::Event::Key(_))
         {
-            if key.kind == KeyEventKind::Release {
-                return Action::Continue;
-            }
-            match key.code {
-                KeyCode::Esc if key.kind == KeyEventKind::Press => {
-                    return self.handle(Event::Key(Key::Escape));
-                }
-                KeyCode::Enter if key.kind == KeyEventKind::Press => {
-                    return self.handle(Event::Key(Key::Enter));
-                }
-                _ => {
-                    if let Some(input) = self.input.as_mut() {
-                        input.handle(&event);
-                    }
-                }
-            }
-            return Action::Continue;
+            return input
+                .handle(&event)
+                .map_or(Action::Continue, |key| self.handle(Event::Key(key)));
         }
         Event::from_terminal(event).map_or(Action::Continue, |event| self.handle(event))
     }
@@ -236,6 +224,7 @@ impl<'a> App<'a> {
         }
         match key {
             Key::Quit => return Action::Quit,
+            Key::ReturnHome if self.return_home && !self.help => return Action::Home,
             Key::Escape if !self.help => return Action::Quit,
             Key::Help | Key::Escape => self.help = !self.help,
             _ if self.help => {}

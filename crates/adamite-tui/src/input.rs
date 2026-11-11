@@ -22,6 +22,8 @@ pub(crate) enum Key {
     Filter,
     Group,
     Search,
+    ReturnHome,
+    Rescan,
 }
 
 impl Key {
@@ -80,6 +82,8 @@ impl Event {
                 KeyCode::Char('?') => Key::Help,
                 KeyCode::Esc => Key::Escape,
                 KeyCode::Char('q') => Key::Quit,
+                KeyCode::Char('o') => Key::ReturnHome,
+                KeyCode::Char('r') => Key::Rescan,
                 _ => return None,
             }
         } else {
@@ -98,8 +102,8 @@ pub(crate) enum Prompt {
     Search,
 }
 
-impl Prompt {
-    pub(crate) fn label(self) -> &'static str {
+impl AsRef<str> for Prompt {
+    fn as_ref(&self) -> &str {
         match self {
             Self::Filter => "Filter: ",
             Self::Search => "Search: ",
@@ -108,21 +112,34 @@ impl Prompt {
 }
 
 #[derive(Debug)]
-pub(crate) struct InputLine {
-    pub(crate) prompt: Prompt,
+pub(crate) struct InputLine<P = Prompt> {
+    pub(crate) prompt: P,
     pub(crate) editor: tui_input::Input,
 }
 
-impl InputLine {
-    pub(crate) fn new(prompt: Prompt, value: String) -> Self {
+impl<P> InputLine<P> {
+    pub(crate) fn new(prompt: P, value: String) -> Self {
         Self {
             prompt,
             editor: tui_input::Input::new(value),
         }
     }
 
-    pub(crate) fn handle(&mut self, event: &event::Event) {
+    pub(crate) fn handle(&mut self, event: &event::Event) -> Option<Key> {
         use tui_input::backend::crossterm::EventHandler;
-        self.editor.handle_event(event);
+        let event::Event::Key(key) = event else {
+            return None;
+        };
+        if key.kind == KeyEventKind::Release {
+            return None;
+        }
+        match key.code {
+            KeyCode::Esc if key.kind == KeyEventKind::Press => Some(Key::Escape),
+            KeyCode::Enter if key.kind == KeyEventKind::Press => Some(Key::Enter),
+            _ => {
+                self.editor.handle_event(event);
+                None
+            }
+        }
     }
 }
