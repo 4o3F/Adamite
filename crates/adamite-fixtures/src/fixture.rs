@@ -20,7 +20,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-/// Image loading, manifest validation or reference MFT reconstruction failed.
+/// Image loading, manifest validation or reference MFT/allocation reconstruction failed.
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 #[non_exhaustive]
@@ -104,10 +104,12 @@ pub enum FixtureError {
         message: &'static str,
     },
 }
-fn record_error(error: RecordError) -> FixtureError {
-    match error {
-        RecordError::Fixup { source } => FixtureError::Fixup { source },
-        source => FixtureError::Record { source },
+impl FixtureError {
+    pub(crate) fn from_record(error: RecordError) -> Self {
+        match error {
+            RecordError::Fixup { source } => Self::Fixup { source },
+            source => Self::Record { source },
+        }
     }
 }
 
@@ -254,7 +256,7 @@ impl ReferenceMft {
                 message: "MFT address overflow",
             })?;
         let mut raw = physical(image, start, u64::from(geometry.file_record_size()))?.to_vec();
-        let record = FileRecord::parse(&mut raw).map_err(record_error)?;
+        let record = FileRecord::parse(&mut raw).map_err(FixtureError::from_record)?;
         ensure!(
             record.header().base_reference().is_null(),
             InvalidSnafu {
@@ -360,7 +362,7 @@ impl ReferenceMft {
                     pending.push(request);
                     continue;
                 };
-                let record = FileRecord::parse(&mut raw).map_err(record_error)?;
+                let record = FileRecord::parse(&mut raw).map_err(FixtureError::from_record)?;
                 ensure!(
                     record.header().sequence() == request.sequence
                         && record.header().base_reference()
@@ -556,6 +558,8 @@ fn read_virtual(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::MappedAllocation;
+    use crate::builders::{AttrBuilder, BootSectorBuilder, NonResidentModel, RecordBuilder};
     use std::{
         error::Error,
         path::PathBuf,
@@ -563,6 +567,106 @@ mod tests {
     };
 
     const MANIFEST: &str = include_str!("../../../tests/fixtures/ntfs/basic-4k.json");
+
+    #[test]
+    fn mapped_allocation_counts_lcn_zero_and_joins_raw_named_segments_before_base()
+    -> Result<(), Box<dyn Error>> {
+        let name = vec![0xd800, 0, 65];
+        let mut first = AttrBuilder::non_resident(
+            0x80,
+            NonResidentModel {
+                highest: 3,
+                mapping_pairs: vec![0x11, 2, 0, 0x01, 2, 0],
+                ..NonResidentModel::default()
+            },
+        );
+        first.name = name.clone();
+        let extension = RecordBuilder {
+            base: FileRef::new(1, 7)?.raw(),
+            attributes: vec![first.build()],
+            ..RecordBuilder::default()
+        };
+        let mut continuation = AttrBuilder::non_resident(
+            0x80,
+            NonResidentModel {
+                lowest: 4,
+                highest: 5,
+                mapping_pairs: vec![0x11, 2, 4, 0],
+                ..NonResidentModel::default()
+            },
+        );
+        continuation.name = name.clone();
+        let mut index = AttrBuilder::non_resident(0xa0, NonResidentModel::default());
+        index.name = name.clone();
+        let mut other_name = AttrBuilder::non_resident(0x80, NonResidentModel::default());
+        other_name.name = vec![0xd801, 0, 65];
+        let resident = AttrBuilder::resident(0x80, vec![1]);
+        let empty = AttrBuilder::non_resident(
+            0xb0,
+            NonResidentModel {
+                highest: -1,
+                sizes: [0; 4],
+                mapping_pairs: vec![0],
+                ..NonResidentModel::default()
+            },
+        );
+        let base = RecordBuilder {
+            attributes: vec![
+                continuation.build(),
+                index.build(),
+                other_name.build(),
+                resident.build(),
+                empty.build(),
+            ],
+            ..RecordBuilder::default()
+        };
+        let deleted = RecordBuilder {
+            flags: 0,
+            attributes: vec![first.build()],
+            ..RecordBuilder::default()
+        };
+        let mut reference = ReferenceMft {
+            geometry: VolumeGeometry::from_boot_sector(&BootSectorBuilder::default().build())?,
+            extents: Vec::new(),
+            mft: [
+                extension.build(),
+                base.build(),
+                deleted.build(),
+                vec![0; 1024],
+            ]
+            .concat(),
+        };
+        let cluster = u64::from(reference.geometry().cluster_size());
+        let allocation = MappedAllocation::from_reference(&reference)?;
+        assert_eq!(allocation.stream_bytes(1, 0x80, &name), Some(4 * cluster));
+        assert_eq!(allocation.stream_bytes(1, 0xa0, &name), Some(cluster));
+        assert_eq!(
+            allocation.stream_bytes(1, 0x80, &[0xd801, 0, 65]),
+            Some(cluster)
+        );
+        assert_eq!(allocation.stream_bytes(1, 0xb0, &[]), Some(0));
+        assert_eq!(allocation.stream_bytes(1, 0x80, &[]), None);
+        assert_eq!(allocation.stream_bytes(0, 0x80, &name), None);
+        assert_eq!(allocation.stream_bytes(2, 0x80, &name), None);
+
+        for (offset, replacement) in [(1024 + 16, 8u16), (1024 + 22, 0u16)] {
+            let original = reference.mft[offset..offset + 2].to_vec();
+            reference.mft[offset..offset + 2].copy_from_slice(&replacement.to_le_bytes());
+            assert!(matches!(
+                MappedAllocation::from_reference(&reference),
+                Err(FixtureError::Invalid {
+                    message: "allocation extension base missing or sequence mismatch"
+                })
+            ));
+            reference.mft[offset..offset + 2].copy_from_slice(&original);
+        }
+        reference.mft[510] ^= 1;
+        assert!(matches!(
+            MappedAllocation::from_reference(&reference),
+            Err(FixtureError::Fixup { .. })
+        ));
+        Ok(())
+    }
 
     #[test]
     fn reference_record_and_extension_headers_precede_fixup_with_preserved_sources()

@@ -4,6 +4,8 @@
 //!
 //! Committed manifests use schema v3: stream type, independently measured allocation/compressed size, metafile entries and filler totals accompany paths, names and metadata. The reader also accepts v2, leaving absent measurements unset. [`builders`] and [`runlist_encoder`] construct independent synthetic input bytes.
 //!
+//! [`MappedAllocation::from_reference`] independently counts mapped bytes across each non-resident stream's segments in a [`ReferenceMft`]. [`MappedAllocation::stream_bytes`] looks up totals by base record, attribute type and raw UTF-16 name, counting physical mappings while excluding holes.
+//!
 //! # Examples
 //!
 //! ```
@@ -26,9 +28,11 @@
 pub mod builders;
 mod fixture;
 mod manifest;
+mod mapped_allocation;
 pub mod runlist_encoder;
 
 pub use fixture::{Fixture, FixtureError, ReferenceMft};
 pub use manifest::{
     Deleted, Entry, EntryKind, Extent, Fill, Geometry, Manifest, Mft, Name, Stream,
 };
+pub use mapped_allocation::MappedAllocation;
