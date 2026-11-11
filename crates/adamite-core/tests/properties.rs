@@ -534,7 +534,7 @@ fn aggregation_invariants(snapshot: &Snapshot) -> TestResult {
         let mut size = view.size();
         let mut alloc = view.alloc();
         let mut files = u32::from(
-            !view.flags().contains(NodeFlags::DIRECTORY)
+            !view.is_dir()
                 && !view.flags().contains(NodeFlags::SYNTHETIC)
                 && !view.flags().contains(NodeFlags::HARDLINK_DUP),
         );

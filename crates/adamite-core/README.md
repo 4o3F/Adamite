@@ -4,6 +4,8 @@
 
 The public API lives under `scan::`, `snapshot::` and `error::`; the crate root exports modules only. Every scan item has one path directly under `scan::`, and its implementation children are private.
 
+`ScanStats::counters()` returns all 26 counter names and values in field order. Names match the snake_case fields; snapshot encoding and display reports use this order. `NodeView::is_dir()` identifies directory entries, including synthetic directories. `NodeFlags::names()` yields the snake_case names of set flags in ascending bit order.
+
 ```text
 src/
   lib.rs            crate docs, attributes and module declarations

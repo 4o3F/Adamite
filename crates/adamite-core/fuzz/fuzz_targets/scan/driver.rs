@@ -172,7 +172,7 @@ fn aggregation(snapshot: &Snapshot) {
         let mut size = node.size();
         let mut alloc = node.alloc();
         let mut files = u32::from(
-            !node.flags().contains(NodeFlags::DIRECTORY)
+            !node.is_dir()
                 && !node.flags().contains(NodeFlags::SYNTHETIC)
                 && !node.flags().contains(NodeFlags::HARDLINK_DUP),
         );

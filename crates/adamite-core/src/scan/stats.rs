@@ -82,3 +82,40 @@ pub struct ScanStats {
     /// Distinct base records grouped as NTFS metadata.
     pub metafiles: u64,
 }
+
+impl ScanStats {
+    /// Returns all 26 counters in declaration order, with their snake_case field names.
+    ///
+    /// This order is also the counter order stored in the Stats section of canonical .adm v1.
+    #[must_use]
+    pub const fn counters(&self) -> [(&'static str, u64); 26] {
+        [
+            ("records_total", self.records_total),
+            ("records_in_use", self.records_in_use),
+            ("base_records", self.base_records),
+            ("extension_records", self.extension_records),
+            ("unused", self.unused),
+            ("deleted", self.deleted),
+            ("baad", self.baad),
+            ("corrupt_records", self.corrupt_records),
+            ("bad_fixup", self.bad_fixup),
+            ("invalid_fixup_metadata", self.invalid_fixup_metadata),
+            ("invalid_signature", self.invalid_signature),
+            ("corrupt_headers", self.corrupt_headers),
+            ("corrupt_attributes", self.corrupt_attributes),
+            ("type_storage_mismatches", self.type_storage_mismatches),
+            ("corrupt_values", self.corrupt_values),
+            ("corrupt_runlists", self.corrupt_runlists),
+            ("out_of_volume_extents", self.out_of_volume_extents),
+            ("invalid_attribute_lists", self.invalid_attribute_lists),
+            ("invalid_file_refs", self.invalid_file_refs),
+            ("invalid_utf16", self.invalid_utf16),
+            ("rejected_extensions", self.rejected_extensions),
+            ("corrupt_streams", self.corrupt_streams),
+            ("orphans", self.orphans),
+            ("cycle_nodes", self.cycle_nodes),
+            ("hardlink_duplicates", self.hardlink_duplicates),
+            ("metafiles", self.metafiles),
+        ]
+    }
+}

@@ -2,7 +2,7 @@ use crate::{
     cli::ScanArgs,
     command::info::Info,
     error::CliError,
-    render::{json::Json, text::SavedText},
+    render::Renderer,
     report::SavedReport,
     save::{PublishMode, SnapshotFile},
     source::Source,
@@ -34,14 +34,6 @@ impl Scan {
         let output = source.load()?;
         let bytes = file.save(&output)?;
         let report = SavedReport::new(&args.source.source, &output, &destination, bytes);
-        if args.source.json {
-            Json(&report).write(stdout)
-        } else {
-            SavedText {
-                report: &report,
-                bytes: args.source.bytes,
-            }
-            .write(stdout)
-        }
+        Renderer::from(&args.source).write(&report, stdout)
     }
 }

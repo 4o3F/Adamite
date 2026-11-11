@@ -1,9 +1,5 @@
 use crate::{
-    cli::SourceArgs,
-    error::CliError,
-    render::{json::Json, text::Text},
-    report::InfoReport,
-    source::Source,
+    cli::SourceArgs, error::CliError, render::Renderer, report::InfoReport, source::Source,
 };
 use adamite_core::scan::ScanOutput;
 use std::io::Write;
@@ -23,14 +19,6 @@ impl Info {
         stdout: &mut impl Write,
     ) -> Result<(), CliError> {
         let report = InfoReport::new(command, &self.0.source, output)?;
-        if self.0.json {
-            Json(&report).write(stdout)
-        } else {
-            Text {
-                report: &report,
-                bytes: self.0.bytes,
-            }
-            .write(stdout)
-        }
+        Renderer::from(&self.0).write(&report, stdout)
     }
 }

@@ -1,5 +1,5 @@
 use crate::error::CliError;
-use adamite_core::snapshot::{NodeFlags, NodeId, Snapshot};
+use adamite_core::snapshot::{NodeId, NodeView, Snapshot};
 
 /// Resolves snapshot paths; #id selects only a direct child of the current directory.
 pub(crate) struct Locator<'a> {
@@ -21,10 +21,7 @@ impl<'a> Locator<'a> {
     }
 
     pub(crate) fn directory(&self, id: NodeId) -> Result<&'a [NodeId], CliError> {
-        if self
-            .snapshot
-            .node(id)
-            .is_some_and(|node| node.flags().contains(NodeFlags::DIRECTORY))
+        if self.snapshot.node(id).is_some_and(NodeView::is_dir)
             && let Some(children) = self.snapshot.children(id)
         {
             return Ok(children);

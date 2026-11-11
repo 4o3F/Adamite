@@ -573,3 +573,19 @@ impl Snapshot {
         Decoder::new(bytes)?.decode()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Reader;
+    use std::error::Error;
+
+    #[test]
+    fn decoded_stats_follow_public_counter_order() -> Result<(), Box<dyn Error>> {
+        let bytes: Vec<_> = (1u64..=26).flat_map(u64::to_le_bytes).collect();
+        let stats = Reader::new(&bytes, 2).stats()?;
+        for ((name, value), expected) in stats.counters().into_iter().zip(1..=26) {
+            assert_eq!(value, expected, "counter {name}");
+        }
+        Ok(())
+    }
+}

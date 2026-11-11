@@ -1,10 +1,17 @@
 use nt_time::FileTime;
 use time::{UtcDateTime, format_description::well_known::Rfc3339};
 
-pub(crate) struct ScanTime(pub(crate) Option<u64>);
+/// An optional FILETIME timestamp rendered as RFC 3339 UTC with seconds precision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ScanTime(
+    /// Raw 100-nanosecond ticks since 1601-01-01, or an absent scan timestamp.
+    pub Option<u64>,
+);
 
 impl ScanTime {
-    pub(crate) fn rfc3339(&self) -> Option<String> {
+    /// Returns UTC text, or None for an absent timestamp or a value outside time's range.
+    #[must_use]
+    pub fn rfc3339(&self) -> Option<String> {
         let datetime = UtcDateTime::try_from(FileTime::new(self.0?)).ok()?;
         datetime.replace_nanosecond(0).ok()?.format(&Rfc3339).ok()
     }

@@ -16,6 +16,16 @@ use std::error::Error;
 
 type TestResult = Result<(), Box<dyn Error>>;
 
+#[test]
+fn flag_names_follow_bit_order_and_cover_known_bits() {
+    let mut flags = NodeFlags::default();
+    assert_eq!(flags.names().count(), 0);
+    flags.insert(NodeFlags::REPARSE);
+    flags.insert(NodeFlags::DIRECTORY);
+    assert_eq!(flags.names().collect::<Vec<_>>(), ["directory", "reparse"]);
+    assert_eq!(NodeFlags::known_bits(), 0xff);
+}
+
 fn entry(record: u64, parent: u64, name: &str, directory: bool) -> EntryRecord {
     EntryRecord {
         file_ref: FileRef::from_raw((7u64 << 48) | record),
@@ -85,7 +95,7 @@ fn snapshot_root_cold_columns_and_volume_context() -> TestResult {
     assert_eq!((node.attrs(), node.mtime(), node.nlink()), (0x20, 123, 2));
     assert_eq!(node.file_ref(), Some(FileRef::from_raw((7u64 << 48) | 5)));
     assert_eq!(node.reparse_tag(), Some(0xa000_000c));
-    assert!(node.flags().contains(NodeFlags::DIRECTORY));
+    assert!(node.is_dir());
     assert_eq!(
         (node.total_size(), node.total_alloc(), node.file_count()),
         (0, 0, 0)

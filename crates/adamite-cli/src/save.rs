@@ -1,5 +1,6 @@
-use crate::{error::CliError, render::escape::Escaped, source::Source};
+use crate::{error::CliError, source::Source};
 use adamite_core::scan::ScanOutput;
+use adamite_format::Escaped;
 use std::{
     ffi::OsString,
     fs::{self, File, OpenOptions},

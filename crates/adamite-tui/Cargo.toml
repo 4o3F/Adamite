@@ -1,0 +1,21 @@
+[package]
+name = "adamite-tui"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+adamite-core = { version = "0.1.0", path = "../adamite-core" }
+adamite-format = { version = "0.1.0", path = "../adamite-format" }
+ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
+snafu.workspace = true
+unicode-width = "0.2.3"
+
+[dev-dependencies]
+adamite-fixtures = { version = "0.1.0", path = "../adamite-fixtures" }
+adamite-io = { version = "0.1.0", path = "../adamite-io" }
+
+[lints]
+workspace = true

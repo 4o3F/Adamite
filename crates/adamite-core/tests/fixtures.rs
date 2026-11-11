@@ -438,7 +438,7 @@ fn add_fill<'a>(
             let name = snapshot.name(id).ok_or("filler name")?;
             assert!(name.starts_with(&fill.name_prefix));
             assert_eq!(name.encode_utf16().count(), fill.name_len);
-            assert!(!view.flags().contains(NodeFlags::DIRECTORY));
+            assert!(!view.is_dir());
             assert!(!view.flags().contains(NodeFlags::HARDLINK_DUP));
             assert!(!view.flags().contains(NodeFlags::SYNTHETIC));
             let sizes = Sizes {

@@ -1,8 +1,9 @@
-use crate::{error::CliError, locate::Locator, render::time::ScanTime};
+use crate::{error::CliError, locate::Locator};
 use adamite_core::{
     scan::{ScanOutput, ScanStats},
-    snapshot::{NodeFlags, NodeId, NodeView, Snapshot},
+    snapshot::{NodeId, Snapshot},
 };
+use adamite_format::ScanTime;
 use serde::{Serialize, Serializer, ser::SerializeMap};
 use std::{borrow::Cow, path::Path};
 
@@ -180,34 +181,14 @@ impl<'a> LsItem<'a> {
             name: snapshot.name(id).ok_or(CliError::InconsistentSnapshot {
                 reason: "missing child name",
             })?,
-            kind: if node.flags().contains(NodeFlags::DIRECTORY) {
-                "dir"
-            } else {
-                "file"
-            },
-            flags: Self::flags(node),
+            kind: if node.is_dir() { "dir" } else { "file" },
+            flags: node.flags().names().collect(),
             size: node.size(),
             alloc: node.alloc(),
             total_size: node.total_size(),
             total_alloc: node.total_alloc(),
             file_count: node.file_count(),
         })
-    }
-
-    fn flags(node: NodeView<'_>) -> Vec<&'static str> {
-        [
-            (NodeFlags::DIRECTORY, "directory"),
-            (NodeFlags::REPARSE, "reparse"),
-            (NodeFlags::SPARSE, "sparse"),
-            (NodeFlags::COMPRESSED, "compressed"),
-            (NodeFlags::HIDDEN, "hidden"),
-            (NodeFlags::SYSTEM, "system"),
-            (NodeFlags::HARDLINK_DUP, "hardlink_dup"),
-            (NodeFlags::SYNTHETIC, "synthetic"),
-        ]
-        .into_iter()
-        .filter_map(|(flag, name)| node.flags().contains(flag).then_some(name))
-        .collect()
     }
 }
 
@@ -321,35 +302,7 @@ impl<'a> SavedReport<'a> {
 
 impl Stats<'_> {
     pub(crate) fn entries(&self) -> [(&'static str, u64); 26] {
-        let stats = self.0;
-        [
-            ("records_total", stats.records_total),
-            ("records_in_use", stats.records_in_use),
-            ("base_records", stats.base_records),
-            ("extension_records", stats.extension_records),
-            ("unused", stats.unused),
-            ("deleted", stats.deleted),
-            ("baad", stats.baad),
-            ("corrupt_records", stats.corrupt_records),
-            ("bad_fixup", stats.bad_fixup),
-            ("invalid_fixup_metadata", stats.invalid_fixup_metadata),
-            ("invalid_signature", stats.invalid_signature),
-            ("corrupt_headers", stats.corrupt_headers),
-            ("corrupt_attributes", stats.corrupt_attributes),
-            ("type_storage_mismatches", stats.type_storage_mismatches),
-            ("corrupt_values", stats.corrupt_values),
-            ("corrupt_runlists", stats.corrupt_runlists),
-            ("out_of_volume_extents", stats.out_of_volume_extents),
-            ("invalid_attribute_lists", stats.invalid_attribute_lists),
-            ("invalid_file_refs", stats.invalid_file_refs),
-            ("invalid_utf16", stats.invalid_utf16),
-            ("rejected_extensions", stats.rejected_extensions),
-            ("corrupt_streams", stats.corrupt_streams),
-            ("orphans", stats.orphans),
-            ("cycle_nodes", stats.cycle_nodes),
-            ("hardlink_duplicates", stats.hardlink_duplicates),
-            ("metafiles", stats.metafiles),
-        ]
+        self.0.counters()
     }
 }
 

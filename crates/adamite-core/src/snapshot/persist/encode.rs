@@ -277,35 +277,8 @@ impl Writer<'_> {
     }
 
     fn stats(&mut self, stats: &ScanStats) -> Result<(), PersistError> {
-        let counters: [u64; format::STATS_COUNT] = [
-            stats.records_total,
-            stats.records_in_use,
-            stats.base_records,
-            stats.extension_records,
-            stats.unused,
-            stats.deleted,
-            stats.baad,
-            stats.corrupt_records,
-            stats.bad_fixup,
-            stats.invalid_fixup_metadata,
-            stats.invalid_signature,
-            stats.corrupt_headers,
-            stats.corrupt_attributes,
-            stats.type_storage_mismatches,
-            stats.corrupt_values,
-            stats.corrupt_runlists,
-            stats.out_of_volume_extents,
-            stats.invalid_attribute_lists,
-            stats.invalid_file_refs,
-            stats.invalid_utf16,
-            stats.rejected_extensions,
-            stats.corrupt_streams,
-            stats.orphans,
-            stats.cycle_nodes,
-            stats.hardlink_duplicates,
-            stats.metafiles,
-        ];
-        for value in counters {
+        let counters: [(&str, u64); format::STATS_COUNT] = stats.counters();
+        for (_, value) in counters {
             self.u64(value)?;
         }
         Ok(())

@@ -137,6 +137,8 @@ Deno.test("normal checks run once without feature flags and keep the no_std buil
         "adamite-io",
         "-p",
         "adamite-cli",
+        "-p",
+        "adamite-tui",
         "--target",
         "x86_64-pc-windows-gnu",
         "--all-targets",

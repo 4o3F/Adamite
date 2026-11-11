@@ -1,5 +1,6 @@
 use adamite_core::snapshot::{NodeId, PersistError, SnapshotError};
 use adamite_io::error::VolumeError;
+use adamite_tui::TuiError;
 use snafu::Snafu;
 use std::{
     collections::TryReserveError,
@@ -10,6 +11,8 @@ use std::{
 
 #[derive(Debug, Snafu)]
 pub(crate) enum CliError {
+    #[snafu(display("cannot browse snapshot"))]
+    Terminal { source: TuiError },
     #[snafu(display("{message}"))]
     Usage { message: &'static str },
     #[snafu(display("path component {component:?} not found in {path:?}"))]
@@ -69,6 +72,9 @@ impl CliError {
     pub(crate) fn exit_code(&self) -> u8 {
         if matches!(self, Self::Usage { .. }) {
             return 2;
+        }
+        if matches!(self, Self::Terminal { .. }) {
+            return 1;
         }
         let mut current: Option<&(dyn Error + 'static)> = Some(self);
         let mut denied = false;

@@ -1,10 +1,4 @@
-use crate::{
-    cli::TopArgs,
-    error::CliError,
-    render::{json::Json, text::TopText},
-    report::TopReport,
-    source::Source,
-};
+use crate::{cli::TopArgs, error::CliError, render::Renderer, report::TopReport, source::Source};
 use std::io::Write;
 
 pub(crate) struct Top(pub(crate) TopArgs);
@@ -14,14 +8,6 @@ impl Top {
         let args = &self.0;
         let output = Source::open(&args.source.source)?.load()?;
         let report = TopReport::new(&args.source.source, &output, args.n)?;
-        if args.source.json {
-            Json(&report).write(stdout)
-        } else {
-            TopText {
-                report: &report,
-                bytes: args.source.bytes,
-            }
-            .write(stdout)
-        }
+        Renderer::from(&args.source).write(&report, stdout)
     }
 }

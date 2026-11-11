@@ -2,7 +2,10 @@ use std::fmt::{self, Write};
 
 /// Displays text with control characters escaped for terminal output.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct Escaped<'a>(pub(crate) &'a str);
+pub struct Escaped<'a>(
+    /// Text whose control characters are escaped as `\u{…}`.
+    pub &'a str,
+);
 
 impl fmt::Display for Escaped<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

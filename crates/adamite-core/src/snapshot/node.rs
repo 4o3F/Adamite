@@ -34,6 +34,30 @@ impl NodeId {
 pub struct NodeFlags(u16);
 
 impl NodeFlags {
+    const NAMES: [(Self, &'static str); 8] = [
+        (Self::DIRECTORY, "directory"),
+        (Self::REPARSE, "reparse"),
+        (Self::SPARSE, "sparse"),
+        (Self::COMPRESSED, "compressed"),
+        (Self::HIDDEN, "hidden"),
+        (Self::SYSTEM, "system"),
+        (Self::HARDLINK_DUP, "hardlink_dup"),
+        (Self::SYNTHETIC, "synthetic"),
+    ];
+
+    /// Iterates the snake_case names of set flags in ascending bit order.
+    pub fn names(self) -> impl Iterator<Item = &'static str> {
+        Self::NAMES
+            .into_iter()
+            .filter_map(move |(flag, name)| self.contains(flag).then_some(name))
+    }
+
+    pub(super) fn known_bits() -> u16 {
+        Self::NAMES
+            .iter()
+            .fold(0, |bits, (flag, _)| bits | flag.raw())
+    }
+
     /// Directory entry.
     pub const DIRECTORY: Self = Self(1 << 0);
     /// Reparse point; its target is not followed.
@@ -87,7 +111,7 @@ const _: () = assert!(std::mem::size_of::<Node>() == 64);
 
 impl Node {
     pub(super) fn has(&self, flag: NodeFlags) -> bool {
-        self.flags & flag.raw() != 0
+        NodeFlags(self.flags).contains(flag)
     }
 
     pub(super) fn is_primary_file(&self) -> bool {
@@ -110,6 +134,12 @@ pub struct NodeView<'a> {
 }
 
 impl NodeView<'_> {
+    /// Reports whether this entry is a directory, including synthetic directories.
+    #[must_use]
+    pub fn is_dir(self) -> bool {
+        self.flags().contains(NodeFlags::DIRECTORY)
+    }
+
     /// Returns the identifier within this snapshot.
     #[must_use]
     pub const fn id(self) -> NodeId {

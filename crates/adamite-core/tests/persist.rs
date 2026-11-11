@@ -11,34 +11,7 @@ use std::path::Path;
 use support::{TestResult, scan, section, tiny_image, u32_at, u64_at};
 
 fn counters(stats: &ScanStats) -> [u64; 26] {
-    [
-        stats.records_total,
-        stats.records_in_use,
-        stats.base_records,
-        stats.extension_records,
-        stats.unused,
-        stats.deleted,
-        stats.baad,
-        stats.corrupt_records,
-        stats.bad_fixup,
-        stats.invalid_fixup_metadata,
-        stats.invalid_signature,
-        stats.corrupt_headers,
-        stats.corrupt_attributes,
-        stats.type_storage_mismatches,
-        stats.corrupt_values,
-        stats.corrupt_runlists,
-        stats.out_of_volume_extents,
-        stats.invalid_attribute_lists,
-        stats.invalid_file_refs,
-        stats.invalid_utf16,
-        stats.rejected_extensions,
-        stats.corrupt_streams,
-        stats.orphans,
-        stats.cycle_nodes,
-        stats.hardlink_duplicates,
-        stats.metafiles,
-    ]
+    stats.counters().map(|(_, value)| value)
 }
 
 fn check_layout(output: &ScanOutput) -> TestResult {

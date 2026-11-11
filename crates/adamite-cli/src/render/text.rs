@@ -1,8 +1,6 @@
-use super::{escape::Escaped, units::Size};
-use crate::{
-    error::CliError,
-    report::{Envelope, ExtReport, InfoReport, LsReport, SavedReport, TopReport},
-};
+use super::Report;
+use crate::report::{Envelope, ExtReport, InfoReport, LsReport, SavedReport, TopReport};
+use adamite_format::{ByteSize, Escaped};
 use std::io::{self, Write};
 
 struct Header<'a>(&'a Envelope<'a>);
@@ -19,202 +17,187 @@ impl Header<'_> {
 }
 
 struct SizeColumn {
-    bytes: bool,
+    raw_bytes: bool,
 }
 
 impl SizeColumn {
     fn width(&self) -> usize {
-        if self.bytes { 20 } else { 12 }
+        if self.raw_bytes { 20 } else { 12 }
     }
 
-    fn value(&self, value: u64) -> String {
-        Size {
+    fn value(&self, value: u64) -> ByteSize {
+        ByteSize {
             value: u128::from(value),
-            bytes: self.bytes,
+            raw_bytes: self.raw_bytes,
         }
-        .to_string()
+    }
+
+    fn write_line(&self, stdout: &mut impl Write, label: &str, value: u64) -> io::Result<()> {
+        writeln!(stdout, "  {label:<24} {}", self.value(value))
     }
 }
 
-pub(crate) struct Text<'a> {
-    pub(crate) report: &'a InfoReport<'a>,
-    pub(crate) bytes: bool,
+struct SizeRow {
+    size: u64,
+    alloc: u64,
+    count: Option<u64>,
+    name: String,
 }
 
-impl Text<'_> {
-    pub(crate) fn write(&self, stdout: &mut impl Write) -> Result<(), CliError> {
-        self.write_info(stdout)
-            .map_err(|source| CliError::Output { source })
-    }
+struct SizeTable<'a> {
+    sizes: [&'a str; 2],
+    count: Option<&'a str>,
+    name: &'a str,
+    column: SizeColumn,
+}
 
-    fn write_info(&self, stdout: &mut impl Write) -> io::Result<()> {
-        let report = self.report;
-        Header(&report.envelope).write(stdout)?;
+impl SizeTable<'_> {
+    fn write(
+        &self,
+        stdout: &mut impl Write,
+        rows: impl IntoIterator<Item = SizeRow>,
+    ) -> io::Result<()> {
+        let [size, alloc] = self.sizes;
+        let width = self.column.width();
+        write!(stdout, "{size:>width$} {alloc:>width$}")?;
+        if let Some(count) = self.count {
+            write!(stdout, " {count:>10}")?;
+        }
+        writeln!(stdout, " {}", self.name)?;
+        for row in rows {
+            // Materialize values so padding applies to the complete formatted unit.
+            write!(
+                stdout,
+                "{:>width$} {:>width$}",
+                self.column.value(row.size).to_string(),
+                self.column.value(row.alloc).to_string()
+            )?;
+            if let Some(count) = row.count {
+                write!(stdout, " {count:>10}")?;
+            }
+            writeln!(stdout, " {}", row.name)?;
+        }
+        Ok(())
+    }
+}
+
+impl Report for InfoReport<'_> {
+    fn write_text(&self, stdout: &mut impl Write, raw_bytes: bool) -> io::Result<()> {
+        Header(&self.envelope).write(stdout)?;
         writeln!(
             stdout,
             "  {:<24} {}",
-            "Volume serial", report.envelope.snapshot.volume_serial
+            "Volume serial", self.envelope.snapshot.volume_serial
         )?;
-        if let Some(label) = report.envelope.snapshot.label {
+        if let Some(label) = self.envelope.snapshot.label {
             writeln!(stdout, "  {:<24} {}", "Label", Escaped(label))?;
         }
-        self.size_line(
-            stdout,
-            "Bytes per sector",
-            u64::from(report.volume.bytes_per_sector),
-        )?;
-        self.size_line(
-            stdout,
-            "Cluster size",
-            u64::from(report.volume.cluster_size),
-        )?;
-        self.size_line(stdout, "Volume size", report.volume.total_bytes)?;
-        if let Some(free) = report.volume.free_bytes {
-            self.size_line(stdout, "Free space", free)?;
+        let column = SizeColumn { raw_bytes };
+        for (label, value) in [
+            ("Bytes per sector", u64::from(self.volume.bytes_per_sector)),
+            ("Cluster size", u64::from(self.volume.cluster_size)),
+            ("Volume size", self.volume.total_bytes),
+        ] {
+            column.write_line(stdout, label, value)?;
         }
-        writeln!(stdout, "  {:<24} {}", "Nodes", report.tree.nodes)?;
-        writeln!(stdout, "  {:<24} {}", "Files", report.tree.files)?;
-        self.size_line(stdout, "Logical size", report.tree.total_size)?;
-        self.size_line(stdout, "Allocated size", report.tree.total_alloc)?;
-        for (key, value) in report.stats.entries() {
+        if let Some(free) = self.volume.free_bytes {
+            column.write_line(stdout, "Free space", free)?;
+        }
+        writeln!(stdout, "  {:<24} {}", "Nodes", self.tree.nodes)?;
+        writeln!(stdout, "  {:<24} {}", "Files", self.tree.files)?;
+        column.write_line(stdout, "Logical size", self.tree.total_size)?;
+        column.write_line(stdout, "Allocated size", self.tree.total_alloc)?;
+        for (key, value) in self.stats.entries() {
             if value != 0 {
                 writeln!(stdout, "  {key:<24} {value}")?;
             }
         }
         Ok(())
     }
+}
 
-    fn size_line(&self, stdout: &mut impl Write, label: &str, value: u64) -> io::Result<()> {
-        writeln!(
+impl Report for TopReport<'_> {
+    fn write_text(&self, stdout: &mut impl Write, raw_bytes: bool) -> io::Result<()> {
+        Header(&self.envelope).write(stdout)?;
+        SizeTable {
+            sizes: ["Size", "Alloc"],
+            count: None,
+            name: "Path",
+            column: SizeColumn { raw_bytes },
+        }
+        .write(
             stdout,
-            "  {label:<24} {}",
-            Size {
-                value: u128::from(value),
-                bytes: self.bytes
-            }
+            self.items.iter().map(|item| SizeRow {
+                size: item.size,
+                alloc: item.alloc,
+                count: None,
+                name: Escaped(&item.path).to_string(),
+            }),
         )
     }
 }
 
-pub(crate) struct TopText<'a> {
-    pub(crate) report: &'a TopReport<'a>,
-    pub(crate) bytes: bool,
-}
-
-impl TopText<'_> {
-    pub(crate) fn write(&self, stdout: &mut impl Write) -> Result<(), CliError> {
-        self.write_rows(stdout)
-            .map_err(|source| CliError::Output { source })
-    }
-
-    fn write_rows(&self, stdout: &mut impl Write) -> io::Result<()> {
-        Header(&self.report.envelope).write(stdout)?;
-        let column = SizeColumn { bytes: self.bytes };
-        let width = column.width();
-        writeln!(stdout, "{:>width$} {:>width$} Path", "Size", "Alloc")?;
-        for item in &self.report.items {
-            writeln!(
-                stdout,
-                "{:>width$} {:>width$} {}",
-                column.value(item.size),
-                column.value(item.alloc),
-                Escaped(&item.path)
-            )?;
+impl Report for ExtReport<'_> {
+    fn write_text(&self, stdout: &mut impl Write, raw_bytes: bool) -> io::Result<()> {
+        Header(&self.envelope).write(stdout)?;
+        SizeTable {
+            sizes: ["Size", "Alloc"],
+            count: Some("Count"),
+            name: "Extension",
+            column: SizeColumn { raw_bytes },
         }
-        Ok(())
-    }
-}
-
-pub(crate) struct ExtText<'a> {
-    pub(crate) report: &'a ExtReport<'a>,
-    pub(crate) bytes: bool,
-}
-
-impl ExtText<'_> {
-    pub(crate) fn write(&self, stdout: &mut impl Write) -> Result<(), CliError> {
-        self.write_rows(stdout)
-            .map_err(|source| CliError::Output { source })
-    }
-
-    fn write_rows(&self, stdout: &mut impl Write) -> io::Result<()> {
-        Header(&self.report.envelope).write(stdout)?;
-        let column = SizeColumn { bytes: self.bytes };
-        let width = column.width();
-        writeln!(
+        .write(
             stdout,
-            "{:>width$} {:>width$} {:>10} Extension",
-            "Size", "Alloc", "Count"
-        )?;
-        for item in &self.report.items {
-            let extension = if item.extension.is_empty() {
-                "(none)"
-            } else {
-                item.extension
-            };
-            writeln!(
-                stdout,
-                "{:>width$} {:>width$} {:>10} {}",
-                column.value(item.total_size),
-                column.value(item.total_alloc),
-                item.count,
-                Escaped(extension)
-            )?;
+            self.items.iter().map(|item| SizeRow {
+                size: item.total_size,
+                alloc: item.total_alloc,
+                count: Some(item.count),
+                name: Escaped(if item.extension.is_empty() {
+                    "(none)"
+                } else {
+                    item.extension
+                })
+                .to_string(),
+            }),
+        )
+    }
+}
+
+impl Report for LsReport<'_> {
+    fn write_text(&self, stdout: &mut impl Write, raw_bytes: bool) -> io::Result<()> {
+        Header(&self.envelope).write(stdout)?;
+        SizeTable {
+            sizes: ["Total size", "Total alloc"],
+            count: Some("Files"),
+            name: "Name",
+            column: SizeColumn { raw_bytes },
         }
-        Ok(())
-    }
-}
-
-pub(crate) struct LsText<'a> {
-    pub(crate) report: &'a LsReport<'a>,
-    pub(crate) bytes: bool,
-}
-
-impl LsText<'_> {
-    pub(crate) fn write(&self, stdout: &mut impl Write) -> Result<(), CliError> {
-        self.write_rows(stdout)
-            .map_err(|source| CliError::Output { source })
-    }
-
-    fn write_rows(&self, stdout: &mut impl Write) -> io::Result<()> {
-        Header(&self.report.envelope).write(stdout)?;
-        let column = SizeColumn { bytes: self.bytes };
-        let width = column.width();
-        writeln!(
+        .write(
             stdout,
-            "{:>width$} {:>width$} {:>10} Name",
-            "Total size", "Total alloc", "Files"
-        )?;
-        for item in &self.report.items {
-            let suffix = if item.kind == "dir" { "/" } else { "" };
-            writeln!(
-                stdout,
-                "{:>width$} {:>width$} {:>10} {}{suffix}",
-                column.value(item.total_size),
-                column.value(item.total_alloc),
-                item.file_count,
-                Escaped(item.name)
-            )?;
-        }
-        Ok(())
+            self.items.iter().map(|item| SizeRow {
+                size: item.total_size,
+                alloc: item.total_alloc,
+                count: Some(u64::from(item.file_count)),
+                name: format!(
+                    "{}{}",
+                    Escaped(item.name),
+                    if item.kind == "dir" { "/" } else { "" }
+                ),
+            }),
+        )
     }
 }
 
-pub(crate) struct SavedText<'a> {
-    pub(crate) report: &'a SavedReport<'a>,
-    pub(crate) bytes: bool,
-}
-
-impl SavedText<'_> {
-    pub(crate) fn write(&self, stdout: &mut impl Write) -> Result<(), CliError> {
+impl Report for SavedReport<'_> {
+    fn write_text(&self, stdout: &mut impl Write, raw_bytes: bool) -> io::Result<()> {
         writeln!(
             stdout,
             "saved {} ({})",
-            Escaped(&self.report.saved),
-            Size {
-                value: self.report.bytes as u128,
-                bytes: self.bytes
-            },
+            Escaped(&self.saved),
+            ByteSize {
+                value: self.bytes as u128,
+                raw_bytes
+            }
         )
-        .map_err(|source| CliError::Output { source })
     }
 }

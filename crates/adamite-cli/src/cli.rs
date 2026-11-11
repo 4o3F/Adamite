@@ -1,5 +1,5 @@
 use crate::{
-    command::{ext::Ext, info::Info, ls::Ls, scan::Scan, top::Top},
+    command::{browse::Browse, ext::Ext, info::Info, ls::Ls, scan::Scan, top::Top},
     error::CliError,
 };
 use clap::{
@@ -32,6 +32,8 @@ pub(crate) enum Command {
     Ext(ExtArgs),
     /// List a directory's children in size order.
     Ls(LsArgs),
+    /// Browse the directory tree interactively in a terminal.
+    Browse(BrowseArgs),
 }
 
 #[derive(Debug, Args)]
@@ -116,6 +118,15 @@ pub(crate) struct LsArgs {
     pub(crate) limit: usize,
 }
 
+#[derive(Debug, Args)]
+pub(crate) struct BrowseArgs {
+    /// Image path, snapshot path, or Windows drive such as C:.
+    pub(crate) source: PathBuf,
+    /// Directory path; #id selects a direct child by its decimal NodeId.
+    #[arg(default_value = "/")]
+    pub(crate) path: String,
+}
+
 impl Command {
     pub(crate) fn run(self, stdout: &mut impl Write) -> Result<(), CliError> {
         match self {
@@ -124,6 +135,7 @@ impl Command {
             Self::Top(args) => Top(args).run(stdout),
             Self::Ext(args) => Ext(args).run(stdout),
             Self::Ls(args) => Ls(args).run(stdout),
+            Self::Browse(args) => Browse(args).run(),
         }
     }
 }

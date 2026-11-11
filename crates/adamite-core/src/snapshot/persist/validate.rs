@@ -254,14 +254,7 @@ impl<'a> Validator<'a> {
     }
 
     fn flags(&self) -> Result<(), PersistError> {
-        let known = NodeFlags::DIRECTORY.raw()
-            | NodeFlags::REPARSE.raw()
-            | NodeFlags::SPARSE.raw()
-            | NodeFlags::COMPRESSED.raw()
-            | NodeFlags::HIDDEN.raw()
-            | NodeFlags::SYSTEM.raw()
-            | NodeFlags::HARDLINK_DUP.raw()
-            | NodeFlags::SYNTHETIC.raw();
+        let known = NodeFlags::known_bits();
         for (index, node) in self.data.nodes.iter().enumerate() {
             if node.flags & !known != 0 {
                 return Err(self.invalid(index, "unknown node flag bits"));

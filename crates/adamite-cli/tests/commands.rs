@@ -2,7 +2,7 @@
 
 use adamite_core::{
     scan::{ScanConfig, ScanContext, ScanOutput, ScanStats},
-    snapshot::{NodeFlags, NodeId, Snapshot},
+    snapshot::{NodeId, Snapshot},
 };
 use adamite_fixtures::{
     Fixture,
@@ -149,34 +149,13 @@ impl Drop for Case {
 }
 
 fn expected_stats(stats: &ScanStats) -> Value {
-    json!({
-        "records_total": stats.records_total,
-        "records_in_use": stats.records_in_use,
-        "base_records": stats.base_records,
-        "extension_records": stats.extension_records,
-        "unused": stats.unused,
-        "deleted": stats.deleted,
-        "baad": stats.baad,
-        "corrupt_records": stats.corrupt_records,
-        "bad_fixup": stats.bad_fixup,
-        "invalid_fixup_metadata": stats.invalid_fixup_metadata,
-        "invalid_signature": stats.invalid_signature,
-        "corrupt_headers": stats.corrupt_headers,
-        "corrupt_attributes": stats.corrupt_attributes,
-        "type_storage_mismatches": stats.type_storage_mismatches,
-        "corrupt_values": stats.corrupt_values,
-        "corrupt_runlists": stats.corrupt_runlists,
-        "out_of_volume_extents": stats.out_of_volume_extents,
-        "invalid_attribute_lists": stats.invalid_attribute_lists,
-        "invalid_file_refs": stats.invalid_file_refs,
-        "invalid_utf16": stats.invalid_utf16,
-        "rejected_extensions": stats.rejected_extensions,
-        "corrupt_streams": stats.corrupt_streams,
-        "orphans": stats.orphans,
-        "cycle_nodes": stats.cycle_nodes,
-        "hardlink_duplicates": stats.hardlink_duplicates,
-        "metafiles": stats.metafiles,
-    })
+    Value::Object(
+        stats
+            .counters()
+            .into_iter()
+            .map(|(name, value)| (name.to_owned(), Value::from(value)))
+            .collect(),
+    )
 }
 
 fn without_source_and_time(mut value: Value) -> Value {
@@ -189,22 +168,10 @@ fn without_source_and_time(mut value: Value) -> Value {
 
 fn expected_ls_item(snapshot: &Snapshot, id: NodeId) -> Value {
     let node = snapshot.node(id).expect("child node");
-    let flags: Vec<_> = [
-        (NodeFlags::DIRECTORY, "directory"),
-        (NodeFlags::REPARSE, "reparse"),
-        (NodeFlags::SPARSE, "sparse"),
-        (NodeFlags::COMPRESSED, "compressed"),
-        (NodeFlags::HIDDEN, "hidden"),
-        (NodeFlags::SYSTEM, "system"),
-        (NodeFlags::HARDLINK_DUP, "hardlink_dup"),
-        (NodeFlags::SYNTHETIC, "synthetic"),
-    ]
-    .into_iter()
-    .filter_map(|(flag, name)| node.flags().contains(flag).then_some(name))
-    .collect();
+    let flags: Vec<_> = node.flags().names().collect();
     json!({
         "name": snapshot.name(id).expect("child name"),
-        "kind": if node.flags().contains(NodeFlags::DIRECTORY) { "dir" } else { "file" },
+        "kind": if node.is_dir() { "dir" } else { "file" },
         "flags": flags,
         "size": node.size(), "alloc": node.alloc(),
         "total_size": node.total_size(), "total_alloc": node.total_alloc(),
@@ -427,12 +394,7 @@ fn query_json_matches_in_process_contents_and_order() -> TestResult {
         }
         for raw in 0..snapshot.len() {
             let id = NodeId::from_raw(u32::try_from(raw)?);
-            if !snapshot
-                .node(id)
-                .ok_or("node")?
-                .flags()
-                .contains(NodeFlags::DIRECTORY)
-            {
+            if !snapshot.node(id).ok_or("node")?.is_dir() {
                 continue;
             }
             let path = snapshot.path(id)?.ok_or("directory path")?;
@@ -1229,6 +1191,9 @@ fn clap_usage_help_and_version() -> TestResult {
         vec!["scan", "unused", "--force"],
         vec!["info"],
         vec!["--json"],
+        vec!["browse", "--json"],
+        vec!["browse", "unused", "--json"],
+        vec!["browse", "unused", "--bytes"],
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_adamite"))
             .args(&args)
@@ -1247,6 +1212,7 @@ fn clap_usage_help_and_version() -> TestResult {
         vec!["--help"],
         vec!["info", "--help"],
         vec!["scan", "--help"],
+        vec!["browse", "--help"],
         vec!["--version"],
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_adamite"))
@@ -1262,6 +1228,28 @@ fn clap_usage_help_and_version() -> TestResult {
                 "Usage:"
             }),
             "{text}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn browse_requires_terminal_stdout_before_loading_or_scanning() -> TestResult {
+    let case = Case::new("browse-pipe", "basic-4k")?;
+    let saved = case.snapshot("saved.adm")?;
+    for source in [&case.image, &saved, &case.directory.join("missing.img")] {
+        let output = case.command("browse", source, &[]);
+        assert_eq!(output.status.code(), Some(2), "{output:?}");
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8(output.stderr)?;
+        assert!(
+            stderr.contains("requires standard output to be a terminal"),
+            "{stderr}"
+        );
+        assert!(!stderr.contains("scanning"), "{stderr}");
+        assert!(
+            !stderr.contains("caused by:"),
+            "source must not be opened: {stderr}"
         );
     }
     Ok(())
