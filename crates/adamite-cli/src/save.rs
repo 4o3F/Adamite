@@ -1,6 +1,7 @@
 use crate::{error::CliError, source::Source};
 use adamite_core::scan::ScanOutput;
 use adamite_format::Escaped;
+use adamite_io::snapshot::{SnapshotIoError, SnapshotWriter};
 use std::{
     ffi::OsString,
     fs::{self, File, OpenOptions},
@@ -70,21 +71,25 @@ impl SnapshotFile {
     /// Encodes, writes, synchronizes and closes the temporary file before publishing it.
     pub(crate) fn save(&self, output: &ScanOutput) -> Result<usize, CliError> {
         let _entered = tracing::info_span!("snapshot_save").entered();
-        let bytes = output.to_bytes().map_err(|source| CliError::Persist {
-            operation: "encode",
-            path: self.path.clone(),
-            source,
-        })?;
-        let length = bytes.len();
         let (mut temporary, mut file) = self.create_temporary()?;
-        let written = file.write_all(&bytes);
-        drop(bytes);
-        let result = written.and_then(|()| file.sync_all());
+        let written = SnapshotWriter::write(output, &mut file);
+        let result = written.and_then(|length| {
+            file.sync_all().map_err(SnapshotIoError::from)?;
+            Ok(length)
+        });
         drop(file);
-        result.map_err(|source| CliError::Io {
-            operation: "write and sync snapshot",
-            path: temporary.path.clone(),
-            source,
+        let length = result.map_err(|error| match error {
+            SnapshotIoError::Persist { source } => CliError::Persist {
+                operation: "encode",
+                path: self.path.clone(),
+                source,
+            },
+            SnapshotIoError::Io { source } => CliError::Io {
+                operation: "write and sync snapshot",
+                path: temporary.path.clone(),
+                source,
+            },
+            other => self.io_error("write and sync snapshot", io::Error::other(other)),
         })?;
         match self.mode {
             PublishMode::NoClobber => {

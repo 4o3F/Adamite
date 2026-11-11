@@ -1,6 +1,6 @@
 use adamite_core::{
     scan::ScanOutput,
-    snapshot::{NodeId, Snapshot},
+    snapshot::{NodeId, PersistError, Snapshot, SnapshotDecoder},
 };
 use std::hint::black_box;
 
@@ -17,7 +17,14 @@ pub(super) fn exercise(bytes: &[u8]) -> bool {
 }
 
 fn check(bytes: &[u8]) -> bool {
-    let Ok(output) = ScanOutput::from_bytes(bytes) else {
+    let result = ScanOutput::from_bytes(bytes);
+    let streamed = BlockInput::decode(bytes);
+    match (&result, &streamed) {
+        (Ok(expected), Ok(actual)) => assert_eq!(expected, actual),
+        (Err(expected), Err(actual)) => assert_eq!(format!("{expected:?}"), format!("{actual:?}")),
+        _ => panic!("slice and streaming decoding disagree"),
+    }
+    let Ok(output) = result else {
         return false;
     };
     visit(&output.snapshot);
@@ -88,5 +95,39 @@ fn visit(snapshot: &Snapshot) {
             stat.total_size(),
             stat.total_alloc(),
         ));
+    }
+}
+
+struct BlockInput<'a> {
+    bytes: &'a [u8],
+}
+
+impl BlockInput<'_> {
+    fn read(&mut self, target: &mut [u8]) -> Result<(), PersistError> {
+        for chunk in target.chunks_mut(7) {
+            let bytes = self
+                .bytes
+                .get(..chunk.len())
+                .ok_or(PersistError::Truncated {
+                    needed: chunk.len(),
+                    available: self.bytes.len(),
+                })?;
+            chunk.copy_from_slice(bytes);
+            self.bytes = self
+                .bytes
+                .get(chunk.len()..)
+                .ok_or(PersistError::Overflow {
+                    operation: "fuzz input",
+                })?;
+        }
+        Ok(())
+    }
+
+    fn decode(bytes: &[u8]) -> Result<ScanOutput, PersistError> {
+        let mut first = BlockInput { bytes };
+        let decoder = SnapshotDecoder::verify(bytes.len(), |target| first.read(target))?;
+        let mut second = BlockInput { bytes };
+        let (snapshot, stats) = decoder.decode(|target| second.read(target))?;
+        Ok(ScanOutput { snapshot, stats })
     }
 }

@@ -1,12 +1,12 @@
 //! Synthetic production-path scan and persistence resource measurements.
 
-use adamite_core::scan::ScanOutput;
 use adamite_fixtures::{SyntheticConfig, SyntheticVolume};
 use adamite_io::{
     driver::SyncDriver,
     error::VolumeError,
     limits::ScanProfile,
     reader::{ImageReader, VolumeReader},
+    snapshot::{SnapshotReader, SnapshotWriter},
 };
 use adamite_profile::{ChromeProfile, CountingAllocator, SpanRecorder, SpanSummary};
 use clap::Parser;
@@ -185,10 +185,11 @@ impl Bench {
         let snapshot_heap = ALLOCATOR.current();
         let nodes = output.snapshot.len();
         drop(scan);
-        let bytes = output.to_bytes()?;
+        let mut temporary = NamedTempFile::new_in(&self.output_dir)?;
+        SnapshotWriter::write(&output, temporary.as_file_mut())?;
         // Match save followed by load: the original scan output is released before decoding.
         drop(output);
-        let decoded = ScanOutput::from_bytes(&bytes)?;
+        let decoded = SnapshotReader::read(temporary.as_file_mut())?;
         std::hint::black_box(&decoded);
         let elapsed = started.elapsed();
         drop(case);
@@ -199,7 +200,7 @@ impl Bench {
             .ok_or("missing overall span")?;
         if let Some(path) = &self.snapshot_dir {
             fs::create_dir_all(path)?;
-            fs::write(path.join(format!("{used}.adm")), &bytes)?;
+            fs::copy(temporary.path(), path.join(format!("{used}.adm")))?;
         }
         if self.json {
             let scan = Self::stage(&summaries, "bench_scan")?;
@@ -211,6 +212,8 @@ impl Bench {
                     "nodes": nodes,
                     "scan_peak_heap_bytes": scan.heap_peak,
                     "snapshot_heap_bytes": snapshot_heap,
+                    "persist_encode_peak_heap_bytes": Self::stage(&summaries, "persist_encode")?.heap_peak,
+                    "persist_decode_peak_heap_bytes": Self::stage(&summaries, "persist_decode")?.heap_peak,
                 })
             );
             drop(profile);

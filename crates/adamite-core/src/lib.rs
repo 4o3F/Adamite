@@ -1,6 +1,6 @@
 //! Single-threaded NTFS scans from caller-supplied bytes into immutable snapshots and diagnostic counters.
 //!
-//! [`scan::Scanner::step`] emits volume-relative [`scan::ReadRequest`] values; [`scan::Scanner::feed`] copies exact responses. Core performs no I/O, defines no reader trait or callback, and starts no threads or timers. The caller owns reads, waiting and optional [`scan::ScanContext`] metadata.
+//! [`scan::Scanner::step`] emits volume-relative [`scan::ReadRequest`] values; [`scan::Scanner::feed`] copies exact responses. Core performs no I/O and starts no threads or timers. Snapshot persistence accepts sequential bytes through a caller-supplied copy callback. The caller owns reads, waiting and optional [`scan::ScanContext`] metadata.
 //!
 //! [`scan::ScanConfig::default`] selects one outstanding request and 1 MiB chunks. Valid chunks are multiples of 512 from 512 bytes to 16 MiB; cap must be positive and cap × chunk must fit `usize`. Responses may arrive in any order, but slots stay occupied until consumed in virtual order. Transport storage is bounded separately from metadata storage, which grows with the scan.
 //!

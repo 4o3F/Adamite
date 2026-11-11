@@ -60,13 +60,13 @@ Each milestone ends with one reviewed commit, `deno task check` green and CI gre
 
 ### M5 — Streaming `.adm`
 
-- [ ] Implement D7; report peak memory for `scan -o` and `info <file>.adm` on 1M records.
+- [x] Implement D7; report peak memory for `scan -o` and `info <file>.adm` on 1M records.
 
 ## Acceptance criteria
 
-- [ ] On the 1M in-use reference volume, scan peak requested heap ≤ 500 MB and `scan -o` / `info` add no full-file buffer.
-- [ ] With the default profile, reads never exceed 256 MiB/s averaged over any second; `--profile max` restores unthrottled reads.
-- [ ] Snapshot contents, the golden `.adm`, corpora and all oracles are unchanged.
+- [x] On the 1M in-use reference volume, scan peak requested heap ≤ 500 MB and `scan -o` / `info` add no full-file buffer.
+- [x] With the default profile, reads never exceed 256 MiB/s averaged over any second; `--profile max` restores unthrottled reads.
+- [x] Snapshot contents, the golden `.adm`, corpora and all oracles are unchanged.
 - [ ] `adamite --trace-chrome trace.json scan <source>` writes a trace showing every D2 stage with duration and heap, on Linux images and a Windows drive.
 - [ ] `deno task check` (with the budget test) and CI pass; ARCHITECTURE §5/§7 and READMEs describe the self-imposed limits and profiling.
 

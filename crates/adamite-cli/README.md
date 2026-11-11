@@ -95,7 +95,7 @@ adamite scan volume.img --profile max
 
 ## Saving snapshots
 
-`scan -o` encodes the completed scan, creates a same-directory temporary file named `.<file>.<pid>-<n>.tmp` with exclusive creation (up to 16 collision retries), writes and synchronizes it, then closes it before publication. Without `--force`, existing destinations are rejected before scanning. Directories and outputs resolving to the source image are also rejected.
+`scan -o` creates a same-directory temporary file named `.<file>.<pid>-<n>.tmp` with exclusive creation (up to 16 collision retries), streams the completed scan through the shared `adamite-io` adapter, patches the header CRC, synchronizes it, then closes it before publication. Encoding uses at most 1 MiB scratch. Snapshot loading uses two sequential passes and a fixed 1 MiB read buffer: verification first, then decoding into final columns and snapshot validation. Without `--force`, existing destinations are rejected before scanning. Directories and outputs resolving to the source image are also rejected.
 
 Without `--force`, publication creates a hard link to the completed temporary file and removes the temporary name. This refuses a destination created concurrently. Filesystems without hard-link support return `UnsupportedNoClobber` and suggest `--force`. With `--force`, rename replaces the destination without deleting it first. Cleanup is attempted on failure; a failed temporary-name removal after successful hard-link publication emits a warning and is retried on drop.
 

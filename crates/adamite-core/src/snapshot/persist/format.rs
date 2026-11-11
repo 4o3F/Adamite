@@ -108,42 +108,74 @@ impl<'a> Writer<'a> {
         self.cursor = offset;
         Ok(())
     }
+}
 
-    pub(super) fn optional<T: Copy>(
-        &mut self,
-        values: &[Option<T>],
-        mut write: impl FnMut(&mut Self, Option<T>) -> Result<(), PersistError>,
-    ) -> Result<(), PersistError> {
-        for chunk in values.chunks(8) {
-            let bitmap = chunk.iter().enumerate().fold(0u8, |bits, (bit, value)| {
-                bits | (u8::from(value.is_some()) << bit)
-            });
-            self.u8(bitmap)?;
+#[derive(Debug, Clone)]
+pub(super) struct Crc32 {
+    hasher: crc32fast::Hasher,
+    position: usize,
+}
+impl Crc32 {
+    pub(super) fn new() -> Self {
+        Self {
+            hasher: crc32fast::Hasher::new(),
+            position: 0,
         }
-        self.pad_to(Self::align_up(self.cursor, 8)?)?;
-        for &value in values {
-            write(self, value)?;
+    }
+    pub(super) fn update(&mut self, bytes: &[u8]) -> Result<(), PersistError> {
+        let end = self
+            .position
+            .checked_add(bytes.len())
+            .ok_or(PersistError::Overflow {
+                operation: "checksum position",
+            })?;
+        let prefix = 32usize.saturating_sub(self.position).min(bytes.len());
+        self.hasher
+            .update(bytes.get(..prefix).ok_or(PersistError::Overflow {
+                operation: "checksum prefix",
+            })?);
+        let zero_end = 36usize.saturating_sub(self.position).min(bytes.len());
+        if zero_end > prefix {
+            let len = zero_end.checked_sub(prefix).ok_or(PersistError::Overflow {
+                operation: "checksum slot",
+            })?;
+            self.hasher
+                .update([0u8; 4].get(..len).ok_or(PersistError::Overflow {
+                    operation: "checksum slot",
+                })?);
         }
+        self.hasher.update(
+            bytes
+                .get(zero_end.max(prefix)..)
+                .ok_or(PersistError::Overflow {
+                    operation: "checksum suffix",
+                })?,
+        );
+        self.position = end;
         Ok(())
+    }
+    pub(super) fn finish(self) -> u32 {
+        self.hasher.finalize()
     }
 }
 
-pub(super) struct Crc32;
+#[cfg(test)]
+mod tests {
+    use super::Crc32;
+    use std::error::Error;
 
-impl Crc32 {
-    pub(super) fn checksum(bytes: &[u8]) -> Result<u32, PersistError> {
-        let prefix = bytes.get(..32).ok_or(PersistError::Truncated {
-            needed: 36,
-            available: bytes.len(),
-        })?;
-        let suffix = bytes.get(36..).ok_or(PersistError::Truncated {
-            needed: 36,
-            available: bytes.len(),
-        })?;
-        let mut hasher = crc32fast::Hasher::new();
-        hasher.update(prefix);
-        hasher.update(&[0; 4]);
-        hasher.update(suffix);
-        Ok(hasher.finalize())
+    #[test]
+    fn incremental_crc_matches_one_shot_with_split_checksum_slot() -> Result<(), Box<dyn Error>> {
+        let bytes: Vec<u8> = (0u8..=255).cycle().take(12_345).collect();
+        let mut zeroed = bytes.clone();
+        zeroed.get_mut(32..36).ok_or("missing checksum")?.fill(0);
+        for size in [1, 7, 4096, bytes.len()] {
+            let mut crc = Crc32::new();
+            for block in bytes.chunks(size) {
+                crc.update(block)?;
+            }
+            assert_eq!(crc.finish(), crc32fast::hash(&zeroed), "block size {size}");
+        }
+        Ok(())
     }
 }

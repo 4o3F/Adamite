@@ -1,6 +1,6 @@
 # adamite-core
 
-`adamite-core` scans caller-supplied NTFS bytes into an immutable `snapshot::Snapshot` and `scan::ScanStats`. It uses `std`, forbids unsafe code and depends on `adamite-ntfs`, crc32fast, snafu and tracing. It performs no I/O, defines no reader trait or callback, and starts no threads or timers.
+`adamite-core` scans caller-supplied NTFS bytes into an immutable `snapshot::Snapshot` and `scan::ScanStats`. It uses `std`, forbids unsafe code and depends on `adamite-ntfs`, crc32fast, snafu and tracing. It performs no I/O and starts no threads or timers. Persistence accepts a caller-supplied sequential byte-copy callback; file access and seeking stay in `adamite-io`.
 
 The public API lives under `scan::`, `snapshot::` and `error::`; the crate root exports modules only. Every scan item has one path directly under `scan::`, and its implementation children are private.
 
@@ -50,6 +50,8 @@ Self logical size is unnamed DATA; ADS logical bytes are separate. Allocation in
 ## Persistence
 
 `scan::ScanOutput::to_bytes(&self)` returns `Result<Vec<u8>, snapshot::PersistError>`; `ScanOutput::from_bytes(&[u8])` returns `Result<ScanOutput, snapshot::PersistError>`. Both preserve the complete snapshot, caller context and scan counters. `ScanOutput::ADM_MAGIC` exposes the eight-byte signature for identifying snapshot files before decoding. The codec lives in private `snapshot/persist/`; callers own file reads and writes.
+
+Both convenience methods use the bounded codec: `ScanOutput::encoder()` returns `snapshot::SnapshotEncoder`, which emits chunks of at most 1 MiB and exposes the final CRC patch after completion. Labels and name pools are borrowed; integer columns use reusable scratch. `snapshot::SnapshotDecoder::verify(file_len, copy)` verifies the first sequential pass before column allocation; after rewinding the unchanged source, `decode(copy)` reads the second pass into final storage. The fallible callback fills each requested byte slice in order and preserves caller errors through `From<PersistError>`. Shared file adapters are `adamite_io::snapshot::{SnapshotWriter, SnapshotReader}`.
 
 Canonical `.adm` v1 uses little-endian fields, a 64-byte header with version, lengths and whole-file CRC-32, a 13-entry section table and 8-byte-aligned sections. Optional columns store a presence bitmap followed by a full value array. Accepted bytes re-encode identically.
 

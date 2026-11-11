@@ -14,63 +14,76 @@ use adamite_ntfs::{
     record::reference::FileRef,
 };
 
-struct Reader<'a> {
-    bytes: &'a [u8],
+struct Reader<R, E> {
+    read: R,
+    available: usize,
+    error: std::marker::PhantomData<E>,
     cursor: usize,
     section: u32,
 }
 
-impl<'a> Reader<'a> {
-    fn new(bytes: &'a [u8], section: u32) -> Self {
+impl<R, E> Reader<R, E>
+where
+    R: FnMut(&mut [u8]) -> Result<(), E>,
+    E: From<PersistError>,
+{
+    fn new(read: R, available: usize, section: u32) -> Self {
         Self {
-            bytes,
+            read,
+            available,
+            error: std::marker::PhantomData,
             cursor: 0,
             section,
         }
     }
 
-    fn take(&mut self, len: usize) -> Result<&'a [u8], PersistError> {
-        let end = self.cursor.checked_add(len).ok_or(PersistError::Overflow {
-            operation: "read end",
-        })?;
-        let value = self
-            .bytes
-            .get(self.cursor..end)
-            .ok_or(PersistError::Truncated {
-                needed: end,
-                available: self.bytes.len(),
+    fn read_exact(&mut self, bytes: &mut [u8]) -> Result<(), E> {
+        let end = self
+            .cursor
+            .checked_add(bytes.len())
+            .ok_or(PersistError::Overflow {
+                operation: "read end",
             })?;
+        if end > self.available {
+            return Err(PersistError::Truncated {
+                needed: end,
+                available: self.available,
+            }
+            .into());
+        }
+        (self.read)(bytes)?;
         self.cursor = end;
-        Ok(value)
+        Ok(())
     }
 
-    fn array<const N: usize>(&mut self) -> Result<[u8; N], PersistError> {
+    fn array<const N: usize>(&mut self) -> Result<[u8; N], E> {
         let mut value = [0; N];
-        value.copy_from_slice(self.take(N)?);
+        self.read_exact(&mut value)?;
         Ok(value)
     }
 
-    fn u8(&mut self) -> Result<u8, PersistError> {
+    fn skip(&mut self, len: usize) -> Result<(), E> {
+        for _ in 0..len {
+            self.u8()?;
+        }
+        Ok(())
+    }
+
+    fn u8(&mut self) -> Result<u8, E> {
         let [value] = self.array()?;
         Ok(value)
     }
 
-    fn u16(&mut self) -> Result<u16, PersistError> {
+    fn u16(&mut self) -> Result<u16, E> {
         self.array().map(u16::from_le_bytes)
     }
 
-    fn u32(&mut self) -> Result<u32, PersistError> {
+    fn u32(&mut self) -> Result<u32, E> {
         self.array().map(u32::from_le_bytes)
     }
 
-    fn u64(&mut self) -> Result<u64, PersistError> {
+    fn u64(&mut self) -> Result<u64, E> {
         self.array().map(u64::from_le_bytes)
-    }
-
-    fn host(value: u64) -> Result<usize, PersistError> {
-        usize::try_from(value).map_err(|_| PersistError::Overflow {
-            operation: "host length",
-        })
     }
 
     fn invalid(&self, reason: &'static str) -> PersistError {
@@ -80,42 +93,47 @@ impl<'a> Reader<'a> {
         }
     }
 
-    fn zeroes(&mut self, len: usize) -> Result<(), PersistError> {
-        if self.take(len)?.iter().any(|&byte| byte != 0) {
-            return Err(self.invalid("nonzero padding"));
+    fn zeroes(&mut self, len: usize) -> Result<(), E> {
+        if (0..len).try_fold(false, |nonzero, _| {
+            self.u8().map(|byte| nonzero || byte != 0)
+        })? {
+            return Err(self.invalid("nonzero padding").into());
         }
         Ok(())
     }
 
-    fn tag(&mut self) -> Result<bool, PersistError> {
+    fn tag(&mut self) -> Result<bool, E> {
         match self.u8()? {
             0 => Ok(false),
             1 => Ok(true),
-            _ => Err(self.invalid("presence tag is not zero or one")),
+            _ => Err(self.invalid("presence tag is not zero or one").into()),
         }
     }
 
-    fn optional_u64(&mut self) -> Result<Option<u64>, PersistError> {
+    fn optional_u64(&mut self) -> Result<Option<u64>, E> {
         let present = self.tag()?;
         let value = self.u64()?;
         if !present && value != 0 {
-            return Err(self.invalid("nonzero absent payload"));
+            return Err(self.invalid("nonzero absent payload").into());
         }
         Ok(present.then_some(value))
     }
 
-    fn string(&mut self, len: usize) -> Result<String, PersistError> {
-        let text = std::str::from_utf8(self.take(len)?).map_err(|source| PersistError::Utf8 {
-            section: self.section,
-            source,
-        })?;
-        let mut owned = String::new();
-        owned.try_reserve_exact(text.len())?;
-        owned.push_str(text);
-        Ok(owned)
+    fn string(&mut self, len: usize) -> Result<String, E> {
+        let mut bytes = Vec::new();
+        bytes.try_reserve_exact(len).map_err(PersistError::from)?;
+        bytes.resize(len, 0);
+        self.read_exact(&mut bytes)?;
+        String::from_utf8(bytes).map_err(|error| {
+            PersistError::Utf8 {
+                section: self.section,
+                source: error.utf8_error(),
+            }
+            .into()
+        })
     }
 
-    fn volume(&mut self) -> Result<VolumeInfo, PersistError> {
+    fn volume(&mut self) -> Result<VolumeInfo, E> {
         let fields = GeometryFields {
             bytes_per_sector: self.u16()?,
             sectors_per_cluster: self.u32()?,
@@ -129,9 +147,9 @@ impl<'a> Reader<'a> {
         let scanned_at_filetime = self.optional_u64()?;
         let free_bytes = self.optional_u64()?;
         let present = self.tag()?;
-        let len = Self::host(u64::from(self.u32()?))?;
+        let len = Length::host(u64::from(self.u32()?))?;
         if !present && len != 0 {
-            return Err(self.invalid("nonzero absent label length"));
+            return Err(self.invalid("nonzero absent label length").into());
         }
         let label = if present {
             Some(self.string(len)?)
@@ -150,7 +168,7 @@ impl<'a> Reader<'a> {
         })
     }
 
-    fn stats(&mut self) -> Result<ScanStats, PersistError> {
+    fn stats(&mut self) -> Result<ScanStats, E> {
         Ok(ScanStats {
             records_total: self.u64()?,
             records_in_use: self.u64()?,
@@ -181,7 +199,7 @@ impl<'a> Reader<'a> {
         })
     }
 
-    fn node(&mut self) -> Result<Node, PersistError> {
+    fn node(&mut self) -> Result<Node, E> {
         Ok(Node {
             size: self.u64()?,
             alloc: self.u64()?,
@@ -201,27 +219,45 @@ impl<'a> Reader<'a> {
     fn values<T>(
         &mut self,
         count: usize,
-        mut read: impl FnMut(&mut Self) -> Result<T, PersistError>,
-    ) -> Result<Vec<T>, PersistError> {
+        mut read: impl FnMut(&mut Self) -> Result<T, E>,
+    ) -> Result<Vec<T>, E> {
         let mut values = Vec::new();
-        values.try_reserve_exact(count)?;
+        values
+            .try_reserve_exact(count)
+            .map_err(PersistError::from)?;
         for _ in 0..count {
             values.push(read(self)?);
         }
         Ok(values)
     }
 
-    fn optional<T>(
+    fn optional<T: Copy>(
         &mut self,
         count: usize,
-        mut read: impl FnMut(&mut Self) -> Result<(T, bool), PersistError>,
-    ) -> Result<Vec<Option<T>>, PersistError> {
+        marker: T,
+        mut read: impl FnMut(&mut Self) -> Result<(T, bool), E>,
+    ) -> Result<Vec<Option<T>>, E> {
         let bitmap_len = count.checked_add(7).ok_or(PersistError::Overflow {
             operation: "bitmap length",
         })? / 8;
-        let bitmap = self.take(bitmap_len)?;
-        if !count.is_multiple_of(8) && bitmap.last().is_some_and(|byte| byte >> (count % 8) != 0) {
-            return Err(self.invalid("nonzero unused bitmap bits"));
+        let mut values = Vec::new();
+        values
+            .try_reserve_exact(count)
+            .map_err(PersistError::from)?;
+        // Stage presence in the final column until its value array arrives.
+        for _ in 0..bitmap_len {
+            let byte = self.u8()?;
+            let remaining = count
+                .checked_sub(values.len())
+                .ok_or(PersistError::Overflow {
+                    operation: "bitmap remaining",
+                })?;
+            if remaining < 8 && byte >> remaining != 0 {
+                return Err(self.invalid("nonzero unused bitmap bits").into());
+            }
+            for bit in 0..remaining.min(8) {
+                values.push((byte & (1 << bit) != 0).then_some(marker));
+            }
         }
         let padding = Writer::align_up(bitmap_len, 8)?
             .checked_sub(bitmap_len)
@@ -229,53 +265,28 @@ impl<'a> Reader<'a> {
                 operation: "bitmap padding",
             })?;
         self.zeroes(padding)?;
-        let mut values = Vec::new();
-        values.try_reserve_exact(count)?;
-        for index in 0..count {
-            let byte = bitmap
-                .get(index / 8)
-                .ok_or_else(|| self.invalid("missing presence bit"))?;
-            let present = byte & (1 << (index % 8)) != 0;
+        for slot in &mut values {
+            let present = slot.is_some();
             let (value, zero) = read(self)?;
             if !present && !zero {
-                return Err(self.invalid("nonzero absent column value"));
+                return Err(self.invalid("nonzero absent column value").into());
             }
-            values.push(present.then_some(value));
+            *slot = present.then_some(value);
         }
         Ok(values)
     }
+}
 
-    fn extensions(
-        &mut self,
-        count: usize,
-        pool: &'a [u8],
-    ) -> Result<Vec<ExtensionStat>, PersistError> {
-        let mut names = Self::new(pool, SectionKind::ExtNames as u32);
-        let groups = self.values(count, |reader| {
-            let count = reader.u64()?;
-            let total_size = reader.u64()?;
-            let total_alloc = reader.u64()?;
-            let offset = Self::host(u64::from(reader.u32()?))?;
-            let len = Self::host(u64::from(reader.u32()?))?;
-            if offset != names.cursor {
-                return Err(reader.invalid("extension names are not contiguous"));
-            }
-            let extension = names.string(len)?;
-            Ok(ExtensionStat {
-                extension,
-                count,
-                total_size,
-                total_alloc,
-            })
-        })?;
-        if names.cursor != pool.len() {
-            return Err(self.invalid("extension names do not cover pool"));
-        }
-        Ok(groups)
+struct Length;
+impl Length {
+    fn host(value: u64) -> Result<usize, PersistError> {
+        usize::try_from(value).map_err(|_| PersistError::Overflow {
+            operation: "host length",
+        })
     }
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 struct Section {
     kind: u32,
     offset: usize,
@@ -299,24 +310,36 @@ impl Section {
             })
     }
 
-    fn reader(self, bytes: &[u8]) -> Result<Reader<'_>, PersistError> {
+    fn validate_length(self, volume: &[u8], file_len: usize) -> Result<(), PersistError> {
         let end = self.end()?;
-        let bytes = bytes.get(self.offset..end).ok_or(PersistError::Truncated {
-            needed: end,
-            available: bytes.len(),
-        })?;
-        Ok(Reader::new(bytes, self.kind))
-    }
-
-    fn validate_length(self, bytes: &[u8]) -> Result<(), PersistError> {
-        let mut reader = self.reader(bytes)?;
+        if end > file_len {
+            return Err(PersistError::Truncated {
+                needed: end,
+                available: file_len,
+            });
+        }
+        let mut slice = volume;
+        let mut reader = Reader::new(
+            |target: &mut [u8]| -> Result<(), PersistError> {
+                let chunk = slice.get(..target.len()).ok_or(PersistError::Overflow {
+                    operation: "volume prefix",
+                })?;
+                target.copy_from_slice(chunk);
+                slice = slice.get(target.len()..).ok_or(PersistError::Overflow {
+                    operation: "volume prefix",
+                })?;
+                Ok(())
+            },
+            volume.len(),
+            self.kind,
+        );
         let width = match self.kind {
             1 => {
                 if self.count != 1 || self.len < format::VOLUME_FIXED_LEN {
                     return Err(self.invalid("invalid volume count or length"));
                 }
-                reader.take(65)?;
-                let label_len = Reader::host(u64::from(reader.u32()?))?;
+                reader.skip(65)?;
+                let label_len = Length::host(u64::from(reader.u32()?))?;
                 let expected = format::VOLUME_FIXED_LEN.checked_add(label_len).ok_or(
                     PersistError::Overflow {
                         operation: "volume length",
@@ -365,63 +388,99 @@ impl Section {
     }
 }
 
-struct Decoder<'a> {
-    bytes: &'a [u8],
+/// Validated file layout for a second sequential pass over the same bytes.
+#[derive(Debug)]
+pub struct SnapshotDecoder {
+    file_len: usize,
     sections: [Section; format::SECTION_COUNT],
 }
 
-impl<'a> Decoder<'a> {
-    fn new(bytes: &'a [u8]) -> Result<Self, PersistError> {
+impl SnapshotDecoder {
+    /// Verifies the header, table, padding and whole-file CRC without allocating columns.
+    ///
+    /// `read` supplies consecutive bytes from the start of a file of `file_len` bytes.
+    /// The caller must provide the same immutable bytes for the decoding pass.
+    ///
+    /// # Errors
+    /// Returns the existing format errors or an error supplied by the caller.
+    pub fn verify<E: From<PersistError>>(
+        file_len: usize,
+        mut read: impl FnMut(&mut [u8]) -> Result<(), E>,
+    ) -> Result<Self, E> {
+        let mut metadata = [0u8; format::TABLE_END];
+        let available = file_len.min(metadata.len());
+        let bytes = metadata
+            .get_mut(..available)
+            .ok_or(PersistError::Overflow {
+                operation: "metadata range",
+            })?;
+        read(bytes)?;
         if bytes.get(..format::MAGIC.len()) != Some(format::MAGIC.as_slice()) {
-            return Err(PersistError::BadMagic);
+            return Err(PersistError::BadMagic.into());
         }
         if bytes.len() < format::HEADER_LEN {
             return Err(PersistError::Truncated {
                 needed: format::HEADER_LEN,
-                available: bytes.len(),
-            });
+                available: file_len,
+            }
+            .into());
         }
-        let mut header = Reader::new(bytes, 0);
-        header.take(format::MAGIC.len())?;
+        let mut input = SliceInput::new(bytes);
+        let mut header = Reader::new(|target| input.read(target), available, 0);
+        header.skip(format::MAGIC.len())?;
         let version = header.u32()?;
         if version != format::VERSION {
-            return Err(PersistError::UnsupportedVersion { version });
+            return Err(PersistError::UnsupportedVersion { version }.into());
         }
-        if Reader::host(u64::from(header.u32()?))? != format::HEADER_LEN {
+        if Length::host(u64::from(header.u32()?))? != format::HEADER_LEN {
             return Err(PersistError::InvalidHeader {
                 reason: "header length is not 64",
-            });
+            }
+            .into());
         }
-        let file_len = Reader::host(header.u64()?)?;
-        if Reader::host(u64::from(header.u32()?))? != format::SECTION_COUNT {
+        let declared_len = Length::host(header.u64()?)?;
+        if Length::host(u64::from(header.u32()?))? != format::SECTION_COUNT {
             return Err(PersistError::InvalidHeader {
                 reason: "section count is not 13",
-            });
+            }
+            .into());
         }
         if header.u32()? != 0 {
             return Err(PersistError::InvalidHeader {
                 reason: "nonzero header flags",
-            });
+            }
+            .into());
         }
         let expected = header.u32()?;
-        if header.take(28)?.iter().any(|&byte| byte != 0) {
+        if header.array::<28>()?.iter().any(|&byte| byte != 0) {
             return Err(PersistError::InvalidHeader {
                 reason: "nonzero reserved header bytes",
-            });
+            }
+            .into());
         }
-        if file_len > bytes.len() {
+        if declared_len > file_len {
             return Err(PersistError::Truncated {
-                needed: file_len,
-                available: bytes.len(),
-            });
+                needed: declared_len,
+                available: file_len,
+            }
+            .into());
         }
-        if file_len < bytes.len() {
+        if declared_len < file_len {
             return Err(PersistError::InvalidHeader {
                 reason: "trailing bytes after file length",
-            });
+            }
+            .into());
         }
         let mut sections = [Section::default(); format::SECTION_COUNT];
         let mut previous_end = format::TABLE_END;
+        let mut crc = Crc32::new();
+        crc.update(bytes)?;
+        let mut scratch = Vec::new();
+        scratch
+            .try_reserve_exact(1 << 20)
+            .map_err(PersistError::from)?;
+        scratch.resize(1 << 20, 0);
+        let mut position = available;
         for (index, section) in sections.iter_mut().enumerate() {
             let kind = header.u32()?;
             let expected_kind = u32::try_from(index)
@@ -433,49 +492,107 @@ impl<'a> Decoder<'a> {
             if kind != expected_kind {
                 return Err(PersistError::InvalidSectionTable {
                     reason: "section kinds are not 1 through 13 in order",
-                });
+                }
+                .into());
             }
             if header.u32()? != 0 {
                 return Err(PersistError::InvalidSectionTable {
                     reason: "nonzero section flags",
-                });
+                }
+                .into());
             }
             *section = Section {
                 kind,
-                offset: Reader::host(header.u64()?)?,
-                len: Reader::host(header.u64()?)?,
-                count: Reader::host(header.u64()?)?,
+                offset: Length::host(header.u64()?)?,
+                len: Length::host(header.u64()?)?,
+                count: Length::host(header.u64()?)?,
             };
             if section.offset != Writer::align_up(previous_end, 8)? {
                 return Err(PersistError::InvalidSectionTable {
                     reason: "noncanonical section placement",
-                });
+                }
+                .into());
             }
-            let padding =
-                bytes
-                    .get(previous_end..section.offset)
-                    .ok_or(PersistError::Truncated {
-                        needed: section.offset,
-                        available: bytes.len(),
+            let padding_len =
+                section
+                    .offset
+                    .checked_sub(previous_end)
+                    .ok_or(PersistError::Overflow {
+                        operation: "section padding",
                     })?;
+            if section.offset > file_len {
+                return Err(PersistError::Truncated {
+                    needed: section.offset,
+                    available: file_len,
+                }
+                .into());
+            }
+            let padding = scratch
+                .get_mut(..padding_len)
+                .ok_or(PersistError::Overflow {
+                    operation: "padding buffer",
+                })?;
+            read(padding)?;
+            crc.update(padding)?;
+            position = position
+                .checked_add(padding_len)
+                .ok_or(PersistError::Overflow {
+                    operation: "stream position",
+                })?;
             if padding.iter().any(|&byte| byte != 0) {
                 return Err(PersistError::InvalidSectionTable {
                     reason: "nonzero section padding",
-                });
+                }
+                .into());
             }
-            section.validate_length(bytes)?;
+            let end = section.end()?;
+            if end > file_len {
+                return Err(PersistError::Truncated {
+                    needed: end,
+                    available: file_len,
+                }
+                .into());
+            }
+            let mut volume = [0u8; format::VOLUME_FIXED_LEN];
+            if section.kind == 1 && section.len >= format::VOLUME_FIXED_LEN && section.count == 1 {
+                read(&mut volume)?;
+                crc.update(&volume)?;
+                position = position
+                    .checked_add(volume.len())
+                    .ok_or(PersistError::Overflow {
+                        operation: "stream position",
+                    })?;
+            }
+            section.validate_length(&volume, file_len)?;
+            while position < end {
+                let len = end
+                    .checked_sub(position)
+                    .ok_or(PersistError::Overflow {
+                        operation: "stream remaining",
+                    })?
+                    .min(scratch.len());
+                let chunk = scratch.get_mut(..len).ok_or(PersistError::Overflow {
+                    operation: "verification buffer",
+                })?;
+                read(chunk)?;
+                crc.update(chunk)?;
+                position = position.checked_add(len).ok_or(PersistError::Overflow {
+                    operation: "stream position",
+                })?;
+            }
             previous_end = section.end()?;
         }
         if previous_end != file_len {
             return Err(PersistError::InvalidSectionTable {
                 reason: "last section does not end at file length",
-            });
+            }
+            .into());
         }
-        let actual = Crc32::checksum(bytes)?;
+        let actual = crc.finish();
         if actual != expected {
-            return Err(PersistError::ChecksumMismatch { expected, actual });
+            return Err(PersistError::ChecksumMismatch { expected, actual }.into());
         }
-        Ok(Self { bytes, sections })
+        Ok(Self { file_len, sections })
     }
 
     fn section(&self, kind: SectionKind) -> Result<Section, PersistError> {
@@ -493,50 +610,169 @@ impl<'a> Decoder<'a> {
             })
     }
 
-    fn reader(&self, kind: SectionKind) -> Result<Reader<'a>, PersistError> {
-        self.section(kind)?.reader(self.bytes)
-    }
-
-    fn values<T>(
+    fn reader<'a, R, E>(
         &self,
+        read: &'a mut R,
+        position: &mut usize,
         kind: SectionKind,
-        read: impl FnMut(&mut Reader<'a>) -> Result<T, PersistError>,
-    ) -> Result<Vec<T>, PersistError> {
-        self.reader(kind)?.values(self.section(kind)?.count, read)
+    ) -> Result<Reader<&'a mut R, E>, E>
+    where
+        R: FnMut(&mut [u8]) -> Result<(), E>,
+        E: From<PersistError>,
+    {
+        let section = self.section(kind)?;
+        let padding = section
+            .offset
+            .checked_sub(*position)
+            .ok_or(PersistError::Overflow {
+                operation: "section padding",
+            })?;
+        for _ in 0..padding {
+            read(&mut [0u8; 1])?;
+        }
+        *position = section.end()?;
+        Ok(Reader::new(read, section.len, section.kind))
     }
 
-    fn decode(self) -> Result<(Snapshot, ScanStats), PersistError> {
-        let volume = self.reader(SectionKind::Volume)?.volume()?;
-        let stats = self.reader(SectionKind::Stats)?.stats()?;
-        let nodes = self.values(SectionKind::Nodes, Reader::node)?;
-        let names = self.values(SectionKind::Names, Reader::u8)?;
-        let children = self.values(SectionKind::Children, |reader| {
-            reader.u32().map(NodeId::from_raw)
-        })?;
-        let ads_size = self.values(SectionKind::AdsSize, Reader::u64)?;
-        let file_refs = self.reader(SectionKind::FileRefs)?.optional(
-            self.section(SectionKind::FileRefs)?.count,
-            |reader| {
-                let value = reader.u64()?;
-                Ok((FileRef::from_raw(value), value == 0))
-            },
-        )?;
-        let attrs = self.values(SectionKind::Attrs, Reader::u32)?;
-        let nlink = self.values(SectionKind::Nlink, Reader::u16)?;
-        let reparse_tags = self.reader(SectionKind::ReparseTags)?.optional(
-            self.section(SectionKind::ReparseTags)?.count,
-            |reader| {
-                let value = reader.u32()?;
+    /// Decodes a second sequential pass into final column storage and validates its invariants.
+    ///
+    /// # Errors
+    /// Returns value, allocation and snapshot validation errors, or caller read errors.
+    pub fn decode<E: From<PersistError>>(
+        self,
+        mut read: impl FnMut(&mut [u8]) -> Result<(), E>,
+    ) -> Result<(Snapshot, ScanStats), E> {
+        let mut input = Reader::new(&mut read, self.file_len, 0);
+        input.skip(format::TABLE_END)?;
+        let mut position = format::TABLE_END;
+        let volume = self
+            .reader(&mut read, &mut position, SectionKind::Volume)?
+            .volume()?;
+        let stats = self
+            .reader(&mut read, &mut position, SectionKind::Stats)?
+            .stats()?;
+        let nodes = self
+            .reader(&mut read, &mut position, SectionKind::Nodes)?
+            .values(self.section(SectionKind::Nodes)?.count, Reader::node)?;
+        let names = self
+            .reader(&mut read, &mut position, SectionKind::Names)?
+            .values(self.section(SectionKind::Names)?.count, Reader::u8)?;
+        let children = self
+            .reader(&mut read, &mut position, SectionKind::Children)?
+            .values(self.section(SectionKind::Children)?.count, |r| {
+                r.u32().map(NodeId::from_raw)
+            })?;
+        let ads_size = self
+            .reader(&mut read, &mut position, SectionKind::AdsSize)?
+            .values(self.section(SectionKind::AdsSize)?.count, Reader::u64)?;
+        let file_refs = self
+            .reader(&mut read, &mut position, SectionKind::FileRefs)?
+            .optional(
+                self.section(SectionKind::FileRefs)?.count,
+                FileRef::from_raw(0),
+                |r| {
+                    let value = r.u64()?;
+                    Ok((FileRef::from_raw(value), value == 0))
+                },
+            )?;
+        let attrs = self
+            .reader(&mut read, &mut position, SectionKind::Attrs)?
+            .values(self.section(SectionKind::Attrs)?.count, Reader::u32)?;
+        let nlink = self
+            .reader(&mut read, &mut position, SectionKind::Nlink)?
+            .values(self.section(SectionKind::Nlink)?.count, Reader::u16)?;
+        let reparse_tags = self
+            .reader(&mut read, &mut position, SectionKind::ReparseTags)?
+            .optional(self.section(SectionKind::ReparseTags)?.count, 0, |r| {
+                let value = r.u32()?;
                 Ok((value, value == 0))
-            },
-        )?;
-        let top_files = self.values(SectionKind::TopFiles, |reader| {
-            reader.u32().map(NodeId::from_raw)
-        })?;
-        let ext_stats = self.reader(SectionKind::ExtStats)?.extensions(
-            self.section(SectionKind::ExtStats)?.count,
-            self.reader(SectionKind::ExtNames)?.bytes,
-        )?;
+            })?;
+        let top_files = self
+            .reader(&mut read, &mut position, SectionKind::TopFiles)?
+            .values(self.section(SectionKind::TopFiles)?.count, |r| {
+                r.u32().map(NodeId::from_raw)
+            })?;
+        let mut extension_offset = 0usize;
+        // Report name-table errors in group order, interleaved with UTF-8 validation.
+        let mut extension_error = None;
+        let pool_len = self.section(SectionKind::ExtNames)?.len;
+        let mut ext_stats = self
+            .reader(&mut read, &mut position, SectionKind::ExtStats)?
+            .values(self.section(SectionKind::ExtStats)?.count, |r| {
+                let count = r.u64()?;
+                let total_size = r.u64()?;
+                let total_alloc = r.u64()?;
+                let offset = Length::host(u64::from(r.u32()?))?;
+                let len = Length::host(u64::from(r.u32()?))?;
+                if extension_error.is_none() && offset != extension_offset {
+                    extension_error = Some((
+                        extension_offset,
+                        r.invalid("extension names are not contiguous"),
+                    ));
+                }
+                let end = match extension_offset.checked_add(len) {
+                    Some(end) => end,
+                    None => {
+                        if extension_error.is_none() {
+                            extension_error = Some((
+                                extension_offset,
+                                PersistError::Overflow {
+                                    operation: "read end",
+                                },
+                            ));
+                        }
+                        extension_offset
+                    }
+                };
+                if extension_error.is_none() && end > pool_len {
+                    extension_error = Some((
+                        extension_offset,
+                        PersistError::Truncated {
+                            needed: end,
+                            available: pool_len,
+                        },
+                    ));
+                }
+                extension_offset = end;
+                let mut extension = String::new();
+                if extension_error.is_none() {
+                    extension
+                        .try_reserve_exact(len)
+                        .map_err(PersistError::from)?;
+                    for _ in 0..len {
+                        extension.push('\0');
+                    }
+                }
+                Ok(ExtensionStat {
+                    extension,
+                    count,
+                    total_size,
+                    total_alloc,
+                })
+            })?;
+        let mut pool = self.reader(&mut read, &mut position, SectionKind::ExtNames)?;
+        for group in &mut ext_stats {
+            if extension_error
+                .as_ref()
+                .is_some_and(|(offset, _)| *offset == pool.cursor)
+                && let Some((_, error)) = extension_error.take()
+            {
+                return Err(error.into());
+            }
+            let mut bytes = std::mem::take(&mut group.extension).into_bytes();
+            pool.read_exact(&mut bytes)?;
+            group.extension = String::from_utf8(bytes).map_err(|error| PersistError::Utf8 {
+                section: SectionKind::ExtNames as u32,
+                source: error.utf8_error(),
+            })?;
+        }
+        if pool.cursor != pool_len {
+            return Err(PersistError::InvalidSection {
+                section: SectionKind::ExtStats as u32,
+                reason: "extension names do not cover pool",
+            }
+            .into());
+        }
         let data = SnapshotStorage {
             nodes,
             names,
@@ -568,9 +804,38 @@ impl PersistError {
     }
 }
 
+pub(super) struct SliceInput<'a> {
+    bytes: &'a [u8],
+}
+impl<'a> SliceInput<'a> {
+    pub(super) fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes }
+    }
+    pub(super) fn read(&mut self, target: &mut [u8]) -> Result<(), PersistError> {
+        let bytes = self
+            .bytes
+            .get(..target.len())
+            .ok_or(PersistError::Truncated {
+                needed: target.len(),
+                available: self.bytes.len(),
+            })?;
+        target.copy_from_slice(bytes);
+        self.bytes = self
+            .bytes
+            .get(target.len()..)
+            .ok_or(PersistError::Overflow {
+                operation: "slice input",
+            })?;
+        Ok(())
+    }
+}
+
 impl Snapshot {
     pub(crate) fn from_adm_bytes(bytes: &[u8]) -> Result<(Self, ScanStats), PersistError> {
-        Decoder::new(bytes)?.decode()
+        let mut first = SliceInput::new(bytes);
+        let decoder = SnapshotDecoder::verify(bytes.len(), |target| first.read(target))?;
+        let mut second = SliceInput::new(bytes);
+        decoder.decode(|target| second.read(target))
     }
 }
 
@@ -582,7 +847,8 @@ mod tests {
     #[test]
     fn decoded_stats_follow_public_counter_order() -> Result<(), Box<dyn Error>> {
         let bytes: Vec<_> = (1u64..=26).flat_map(u64::to_le_bytes).collect();
-        let stats = Reader::new(&bytes, 2).stats()?;
+        let mut input = super::SliceInput::new(&bytes);
+        let stats = Reader::new(|target| input.read(target), bytes.len(), 2).stats()?;
         for ((name, value), expected) in stats.counters().into_iter().zip(1..=26) {
             assert_eq!(value, expected, "counter {name}");
         }

@@ -5,6 +5,7 @@ use adamite_io::{
     error::VolumeError,
     limits::ScanLimits,
     reader::{ImageReader, VolumeReader},
+    snapshot::{SnapshotIoError, SnapshotReader},
 };
 use std::{
     fs::File,
@@ -87,25 +88,20 @@ impl Source {
                         source,
                     })?
                     .len();
-                let len = usize::try_from(len)
+                usize::try_from(len)
                     .map_err(|_| CliError::SnapshotLength { path: path.clone() })?;
-                let mut bytes = Vec::new();
-                bytes
-                    .try_reserve_exact(len)
-                    .map_err(|source| CliError::Allocation {
+                SnapshotReader::read(&mut file).map_err(|error| match error {
+                    SnapshotIoError::Persist { source } => CliError::Persist {
+                        operation: "decode",
                         path: path.clone(),
                         source,
-                    })?;
-                bytes.resize(len, 0);
-                file.read_exact(&mut bytes).map_err(|source| CliError::Io {
-                    operation: "read snapshot",
-                    path: path.clone(),
-                    source,
-                })?;
-                ScanOutput::from_bytes(&bytes).map_err(|source| CliError::Persist {
-                    operation: "decode",
-                    path,
-                    source,
+                    },
+                    SnapshotIoError::Io { source } => CliError::Io {
+                        operation: "read snapshot",
+                        path: path.clone(),
+                        source,
+                    },
+                    _ => CliError::SnapshotLength { path },
                 })
             }
             Self::Image { path } => Self::run_scan(&path, limits, || {

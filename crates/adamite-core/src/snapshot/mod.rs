@@ -14,7 +14,7 @@ pub(crate) use build::{
 pub use error::SnapshotError;
 pub use indexes::ExtensionStat;
 pub use node::{Node, NodeFlags, NodeId, NodeView};
-pub use persist::PersistError;
+pub use persist::{PersistError, SnapshotDecoder, SnapshotEncoder};
 pub use storage::{Snapshot, VolumeInfo};
 
 #[cfg(test)]

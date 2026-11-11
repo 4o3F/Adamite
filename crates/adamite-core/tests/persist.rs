@@ -1,5 +1,7 @@
 //! Canonical v1 persistence through the public scan API.
 
+#[path = "support/persist_blocks.rs"]
+mod persist_blocks;
 mod support;
 
 use adamite_core::{
@@ -17,6 +19,17 @@ fn counters(stats: &ScanStats) -> [u64; 26] {
 fn check_layout(output: &ScanOutput) -> TestResult {
     let bytes = output.to_bytes()?;
     assert_eq!(bytes, output.to_bytes()?);
+    let mut encoder = output.encoder()?;
+    let mut chunks = Vec::new();
+    while let Some(chunk) = encoder.next_chunk()? {
+        assert!(!chunk.is_empty());
+        assert!(chunk.len() <= adamite_core::snapshot::SnapshotEncoder::CHUNK_SIZE);
+        chunks.extend_from_slice(chunk);
+    }
+    let (offset, crc) = encoder.checksum_patch().ok_or("unfinished checksum")?;
+    chunks[offset..offset + 4].copy_from_slice(&crc);
+    assert_eq!(chunks, bytes);
+    assert_eq!(persist_blocks::decode_checked(&bytes)?, *output);
     let decoded = ScanOutput::from_bytes(&bytes)?;
     assert_eq!(&decoded, output);
     assert_eq!(decoded.to_bytes()?, bytes);
@@ -255,6 +268,7 @@ fn tiny_scan_has_golden_v1_encoding() -> TestResult {
             free_bytes: Some(456),
         },
     )?;
+    check_layout(&output)?;
     let bytes = output.to_bytes()?;
     let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
     let expected = concat!(
@@ -324,4 +338,20 @@ fn decoder_rejects_bad_magic_truncation_and_checksum_mismatch() -> TestResult {
         Err(PersistError::ChecksumMismatch { .. })
     ));
     Ok(())
+}
+
+#[test]
+fn encoder_crosses_scratch_boundaries_and_borrows_large_labels() -> TestResult {
+    use adamite_fixtures::{SyntheticConfig, SyntheticVolume};
+    let volume = SyntheticVolume::new(SyntheticConfig::reference(20_002)?)?;
+    let mut image = std::io::Cursor::new(Vec::new());
+    volume.write(&mut image)?;
+    let output = scan(
+        image.get_ref(),
+        ScanContext {
+            label: Some("a".repeat((1 << 20) + 7)),
+            ..ScanContext::default()
+        },
+    )?;
+    check_layout(&output)
 }

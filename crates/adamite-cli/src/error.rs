@@ -3,7 +3,6 @@ use adamite_io::error::VolumeError;
 use adamite_tui::TuiError;
 use snafu::Snafu;
 use std::{
-    collections::TryReserveError,
     error::Error,
     io::{self, Write},
     path::PathBuf,
@@ -63,11 +62,6 @@ pub(crate) enum CliError {
     InconsistentSnapshot { reason: &'static str },
     #[snafu(display("snapshot {} is too large for this platform", path.display()))]
     SnapshotLength { path: PathBuf },
-    #[snafu(display("cannot allocate snapshot buffer for {}", path.display()))]
-    Allocation {
-        path: PathBuf,
-        source: TryReserveError,
-    },
     #[snafu(display("cannot encode JSON report"))]
     Json { source: serde_json::Error },
     #[snafu(display("cannot write standard output"))]

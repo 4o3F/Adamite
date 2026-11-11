@@ -40,3 +40,5 @@ pub mod error;
 pub mod limits;
 mod pacer;
 pub mod reader;
+
+pub mod snapshot;

@@ -1,9 +1,11 @@
 //! Rejection and canonicality checks for untrusted v1 snapshot bytes.
 
+#[path = "support/persist_blocks.rs"]
+mod persist_blocks;
 mod support;
 
 use adamite_core::{
-    scan::{ScanContext, ScanOutput},
+    scan::ScanContext,
     snapshot::{NodeFlags, PersistError},
 };
 use adamite_fixtures::Fixture;
@@ -212,7 +214,7 @@ impl Encoding {
 
     fn tree_error(mut self, node: u32, reason: &'static str) -> TestResult {
         repair_crc(&mut self.bytes)?;
-        let result = ScanOutput::from_bytes(&self.bytes);
+        let result = persist_blocks::decode_checked(&self.bytes);
         assert!(
             matches!(result, Err(PersistError::InvalidTree { node: actual_node, reason: actual_reason }) if actual_node == node && actual_reason == reason),
             "expected node {node}: {reason}, got {result:?}"
@@ -222,7 +224,7 @@ impl Encoding {
 
     fn index_error(mut self, reason: &'static str) -> TestResult {
         repair_crc(&mut self.bytes)?;
-        let result = ScanOutput::from_bytes(&self.bytes);
+        let result = persist_blocks::decode_checked(&self.bytes);
         assert!(
             matches!(result, Err(PersistError::InvalidIndex { reason: actual }) if actual == reason),
             "expected {reason}, got {result:?}"
@@ -232,7 +234,7 @@ impl Encoding {
 
     fn section_error(mut self, section: u32, reason: &'static str) -> TestResult {
         repair_crc(&mut self.bytes)?;
-        let result = ScanOutput::from_bytes(&self.bytes);
+        let result = persist_blocks::decode_checked(&self.bytes);
         assert!(
             matches!(result, Err(PersistError::InvalidSection { section: actual_section, reason: actual_reason }) if actual_section == section && actual_reason == reason),
             "expected section {section}: {reason}, got {result:?}"
@@ -242,7 +244,7 @@ impl Encoding {
 
     fn table_error(mut self, reason: &'static str) -> TestResult {
         repair_crc(&mut self.bytes)?;
-        let result = ScanOutput::from_bytes(&self.bytes);
+        let result = persist_blocks::decode_checked(&self.bytes);
         assert!(
             matches!(result, Err(PersistError::InvalidSectionTable { reason: actual }) if actual == reason),
             "expected {reason}, got {result:?}"
@@ -257,14 +259,14 @@ fn header_magic_and_version() -> TestResult {
     file.bytes[0] ^= 1;
     repair_crc(&mut file.bytes)?;
     assert!(matches!(
-        ScanOutput::from_bytes(&file.bytes),
+        persist_blocks::decode_checked(&file.bytes),
         Err(PersistError::BadMagic)
     ));
     let mut file = Encoding::tiny()?;
     put(&mut file.bytes, 8, &2u32.to_le_bytes())?;
     repair_crc(&mut file.bytes)?;
     assert!(matches!(
-        ScanOutput::from_bytes(&file.bytes),
+        persist_blocks::decode_checked(&file.bytes),
         Err(PersistError::UnsupportedVersion { version: 2 })
     ));
     Ok(())
@@ -281,7 +283,7 @@ fn header_lengths_flags_and_reserved_bytes() -> TestResult {
         put(&mut file.bytes, offset, &u32::to_le_bytes(value))?;
         repair_crc(&mut file.bytes)?;
         assert!(
-            matches!(ScanOutput::from_bytes(&file.bytes), Err(PersistError::InvalidHeader { reason: actual }) if actual == reason)
+            matches!(persist_blocks::decode_checked(&file.bytes), Err(PersistError::InvalidHeader { reason: actual }) if actual == reason)
         );
     }
     for offset in 36..64 {
@@ -289,7 +291,7 @@ fn header_lengths_flags_and_reserved_bytes() -> TestResult {
         file.bytes[offset] = 1;
         repair_crc(&mut file.bytes)?;
         assert!(matches!(
-            ScanOutput::from_bytes(&file.bytes),
+            persist_blocks::decode_checked(&file.bytes),
             Err(PersistError::InvalidHeader {
                 reason: "nonzero reserved header bytes"
             })
@@ -309,7 +311,7 @@ fn header_file_len_and_short_input() -> TestResult {
     )?;
     repair_crc(&mut bytes)?;
     assert!(matches!(
-        ScanOutput::from_bytes(&bytes),
+        persist_blocks::decode_checked(&bytes),
         Err(PersistError::InvalidHeader {
             reason: "trailing bytes after file length"
         })
@@ -321,11 +323,11 @@ fn header_file_len_and_short_input() -> TestResult {
     )?;
     repair_crc(&mut bytes)?;
     assert!(
-        matches!(ScanOutput::from_bytes(&bytes), Err(PersistError::Truncated { needed, available }) if needed == original.len() + 1 && available == original.len())
+        matches!(persist_blocks::decode_checked(&bytes), Err(PersistError::Truncated { needed, available }) if needed == original.len() + 1 && available == original.len())
     );
     // Magic is checked before the minimum header length, including inputs shorter than eight bytes.
     for len in 0..64 {
-        let result = ScanOutput::from_bytes(&original[..len]);
+        let result = persist_blocks::decode_checked(&original[..len]);
         if len < 8 {
             assert!(matches!(result, Err(PersistError::BadMagic)));
         } else {
@@ -422,7 +424,7 @@ fn truncation_at_every_section_start_and_end() -> TestResult {
                 }
                 assert!(
                     matches!(
-                        ScanOutput::from_bytes(&bytes),
+                        persist_blocks::decode_checked(&bytes),
                         Err(PersistError::Truncated { .. })
                     ),
                     "section {kind}, boundary {boundary}, repair {repair}"
@@ -443,7 +445,7 @@ fn checksum_reports_stored_and_computed_values() -> TestResult {
     let actual = crc32fast::hash(&zeroed);
     assert_ne!(expected, actual);
     assert!(
-        matches!(ScanOutput::from_bytes(&file.bytes), Err(PersistError::ChecksumMismatch { expected: stored, actual: computed }) if stored == expected && computed == actual)
+        matches!(persist_blocks::decode_checked(&file.bytes), Err(PersistError::ChecksumMismatch { expected: stored, actual: computed }) if stored == expected && computed == actual)
     );
     Ok(())
 }
@@ -506,14 +508,14 @@ fn label_utf8_and_geometry_field() -> TestResult {
     file.write(1, 69, &[0xff])?;
     repair_crc(&mut file.bytes)?;
     assert!(matches!(
-        ScanOutput::from_bytes(&file.bytes),
+        persist_blocks::decode_checked(&file.bytes),
         Err(PersistError::Utf8 { section: 1, .. })
     ));
     let mut file = Encoding::tiny()?;
     file.write(1, 0, &513u16.to_le_bytes())?;
     repair_crc(&mut file.bytes)?;
     assert!(matches!(
-        ScanOutput::from_bytes(&file.bytes),
+        persist_blocks::decode_checked(&file.bytes),
         Err(PersistError::Geometry {
             source: BootError::InvalidField {
                 field: GeometryField::BytesPerSector,
@@ -582,7 +584,7 @@ fn oversized_declared_node_count_and_name_pool() -> TestResult {
     put(&mut file.bytes, 64 + 3 * 32 + 24, &len.to_le_bytes())?;
     repair_crc(&mut file.bytes)?;
     assert!(
-        matches!(ScanOutput::from_bytes(&file.bytes), Err(PersistError::Truncated { needed, available }) if needed == start + usize::try_from(len)? && available == file.bytes.len())
+        matches!(persist_blocks::decode_checked(&file.bytes), Err(PersistError::Truncated { needed, available }) if needed == start + usize::try_from(len)? && available == file.bytes.len())
     );
     Ok(())
 }
@@ -1008,9 +1010,39 @@ proptest! {
             file.bytes[position] ^= mask;
         }
         repair_crc(&mut file.bytes).map_err(|error| TestCaseError::fail(error.to_string()))?;
-        if let Ok(decoded) = ScanOutput::from_bytes(&file.bytes) {
+        if let Ok(decoded) = persist_blocks::decode_checked(&file.bytes) {
             let encoded = decoded.to_bytes().map_err(|error| TestCaseError::fail(error.to_string()))?;
             prop_assert_eq!(encoded, file.bytes);
         }
     }
+}
+
+#[test]
+fn extension_utf8_error_precedes_later_name_table_errors() -> TestResult {
+    for later_length in [2u32, u32::MAX] {
+        let mut file = Encoding::tiny()?;
+        // The first group consumes one byte; the next group has an invalid offset or length.
+        file.write(12, 28, &1u32.to_le_bytes())?;
+        let later_offset: u32 = if later_length == 2 { 2 } else { 1 };
+        file.write(12, 32 + 24, &later_offset.to_le_bytes())?;
+        file.write(12, 32 + 28, &later_length.to_le_bytes())?;
+        file.write(13, 0, &[0xff])?;
+        repair_crc(&mut file.bytes)?;
+        assert!(matches!(
+            persist_blocks::decode_checked(&file.bytes),
+            Err(PersistError::Utf8 { section: 13, .. })
+        ));
+    }
+    Ok(())
+}
+
+#[test]
+fn checksum_error_precedes_volume_value_errors() -> TestResult {
+    let mut file = Encoding::tiny()?;
+    file.write(1, 0, &513u16.to_le_bytes())?;
+    assert!(matches!(
+        persist_blocks::decode_checked(&file.bytes),
+        Err(PersistError::ChecksumMismatch { .. })
+    ));
+    Ok(())
 }

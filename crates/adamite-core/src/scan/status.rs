@@ -1,7 +1,7 @@
 //! Public progress, phase and result types emitted by the scan driver.
 
 use super::{ReadRequest, ScanStats};
-use crate::snapshot::{PersistError, Snapshot};
+use crate::snapshot::{PersistError, Snapshot, SnapshotEncoder};
 
 /// A scan's current processing phase or terminal state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,6 +57,14 @@ impl ScanOutput {
     /// Eight-byte `.adm` signature used to identify snapshot files before decoding.
     pub const ADM_MAGIC: [u8; 8] = *b"ADAMITE\0";
 
+    /// Creates a bounded encoder borrowing this output.
+    ///
+    /// # Errors
+    /// Returns a persistence error if layout calculation or scratch allocation fails.
+    pub fn encoder(&self) -> Result<SnapshotEncoder<'_>, PersistError> {
+        SnapshotEncoder::new(&self.snapshot, &self.stats)
+    }
+
     /// Encodes the complete snapshot and scan counters in canonical `.adm` v1 format.
     ///
     /// # Errors
@@ -70,7 +78,21 @@ impl ScanOutput {
             bytes = tracing::field::Empty
         );
         let _entered = span.enter();
-        let bytes = self.snapshot.to_adm_bytes(&self.stats)?;
+        let mut encoder = self.encoder()?;
+        let mut bytes = Vec::new();
+        bytes.try_reserve_exact(encoder.file_len())?;
+        while let Some(chunk) = encoder.next_chunk()? {
+            bytes.extend_from_slice(chunk);
+        }
+        if let Some((offset, crc)) = encoder.checksum_patch() {
+            bytes
+                .get_mut(offset..)
+                .and_then(|bytes| bytes.get_mut(..crc.len()))
+                .ok_or(PersistError::Overflow {
+                    operation: "checksum write range",
+                })?
+                .copy_from_slice(&crc);
+        }
         span.record("bytes", bytes.len());
         Ok(bytes)
     }

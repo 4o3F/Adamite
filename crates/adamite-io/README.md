@@ -88,3 +88,7 @@ cargo test -p adamite-io --test raw_volume -- --ignored
 CI runs these ignored tests only on Windows, after the normal workspace tests. For command-line image and raw-volume scans, use [`adamite-cli`](../adamite-cli/README.md).
 
 Parallel parsing, buffer pools, native I/O depth above 1 and Linux block-device access remain future work. Adamite enforces its resource limits without operating-system priority APIs.
+
+## Snapshot files
+
+`snapshot::SnapshotWriter::write(&output, &mut file)` writes a new empty seekable file in chunks of at most 1 MiB, then seeks back to patch the CRC and leaves the cursor at the file end. The caller creates, synchronizes, closes and publishes the file. `snapshot::SnapshotReader::read(&mut file)` uses a fallibly allocated 1 MiB file buffer: the first sequential pass verifies the header, table and CRC, and the second decodes directly into final columns before snapshot validation. Keep the file unchanged across both passes. `SnapshotIoError` preserves codec, host I/O, buffer-allocation and host-length failures. CLI saves and benchmark persistence share these adapters.

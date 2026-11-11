@@ -6,4 +6,6 @@ mod error;
 mod format;
 mod validate;
 
+pub use decode::SnapshotDecoder;
+pub use encode::SnapshotEncoder;
 pub use error::PersistError;
