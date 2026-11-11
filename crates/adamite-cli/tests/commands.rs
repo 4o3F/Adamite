@@ -2,9 +2,13 @@
 
 use adamite_core::{
     scan::{ScanConfig, ScanContext, ScanOutput, ScanStats},
-    snapshot::NodeId,
+    snapshot::{NodeFlags, NodeId, Snapshot},
 };
-use adamite_fixtures::Fixture;
+use adamite_fixtures::{
+    Fixture,
+    builders::{AttrBuilder, BootSectorBuilder, FileNameBuilder, NonResidentModel, RecordBuilder},
+    runlist_encoder::{RunModel, RunlistEncoder},
+};
 use adamite_io::{driver::SyncDriver, reader::SliceReader};
 use serde_json::{Value, json};
 use std::{
@@ -24,15 +28,19 @@ struct Case {
 
 impl Case {
     fn new(name: &str, fixture_name: &str) -> Result<Self, Box<dyn Error>> {
-        let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
-        fs::create_dir_all(&directory)?;
         let fixture = Fixture::load(
             &Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join(format!("../../tests/fixtures/ntfs/{fixture_name}.json")),
         )?;
+        Self::from_image(name, fixture.image())
+    }
+
+    fn from_image(name: &str, bytes: &[u8]) -> Result<Self, Box<dyn Error>> {
+        let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
+        fs::create_dir_all(&directory)?;
         let image = directory.join("source.img");
-        fs::write(&image, fixture.image())?;
-        let mut reader = SliceReader::new(fixture.image());
+        fs::write(&image, bytes)?;
+        let mut reader = SliceReader::new(bytes);
         let output = SyncDriver::new(ScanConfig::default())?.run(&mut reader)?;
         Ok(Self {
             directory,
@@ -51,13 +59,40 @@ impl Case {
     }
 
     fn json(&self, name: &str, source: &Path) -> Value {
-        let output = self.command(name, source, &["--json"]);
+        self.json_with(name, source, &[])
+    }
+
+    fn json_with(&self, name: &str, source: &Path, flags: &[&str]) -> Value {
+        let mut flags = flags.to_vec();
+        flags.push("--json");
+        let output = self.command(name, source, &flags);
         assert!(
             output.status.success(),
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
         serde_json::from_slice(&output.stdout).expect("JSON report")
+    }
+
+    fn path_id(&self, path: &str) -> NodeId {
+        let snapshot = &self.output.snapshot;
+        (0..snapshot.len())
+            .map(|raw| NodeId::from_raw(u32::try_from(raw).expect("fixture id")))
+            .find(|&id| snapshot.path(id).expect("valid path").as_deref() == Some(path))
+            .expect("fixture path")
+    }
+
+    fn assert_command_failure(&self, name: &str, flags: &[&str], code: i32) -> String {
+        let output = self.command(name, &self.image, flags);
+        assert_eq!(output.status.code(), Some(code), "{output:?}");
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8(output.stderr).expect("stderr text");
+        assert!(
+            stderr.lines().any(|line| line.starts_with("error: ")),
+            "{stderr}"
+        );
+        assert!(!stderr.contains("panicked"), "{stderr}");
+        stderr
     }
 
     fn snapshot(&self, name: &str) -> Result<PathBuf, Box<dyn Error>> {
@@ -150,6 +185,526 @@ fn without_source_and_time(mut value: Value) -> Value {
         snapshot.remove(field);
     }
     value
+}
+
+fn expected_ls_item(snapshot: &Snapshot, id: NodeId) -> Value {
+    let node = snapshot.node(id).expect("child node");
+    let flags: Vec<_> = [
+        (NodeFlags::DIRECTORY, "directory"),
+        (NodeFlags::REPARSE, "reparse"),
+        (NodeFlags::SPARSE, "sparse"),
+        (NodeFlags::COMPRESSED, "compressed"),
+        (NodeFlags::HIDDEN, "hidden"),
+        (NodeFlags::SYSTEM, "system"),
+        (NodeFlags::HARDLINK_DUP, "hardlink_dup"),
+        (NodeFlags::SYNTHETIC, "synthetic"),
+    ]
+    .into_iter()
+    .filter_map(|(flag, name)| node.flags().contains(flag).then_some(name))
+    .collect();
+    json!({
+        "name": snapshot.name(id).expect("child name"),
+        "kind": if node.flags().contains(NodeFlags::DIRECTORY) { "dir" } else { "file" },
+        "flags": flags,
+        "size": node.size(), "alloc": node.alloc(),
+        "total_size": node.total_size(), "total_alloc": node.total_alloc(),
+        "file_count": node.file_count(),
+    })
+}
+
+/// Independent encoders retain duplicate names that normal filesystem tools reject.
+fn path_test_image() -> Vec<u8> {
+    let mut image = vec![0; 128 * 512];
+    image[..512].copy_from_slice(
+        &BootSectorBuilder {
+            cluster_encoding: 1,
+            sectors: 128,
+            mirror: 64,
+            ..BootSectorBuilder::default()
+        }
+        .build(),
+    );
+    let name = |parent: u32, text: &str| {
+        AttrBuilder::resident(
+            0x30,
+            FileNameBuilder {
+                parent: (7 << 48) | u64::from(parent),
+                namespace: 0,
+                name: text.encode_utf16().collect(),
+                ..FileNameBuilder::default()
+            }
+            .build(),
+        )
+        .build()
+    };
+    let mft = AttrBuilder::non_resident(
+        0x80,
+        NonResidentModel {
+            highest: 63,
+            sizes: [32768; 4],
+            mapping_pairs: RunlistEncoder {
+                runs: vec![RunModel {
+                    lcn: Some(4),
+                    len: 64,
+                }],
+            }
+            .encode(0),
+            ..NonResidentModel::default()
+        },
+    )
+    .build();
+    let mut records = vec![
+        RecordBuilder {
+            record_number: 0,
+            attributes: vec![mft, name(5, "$MFT")],
+            ..RecordBuilder::default()
+        },
+        RecordBuilder {
+            record_number: 5,
+            flags: 3,
+            attributes: vec![name(5, ".")],
+            ..RecordBuilder::default()
+        },
+    ];
+    for (index, text) in [
+        "Twin",
+        "twin",
+        "same",
+        "same",
+        "İ",
+        ".",
+        "..",
+        "line\n\t\u{1b}.TX\nT",
+    ]
+    .iter()
+    .enumerate()
+    {
+        records.push(RecordBuilder {
+            record_number: 16 + u32::try_from(index).expect("bounded record"),
+            flags: 3,
+            attributes: vec![name(5, text)],
+            ..RecordBuilder::default()
+        });
+    }
+    records.push(RecordBuilder {
+        record_number: 24,
+        attributes: vec![
+            name(23, "file\n.tx\nt"),
+            AttrBuilder::resident(0x80, b"hi".to_vec()).build(),
+        ],
+        ..RecordBuilder::default()
+    });
+    for record in records {
+        let start = 4 * 512 + record.record_number as usize * 1024;
+        image[start..start + 1024].copy_from_slice(&record.build());
+    }
+    image
+}
+
+#[test]
+fn ambiguous_paths_require_a_unique_name_or_direct_child_id() -> TestResult {
+    let case = Case::from_image("path-ambiguity", &path_test_image())?;
+    let snapshot = &case.output.snapshot;
+    for path in ["/Twin", "/twin", "/i\u{307}", "/.", "/.."] {
+        let value = case.json_with("ls", &case.image, &[path]);
+        let expected = if path == "/i\u{307}" { "/İ" } else { path };
+        assert_eq!(value["path"], expected);
+    }
+    for (path, names) in [
+        ("/TWIN", vec!["Twin", "twin"]),
+        ("/same", vec!["same", "same"]),
+    ] {
+        let stderr = case.assert_command_failure("ls", &[path, "--json"], 1);
+        assert!(stderr.contains("ambiguous path component"), "{stderr}");
+        assert!(stderr.contains(path.trim_start_matches('/')), "{stderr}");
+        let ids: Vec<_> = snapshot
+            .children(NodeId::ROOT)
+            .ok_or("root children")?
+            .iter()
+            .filter(|&&id| names.contains(&snapshot.name(id).expect("name")))
+            .copied()
+            .collect();
+        assert_eq!(ids.len(), 2);
+        for id in ids {
+            assert!(
+                stderr.contains(&format!("NodeId({})", id.raw())),
+                "{stderr}"
+            );
+            let selected = format!("/#{}", id.raw());
+            let value = case.json_with("ls", &case.image, &[&selected]);
+            assert_eq!(value["path"], snapshot.path(id)?.ok_or("selected path")?);
+            assert_eq!(value["items"], json!([]));
+        }
+    }
+    let saved = case.snapshot("synthetic.adm")?;
+    assert!(
+        case.assert_command_failure("ls", &["/Twin/..", "--json"], 1)
+            .contains("not found")
+    );
+    for source in [&case.image, &saved] {
+        let root = case.command("ls", source, &[]);
+        assert!(root.status.success(), "{root:?}");
+        let text = String::from_utf8(root.stdout)?;
+        assert!(
+            text.contains("line\\u{a}\\u{9}\\u{1b}.TX\\u{a}T/"),
+            "{text}"
+        );
+        assert!(!text.contains('\u{1b}'), "{text}");
+        let path = "/line\n\t\u{1b}.TX\nT";
+        let value = case.json_with("ls", source, &[path]);
+        assert_eq!(value["path"], path);
+        assert_eq!(value["items"][0]["name"], "file\n.tx\nt");
+        let selected = format!("/#{}", case.path_id(path).raw());
+        assert_eq!(case.json_with("ls", source, &[&selected])["path"], path);
+        for command in ["top", "ext"] {
+            let output = case.command(command, source, &["--n", "100"]);
+            assert!(output.status.success(), "{output:?}");
+            let text = String::from_utf8(output.stdout)?;
+            if command == "top" {
+                assert!(
+                    text.contains("/line\\u{a}\\u{9}\\u{1b}.TX\\u{a}T/file\\u{a}.tx\\u{a}t"),
+                    "{text}"
+                );
+            } else {
+                assert!(text.contains("tx\\u{a}t"), "{text}");
+            }
+            assert!(!text.contains('\u{1b}'), "{text}");
+        }
+        let top = case.json("top", source);
+        let file = top["items"]
+            .as_array()
+            .ok_or("top items")?
+            .iter()
+            .find(|item| item["path"] == format!("{path}/file\n.tx\nt"))
+            .ok_or("synthetic top file")?;
+        assert_eq!(file["mtime_filetime"], "0");
+    }
+    Ok(())
+}
+
+#[test]
+fn query_json_matches_in_process_contents_and_order() -> TestResult {
+    for fixture in ["basic-4k", "frag-512"] {
+        let case = Case::new(&format!("query-json-{fixture}"), fixture)?;
+        let snapshot = &case.output.snapshot;
+        for n in [1, 5, 20, 100] {
+            let value = case.json_with("top", &case.image, &["--n", &n.to_string(), "--bytes"]);
+            let expected: Vec<_> = snapshot
+                .top_files()
+                .iter()
+                .take(n)
+                .map(|&id| {
+                    let node = snapshot.node(id).expect("top file");
+                    json!({
+                        "path": snapshot.path(id).expect("file path").expect("existing file"),
+                        "size": node.size(), "alloc": node.alloc(),
+                        "mtime_filetime": node.mtime().to_string(),
+                    })
+                })
+                .collect();
+            assert_eq!(value["items"], json!(expected), "top {fixture}, n={n}");
+            assert_eq!(value["command"], "top");
+            assert_eq!(value["schema"], "adamite/1");
+            assert_eq!(value["units"], json!({"size": "bytes"}));
+            assert_eq!(value.as_object().expect("top object").len(), 5);
+        }
+        for n in [1, 5, 20, 1000] {
+            let value = case.json_with("ext", &case.image, &["--n", &n.to_string()]);
+            let expected: Vec<_> = snapshot
+                .ext_stats()
+                .iter()
+                .take(n)
+                .map(|stat| {
+                    json!({
+                        "extension": stat.extension(), "count": stat.count(),
+                        "total_size": stat.total_size(), "total_alloc": stat.total_alloc(),
+                    })
+                })
+                .collect();
+            assert_eq!(value["items"], json!(expected), "ext {fixture}, n={n}");
+            assert_eq!(value["command"], "ext");
+            assert_eq!(value.as_object().expect("ext object").len(), 5);
+        }
+        for raw in 0..snapshot.len() {
+            let id = NodeId::from_raw(u32::try_from(raw)?);
+            if !snapshot
+                .node(id)
+                .ok_or("node")?
+                .flags()
+                .contains(NodeFlags::DIRECTORY)
+            {
+                continue;
+            }
+            let path = snapshot.path(id)?.ok_or("directory path")?;
+            let children = snapshot.children(id).ok_or("directory children")?;
+            for (offset, limit) in [(0, 50), (1, 3)] {
+                let value = case.json_with(
+                    "ls",
+                    &case.image,
+                    &[
+                        &path,
+                        "--offset",
+                        &offset.to_string(),
+                        "--limit",
+                        &limit.to_string(),
+                    ],
+                );
+                let expected: Vec<_> = children
+                    .iter()
+                    .skip(offset)
+                    .take(limit)
+                    .map(|&id| expected_ls_item(snapshot, id))
+                    .collect();
+                assert_eq!(value["items"], json!(expected), "ls {fixture}: {path}");
+                assert_eq!(value["path"], path);
+                assert_eq!(value["total_children"], children.len());
+                assert_eq!(value["offset"], offset);
+                assert_eq!(value["limit"], limit);
+                assert_eq!(value["command"], "ls");
+                assert_eq!(value.as_object().expect("ls object").len(), 9);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn saved_queries_match_image_queries() -> TestResult {
+    for fixture in ["basic-4k", "frag-512"] {
+        let case = Case::new(&format!("saved-queries-{fixture}"), fixture)?;
+        let path = case.directory.join("queries.adm");
+        let saved = case.save(&path, &["--json"]);
+        assert!(saved.status.success(), "{saved:?}");
+        for command in ["top", "ext", "ls"] {
+            assert_eq!(
+                without_source_and_time(case.json(command, &path)),
+                without_source_and_time(case.json(command, &case.image)),
+                "{command} {fixture}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn ls_paths_and_pagination() -> TestResult {
+    let case = Case::new("ls-paths", "basic-4k")?;
+    for path in [
+        "bigdir",
+        "/bigdir/",
+        "//BIGDIR//",
+        "\\bigdir\\",
+        "/\\BiGdIr\\/",
+    ] {
+        let value = case.json_with("ls", &case.image, &[path]);
+        assert_eq!(value["path"], "/bigdir", "{path}");
+        assert_eq!(value["total_children"], 200);
+        assert_eq!(value["items"].as_array().ok_or("items")?.len(), 50);
+    }
+    assert_eq!(case.json("ls", &case.image)["path"], "/");
+    for path in ["/", "\\", "", "////\\\\"] {
+        assert_eq!(case.json_with("ls", &case.image, &[path])["path"], "/");
+    }
+    let id = case.path_id("/bigdir");
+    let selected = format!("/#{}/", id.raw());
+    assert_eq!(
+        case.json_with("ls", &case.image, &[&selected])["path"],
+        "/bigdir"
+    );
+    let metadata = case.json_with("ls", &case.image, &["/<ntfs METADATA>"]);
+    assert_eq!(metadata["path"], "/<NTFS metadata>");
+    for path in [
+        "/missing",
+        "/bigdir/missing",
+        "/#4294967295",
+        "/#0",
+        "/#bad",
+        "/#",
+        "/#-1",
+        "/#+1",
+        "/#4294967296",
+    ] {
+        assert!(
+            case.assert_command_failure("ls", &[path, "--json"], 1)
+                .contains("not found")
+        );
+    }
+    let nested_id = case.path_id("/bigdir/f000");
+    let nested = format!("/#{}", nested_id.raw());
+    assert!(
+        case.assert_command_failure("ls", &[&nested, "--json"], 1)
+            .contains("not found")
+    );
+    for path in [
+        "/tiny.txt",
+        "/tiny.txt/child",
+        &format!("/bigdir/#{id}", id = nested_id.raw()),
+    ] {
+        assert!(
+            case.assert_command_failure("ls", &[path, "--json"], 1)
+                .contains("not a directory")
+        );
+    }
+    for (offset, limit) in [(200, 50), (1000, 50), (0, 0), (usize::MAX, 0)] {
+        let value = case.json_with(
+            "ls",
+            &case.image,
+            &[
+                "/bigdir",
+                "--offset",
+                &offset.to_string(),
+                "--limit",
+                &limit.to_string(),
+            ],
+        );
+        assert_eq!(value["items"], json!([]));
+        assert_eq!(value["total_children"], 200);
+        assert_eq!(value["offset"], offset);
+        assert_eq!(value["limit"], limit);
+    }
+    Ok(())
+}
+
+#[test]
+fn query_numeric_arguments_are_checked() -> TestResult {
+    let case = Case::new("query-arguments", "basic-4k")?;
+    for n in ["0", "101", "-1", "no", "4294967296"] {
+        let stderr = case.assert_command_failure("top", &["--n", n], 2);
+        assert!(stderr.contains("100-entry index"), "{stderr}");
+    }
+    for (command, flag, value) in [
+        ("ext", "--n", "0"),
+        ("ext", "--n", "-1"),
+        ("ext", "--n", "x"),
+        ("ext", "--n", "18446744073709551616"),
+        ("ls", "--offset", "-1"),
+        ("ls", "--offset", "x"),
+        ("ls", "--limit", "-1"),
+        ("ls", "--limit", "1.5"),
+        ("ls", "--offset", "18446744073709551616"),
+        ("ls", "--limit", "18446744073709551616"),
+    ] {
+        case.assert_command_failure(command, &[flag, value, "--json"], 2);
+    }
+    assert!(
+        case.assert_command_failure(
+            "ls",
+            &[
+                "--offset",
+                &usize::MAX.to_string(),
+                "--limit",
+                "1",
+                "--json",
+            ],
+            2
+        )
+        .contains("--offset + --limit")
+    );
+    assert_eq!(
+        without_source_and_time(case.json_with(
+            "ext",
+            &case.image,
+            &["--n", &u64::MAX.to_string()]
+        )),
+        without_source_and_time(case.json("ext", &case.image))
+    );
+    Ok(())
+}
+
+#[test]
+fn basic_query_text_has_aligned_columns_and_directory_markers() -> TestResult {
+    let case = Case::new("query-text", "basic-4k")?;
+    let top = concat!(
+        "        Size        Alloc Path\n",
+        "         0 B     16.0 MiB /<NTFS metadata>/$BadClus\n",
+        "     2.0 MiB      2.0 MiB /<NTFS metadata>/$LogFile\n",
+        "   323.0 KiB    336.0 KiB /<NTFS metadata>/$MFT\n",
+        "         0 B    260.0 KiB /<NTFS metadata>/$Secure\n",
+        "   128.0 KiB    128.0 KiB /<NTFS metadata>/$UpCase\n",
+    );
+    let ext = concat!(
+        "        Size        Alloc      Count Extension\n",
+        "     2.5 MiB     18.7 MiB        217 (none)\n",
+        "     1.1 MiB     72.0 KiB          3 bin\n",
+        "   256.2 KiB     52.0 KiB         11 txt\n",
+    );
+    let long_name = "n".repeat(251);
+    let ls = format!(
+        concat!(
+            "  Total size  Total alloc      Files Name\n",
+            "     2.5 MiB     18.7 MiB         17 <NTFS metadata>/\n",
+            "    64.0 KiB     64.0 KiB          1 medium.bin\n",
+            "         0 B     40.0 KiB        200 bigdir/\n",
+            "   256.0 KiB     32.0 KiB          1 compressed/\n",
+            "         0 B     20.0 KiB          1 ads.txt\n",
+            "     1.0 MiB      8.0 KiB          1 sparse.bin\n",
+            "         1 B          0 B          1 LongFileName.txt\n",
+            "         1 B          0 B          1 d00/\n",
+            "         1 B          0 B          1 emoji-😀.txt\n",
+            "         0 B          0 B          1 empty.txt\n",
+            "         1 B          0 B          1 hidden.txt\n",
+            "       100 B          0 B          1 hl/\n",
+            "         1 B          0 B          1 {}.txt\n",
+            "         0 B          0 B          0 other/\n",
+            "         0 B          0 B          1 reparse.bin\n",
+            "       100 B          0 B          1 tiny.txt\n",
+            "         1 B          0 B          1 日本語.txt\n",
+        ),
+        long_name
+    );
+    let top_bytes = concat!(
+        "                Size                Alloc Path\n",
+        "                   0             16773120 /<NTFS metadata>/$BadClus\n",
+        "             2097152              2097152 /<NTFS metadata>/$LogFile\n",
+        "              330752               344064 /<NTFS metadata>/$MFT\n",
+        "                   0               266240 /<NTFS metadata>/$Secure\n",
+        "              131072               131072 /<NTFS metadata>/$UpCase\n",
+    );
+    let ext_bytes = concat!(
+        "                Size                Alloc      Count Extension\n",
+        "             2574336             19632128        217 (none)\n",
+        "             1114112                73728          3 bin\n",
+        "              262350                53248         11 txt\n",
+    );
+    let ls_bytes = format!(
+        concat!(
+            "          Total size          Total alloc      Files Name\n",
+            "             2574336             19632128         17 <NTFS metadata>/\n",
+            "               65536                65536          1 medium.bin\n",
+            "                   0                40960        200 bigdir/\n",
+            "              262144                32768          1 compressed/\n",
+            "                   0                20480          1 ads.txt\n",
+            "             1048576                 8192          1 sparse.bin\n",
+            "                   1                    0          1 LongFileName.txt\n",
+            "                   1                    0          1 d00/\n",
+            "                   1                    0          1 emoji-😀.txt\n",
+            "                   0                    0          1 empty.txt\n",
+            "                   1                    0          1 hidden.txt\n",
+            "                 100                    0          1 hl/\n",
+            "                   1                    0          1 {}.txt\n",
+            "                   0                    0          0 other/\n",
+            "                   0                    0          1 reparse.bin\n",
+            "                 100                    0          1 tiny.txt\n",
+            "                   1                    0          1 日本語.txt\n",
+        ),
+        long_name
+    );
+    for (command, flags, expected) in [
+        ("top", vec!["--n", "5"], top),
+        ("ext", vec!["--n", "5"], ext),
+        ("ls", vec!["/"], ls.as_str()),
+        ("top", vec!["--n", "5", "--bytes"], top_bytes),
+        ("ext", vec!["--n", "5", "--bytes"], ext_bytes),
+        ("ls", vec!["/", "--bytes"], ls_bytes.as_str()),
+    ] {
+        let output = case.command(command, &case.image, &flags);
+        assert!(output.status.success(), "{output:?}");
+        let text = String::from_utf8(output.stdout)?;
+        let (header, body) = text.split_once('\n').ok_or("missing header")?;
+        assert!(header.starts_with(&format!("{} — scanned ", case.image.display())));
+        assert_eq!(body, expected, "{command} {flags:?}");
+    }
+    Ok(())
 }
 
 #[test]

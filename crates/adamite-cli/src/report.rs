@@ -1,7 +1,7 @@
-use crate::{error::CliError, render::time::ScanTime};
+use crate::{error::CliError, locate::Locator, render::time::ScanTime};
 use adamite_core::{
     scan::{ScanOutput, ScanStats},
-    snapshot::{NodeId, SnapshotError},
+    snapshot::{NodeFlags, NodeId, NodeView, Snapshot},
 };
 use serde::{Serialize, Serializer, ser::SerializeMap};
 use std::{borrow::Cow, path::Path};
@@ -21,6 +21,194 @@ pub(crate) struct SavedReport<'a> {
     pub(crate) envelope: Envelope<'a>,
     pub(crate) saved: Cow<'a, str>,
     pub(crate) bytes: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct TopReport<'a> {
+    #[serde(flatten)]
+    pub(crate) envelope: Envelope<'a>,
+    pub(crate) items: Vec<TopItem>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct TopItem {
+    pub(crate) path: String,
+    pub(crate) size: u64,
+    pub(crate) alloc: u64,
+    /// Decimal FILETIME, including zero; the core stores a raw timestamp for every file.
+    pub(crate) mtime_filetime: String,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct ExtReport<'a> {
+    #[serde(flatten)]
+    pub(crate) envelope: Envelope<'a>,
+    pub(crate) items: Vec<ExtItem<'a>>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct ExtItem<'a> {
+    pub(crate) extension: &'a str,
+    pub(crate) count: u64,
+    pub(crate) total_size: u64,
+    pub(crate) total_alloc: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct LsReport<'a> {
+    #[serde(flatten)]
+    pub(crate) envelope: Envelope<'a>,
+    pub(crate) path: String,
+    pub(crate) total_children: usize,
+    pub(crate) offset: usize,
+    pub(crate) limit: usize,
+    pub(crate) items: Vec<LsItem<'a>>,
+}
+
+/// Child metadata with flags in core bit order: directory, reparse, sparse, compressed, hidden, system, hardlink_dup, synthetic. Unset flags are omitted.
+#[derive(Debug, Serialize)]
+pub(crate) struct LsItem<'a> {
+    pub(crate) name: &'a str,
+    pub(crate) kind: &'static str,
+    pub(crate) flags: Vec<&'static str>,
+    pub(crate) size: u64,
+    pub(crate) alloc: u64,
+    pub(crate) total_size: u64,
+    pub(crate) total_alloc: u64,
+    pub(crate) file_count: u32,
+}
+
+impl<'a> TopReport<'a> {
+    pub(crate) fn new(source: &'a Path, output: &'a ScanOutput, n: u32) -> Result<Self, CliError> {
+        let snapshot = &output.snapshot;
+        let items = snapshot
+            .top_files()
+            .iter()
+            .zip(0..n)
+            .map(|(&id, _)| TopItem::new(snapshot, id))
+            .collect::<Result<_, _>>()?;
+        Ok(Self {
+            envelope: Envelope::new("top", source, output),
+            items,
+        })
+    }
+}
+
+impl TopItem {
+    fn new(snapshot: &Snapshot, id: NodeId) -> Result<Self, CliError> {
+        let node = snapshot.node(id).ok_or(CliError::InconsistentSnapshot {
+            reason: "missing top file",
+        })?;
+        Ok(Self {
+            path: snapshot
+                .path(id)
+                .map_err(|source| CliError::Snapshot { source })?
+                .ok_or(CliError::InconsistentSnapshot {
+                    reason: "missing top file path",
+                })?,
+            size: node.size(),
+            alloc: node.alloc(),
+            mtime_filetime: node.mtime().to_string(),
+        })
+    }
+}
+
+impl<'a> ExtReport<'a> {
+    pub(crate) fn new(source: &'a Path, output: &'a ScanOutput, n: u64) -> Self {
+        Self {
+            envelope: Envelope::new("ext", source, output),
+            items: output
+                .snapshot
+                .ext_stats()
+                .iter()
+                .zip(0..n)
+                .map(|(stat, _)| ExtItem {
+                    extension: stat.extension(),
+                    count: stat.count(),
+                    total_size: stat.total_size(),
+                    total_alloc: stat.total_alloc(),
+                })
+                .collect(),
+        }
+    }
+}
+
+impl<'a> LsReport<'a> {
+    pub(crate) fn new(
+        source: &'a Path,
+        output: &'a ScanOutput,
+        path: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Self, CliError> {
+        let end = offset.checked_add(limit).ok_or(CliError::Usage {
+            message: "--offset + --limit exceeds the supported range",
+        })?;
+        let snapshot = &output.snapshot;
+        let locator = Locator::new(snapshot);
+        let id = locator.resolve(path)?;
+        let children = locator.directory(id)?;
+        let path = snapshot
+            .path(id)
+            .map_err(|source| CliError::Snapshot { source })?
+            .ok_or(CliError::InconsistentSnapshot {
+                reason: "missing directory path",
+            })?;
+        let items = children
+            .iter()
+            .take(end)
+            .skip(offset)
+            .map(|&id| LsItem::new(snapshot, id))
+            .collect::<Result<_, _>>()?;
+        Ok(Self {
+            envelope: Envelope::new("ls", source, output),
+            path,
+            total_children: children.len(),
+            offset,
+            limit,
+            items,
+        })
+    }
+}
+
+impl<'a> LsItem<'a> {
+    fn new(snapshot: &'a Snapshot, id: NodeId) -> Result<Self, CliError> {
+        let node = snapshot.node(id).ok_or(CliError::InconsistentSnapshot {
+            reason: "missing child",
+        })?;
+        Ok(Self {
+            name: snapshot.name(id).ok_or(CliError::InconsistentSnapshot {
+                reason: "missing child name",
+            })?,
+            kind: if node.flags().contains(NodeFlags::DIRECTORY) {
+                "dir"
+            } else {
+                "file"
+            },
+            flags: Self::flags(node),
+            size: node.size(),
+            alloc: node.alloc(),
+            total_size: node.total_size(),
+            total_alloc: node.total_alloc(),
+            file_count: node.file_count(),
+        })
+    }
+
+    fn flags(node: NodeView<'_>) -> Vec<&'static str> {
+        [
+            (NodeFlags::DIRECTORY, "directory"),
+            (NodeFlags::REPARSE, "reparse"),
+            (NodeFlags::SPARSE, "sparse"),
+            (NodeFlags::COMPRESSED, "compressed"),
+            (NodeFlags::HIDDEN, "hidden"),
+            (NodeFlags::SYSTEM, "system"),
+            (NodeFlags::HARDLINK_DUP, "hardlink_dup"),
+            (NodeFlags::SYNTHETIC, "synthetic"),
+        ]
+        .into_iter()
+        .filter_map(|(flag, name)| node.flags().contains(flag).then_some(name))
+        .collect()
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -73,11 +261,11 @@ impl<'a> InfoReport<'a> {
         let snapshot = &output.snapshot;
         let geometry = snapshot.volume().geometry();
         let context = snapshot.volume().context();
-        let root = snapshot.node(NodeId::ROOT).ok_or(CliError::Snapshot {
-            source: SnapshotError::InvalidTree {
+        let root = snapshot
+            .node(NodeId::ROOT)
+            .ok_or(CliError::InconsistentSnapshot {
                 reason: "missing root",
-            },
-        })?;
+            })?;
         Ok(Self {
             envelope: Envelope::new(command, source, output),
             volume: Volume {

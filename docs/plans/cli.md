@@ -117,7 +117,7 @@ Each milestone ends with one reviewed commit and `deno task check` green. A mile
 
 ### C4 — top, ext, ls and paths
 
-- [ ] Add `command/{top,ext,ls}.rs` and `locate.rs` per D2, D4, D5 with structural, exact-text and path tests.
+- [x] Add `command/{top,ext,ls}.rs` and `locate.rs` per D2, D4, D5 with structural, exact-text and path tests.
 
 ### C5 — TUI navigation
 

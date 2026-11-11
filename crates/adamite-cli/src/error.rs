@@ -1,4 +1,4 @@
-use adamite_core::snapshot::{PersistError, SnapshotError};
+use adamite_core::snapshot::{NodeId, PersistError, SnapshotError};
 use adamite_io::error::VolumeError;
 use snafu::Snafu;
 use std::{
@@ -12,6 +12,18 @@ use std::{
 pub(crate) enum CliError {
     #[snafu(display("{message}"))]
     Usage { message: &'static str },
+    #[snafu(display("path component {component:?} not found in {path:?}"))]
+    PathNotFound { path: String, component: String },
+    #[snafu(display(
+        "ambiguous path component {component:?} in {path:?}; candidate NodeIds: {candidates:?}; use #id to select a direct child"
+    ))]
+    AmbiguousPath {
+        path: String,
+        component: String,
+        candidates: Vec<NodeId>,
+    },
+    #[snafu(display("not a directory: {path:?}"))]
+    NotADirectory { path: String },
     #[snafu(display("cannot {operation} {}", path.display()))]
     Io {
         operation: &'static str,
@@ -38,6 +50,8 @@ pub(crate) enum CliError {
     SameAsSource { path: PathBuf },
     #[snafu(display("cannot read snapshot tree"))]
     Snapshot { source: SnapshotError },
+    #[snafu(display("snapshot is inconsistent: {reason}"))]
+    InconsistentSnapshot { reason: &'static str },
     #[snafu(display("snapshot {} is too large for this platform", path.display()))]
     SnapshotLength { path: PathBuf },
     #[snafu(display("cannot allocate snapshot buffer for {}", path.display()))]

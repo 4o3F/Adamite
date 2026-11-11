@@ -11,6 +11,7 @@
 mod cli;
 mod command;
 mod error;
+mod locate;
 mod render;
 mod report;
 mod save;
