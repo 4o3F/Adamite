@@ -67,6 +67,6 @@ Each milestone ends with one reviewed commit, `deno task check` green and CI gre
 - [x] On the 1M in-use reference volume, scan peak requested heap ≤ 500 MB and `scan -o` / `info` add no full-file buffer.
 - [x] With the default profile, reads never exceed 256 MiB/s averaged over any second; `--profile max` restores unthrottled reads.
 - [x] Snapshot contents, the golden `.adm`, corpora and all oracles are unchanged.
-- [ ] `adamite --trace-chrome trace.json scan <source>` writes a trace showing every D2 stage with duration and heap, on Linux images and a Windows drive.
-- [ ] `deno task check` (with the budget test) and CI pass; ARCHITECTURE §5/§7 and READMEs describe the self-imposed limits and profiling.
+- [x] `adamite --trace-chrome trace.json scan <source>` writes a trace showing every D2 stage with duration and heap, on Linux images and a Windows drive.
+- [x] `deno task check` (with the budget test) and CI pass; ARCHITECTURE §5/§7 and READMEs describe the self-imposed limits and profiling.
 
