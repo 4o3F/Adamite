@@ -2,13 +2,15 @@
 
 `adamite-io` reads NTFS volume bytes and drives `adamite-core` scans to an immutable snapshot and statistics. It provides borrowed slices, read-only image files and Windows raw volumes through `reader::VolumeReader`, with exact positional reads into caller-owned buffers. `driver::SyncDriver` runs on the calling thread and serves queued requests in issue order when core waits for input.
 
-The public API lives under `reader::`, `driver::` and `error::`; the crate root exports modules only. Reader implementation modules are private and their types are exported directly under `reader::`.
+The public API lives under `reader::`, `driver::`, `limits::` and `error::`; the crate root exports modules only. Reader implementation modules are private and their types are exported directly under `reader::`.
 
 ```text
 src/
   lib.rs            crate docs, attributes and module declarations
   error.rs          VolumeError with host and core error sources
   driver.rs         SyncDriver and private request batching
+  limits.rs         ScanLimits and shared ScanProfile defaults
+  pacer.rs          private token bucket and clock abstraction
   reader/
     mod.rs          VolumeReader and reader type exports
     slice.rs        SliceReader borrowing an immutable byte slice
@@ -22,16 +24,12 @@ src/
 ## Driving a scan
 
 ```rust
-use adamite_core::scan::ScanConfig;
-use adamite_io::{driver::SyncDriver, reader::ImageReader};
+use adamite_io::{driver::SyncDriver, limits::ScanProfile, reader::ImageReader};
 use std::{error::Error, path::Path};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let mut reader = ImageReader::open(Path::new("target/basic-4k.img"))?;
-    let driver = SyncDriver::new(ScanConfig {
-        context: reader.context()?,
-        ..ScanConfig::default()
-    })?;
+    let driver = SyncDriver::with_limits(ScanProfile::Balanced.limits(), reader.context()?)?;
     let output = driver.run(&mut reader)?;
     println!("{:?}", output.stats);
     println!("{:?}", output.snapshot.volume());
@@ -41,7 +39,9 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 Sources start at volume byte zero. Decompress fixture images before opening them; partitioned disks and VHD/VHDX containers require extraction of the volume image first. `ImageReader` caches the opened file's length, retries interrupted reads and completes partial reads; truncation after opening returns `ShortRead`.
 
-`ScanConfig::default()` selects one outstanding request and 1 MiB chunks. The driver validates configuration at construction and starts a fresh scanner on each `run`. Increasing `max_outstanding` batches logical requests; native reads remain synchronous with depth 1. The driver reuses its response buffer within a run. The caller supplies optional `ScanContext` before constructing the driver. `ImageReader::context()` supplies the current FILETIME scan timestamp, with `label` and `free_bytes` set to `None`; it returns `VolumeError::Overflow` if the clock cannot be converted. On Windows, `RawVolumeReader::context()` also supplies the volume label and free bytes.
+`ScanLimits::default()` selects Balanced: 256 MiB/s, one outstanding request, 1 MiB chunks and a worker ceiling of one. Background selects 64 MiB/s with 1 MiB chunks; Max disables pacing and uses 4 MiB chunks. Every positive `threads` ceiling is accepted; the synchronous driver uses one thread. Future parallel work must honour that ceiling. `ScanLimits::config(context)` produces core configuration and validates the chunk and outstanding-request bounds through core. `SyncDriver::new(ScanConfig)` keeps the uncapped configuration API. The driver validates configuration at construction and starts a fresh scanner on each `run`. Increasing `max_outstanding` batches logical requests; native reads remain synchronous with depth 1. The driver reuses its response buffer within a run. The caller supplies optional `ScanContext` before constructing the driver. `ImageReader::context()` supplies the current FILETIME scan timestamp, with `label` and `free_bytes` set to `None`; it returns `VolumeError::Overflow` if the clock cannot be converted. On Windows, `RawVolumeReader::context()` also supplies the volume label and free bytes.
+
+The token bucket starts empty and holds one chunk. When the budget R exceeds the chunk C, refill is R − C bytes per second, so any interval t admits at most B + (R − B)t bytes. This reserves the burst allowance and keeps every one-second window within the profile budget. Rates at or below one chunk per second refill at R, with a one-chunk burst allowance. Pacing counts requested logical bytes; Windows sector alignment can expand native reads. Each wait emits `rate_limit_wait` with bytes and actual waited nanoseconds. Time and sleeping belong to I/O; injected-clock tests perform no real sleeps.
 
 ## Errors
 
@@ -87,4 +87,4 @@ cargo test -p adamite-io --test raw_volume -- --ignored
 
 CI runs these ignored tests only on Windows, after the normal workspace tests. For command-line image and raw-volume scans, use [`adamite-cli`](../adamite-cli/README.md).
 
-Parallel parsing, buffer pools, native I/O depth above 1, rate limits, priority controls and Linux block-device access remain future work.
+Parallel parsing, buffer pools, native I/O depth above 1 and Linux block-device access remain future work. Adamite enforces its resource limits without operating-system priority APIs.

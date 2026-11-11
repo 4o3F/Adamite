@@ -75,6 +75,24 @@ The example shows the envelope; command fields are added at the top level. `sour
 
 Errors use text on standard error, beginning with `error:` and followed by `caused by:` lines when a source exists. Failed commands leave standard output empty. A broken standard-output pipe ends successfully.
 
+## Scan resource limits
+
+All six commands accept the same scan flags. Loading a saved snapshot ignores them.
+
+| Flag | Default and meaning |
+|---|---|
+| `--profile background\|balanced\|max` | Balanced: 256 MiB/s and 1 MiB chunks. Background: 64 MiB/s and 1 MiB chunks. Max: uncapped reads and 4 MiB chunks. All profiles use one outstanding request. |
+| `--max-read-rate <BYTES>` | Override the profile's read budget. K/M/G and KiB/MiB/GiB use powers of 1024, for example `128M` or `128MiB`. Zero and `unlimited` are rejected; select `--profile max` to uncap. |
+| `--threads <N>` | Positive worker ceiling, default 1. The current scanner uses one thread for every ceiling; future parallel work must honour it. |
+
+Adamite sleeps between reads to enforce the budget. For budgets larger than one chunk per second, the token bucket reserves one chunk from its refill rate so any one-second window stays within the requested budget. Very low custom budgets allow one indivisible chunk beyond the one-second budget. Rates count logical requested bytes; Windows sector alignment can expand native reads.
+
+```text
+adamite scan C: --profile background -o C.adm
+adamite info volume.img --profile balanced --max-read-rate 128M --threads 4
+adamite scan volume.img --profile max
+```
+
 ## Saving snapshots
 
 `scan -o` encodes the completed scan, creates a same-directory temporary file named `.<file>.<pid>-<n>.tmp` with exclusive creation (up to 16 collision retries), writes and synchronizes it, then closes it before publication. Without `--force`, existing destinations are rejected before scanning. Directories and outputs resolving to the source image are also rejected.

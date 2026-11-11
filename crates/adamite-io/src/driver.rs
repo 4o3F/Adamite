@@ -1,15 +1,21 @@
 //! Synchronous request batching and exact response delivery.
 
-use crate::{error::VolumeError, reader::VolumeReader};
+use crate::{
+    error::VolumeError,
+    limits::ScanLimits,
+    pacer::{Pacer, SystemClock},
+    reader::VolumeReader,
+};
 use adamite_core::scan::{
     FeedError, ReadRequest, ScanConfig, ScanOutput, ScanPhase, ScanStep, Scanner,
 };
-use std::collections::VecDeque;
+use std::{collections::VecDeque, num::NonZeroU64};
 
 /// Reusable synchronous scan driver with validated configuration.
 #[derive(Debug, Clone)]
 pub struct SyncDriver {
     config: ScanConfig,
+    max_read_bytes_per_sec: Option<NonZeroU64>,
 }
 
 impl SyncDriver {
@@ -22,7 +28,29 @@ impl SyncDriver {
         config
             .validate()
             .map_err(|source| VolumeError::Config { source })?;
-        Ok(Self { config })
+        Ok(Self {
+            config,
+            max_read_bytes_per_sec: None,
+        })
+    }
+
+    /// Constructs a paced driver with validated limits and caller metadata.
+    ///
+    /// The synchronous driver uses one thread, satisfying every positive worker ceiling.
+    /// Future parallel work must also stay within `limits.threads`.
+    ///
+    /// # Errors
+    /// Returns [`VolumeError::Config`] for invalid core transport bounds.
+    pub fn with_limits(
+        limits: ScanLimits,
+        context: adamite_core::scan::ScanContext,
+    ) -> Result<Self, VolumeError> {
+        let config = limits
+            .config(context)
+            .map_err(|source| VolumeError::Config { source })?;
+        let mut driver = Self::new(config)?;
+        driver.max_read_bytes_per_sec = limits.max_read_bytes_per_sec;
+        Ok(driver)
     }
 
     /// Borrows the validated configuration and caller-supplied context.
@@ -39,7 +67,7 @@ impl SyncDriver {
     pub fn run<R: VolumeReader + ?Sized>(&self, reader: &mut R) -> Result<ScanOutput, VolumeError> {
         let mut scanner =
             Scanner::new(self.config.clone()).map_err(|source| VolumeError::Config { source })?;
-        let mut pending = Pending::default();
+        let mut pending = Pending::new(self.max_read_bytes_per_sec, self.config.chunk_size);
         loop {
             let step = scanner
                 .step()
@@ -53,14 +81,23 @@ impl SyncDriver {
     }
 }
 
-#[derive(Debug, Default)]
 struct Pending {
     requests: VecDeque<ReadRequest>,
     buffer: Vec<u8>,
     phase: Option<ScanPhase>,
+    pacer: Pacer<SystemClock>,
 }
 
 impl Pending {
+    fn new(max_read_bytes_per_sec: Option<NonZeroU64>, chunk_size: usize) -> Self {
+        Self {
+            requests: VecDeque::new(),
+            buffer: Vec::new(),
+            phase: None,
+            pacer: Pacer::new(SystemClock::default(), max_read_bytes_per_sec, chunk_size),
+        }
+    }
+
     fn handle<R, F>(
         &mut self,
         step: ScanStep,
@@ -128,6 +165,7 @@ impl Pending {
             self.buffer.resize(request.len, 0);
             {
                 let _entered = span.enter();
+                self.pacer.acquire(request.len);
                 reader.read_exact_at(request.offset, &mut self.buffer)?;
             }
             bytes = bytes
@@ -196,7 +234,7 @@ mod tests {
 
     #[test]
     fn needs_and_cpu_progress_defer_reads_until_one_waiting_batch() -> Result<(), Box<dyn Error>> {
-        let mut pending = Pending::default();
+        let mut pending = Pending::new(None, 1 << 20);
         let mut reader = RecordingReader::default();
         let requests = [
             ReadRequest {
@@ -261,7 +299,7 @@ mod tests {
 
     #[test]
     fn waiting_serves_a_single_request_below_capacity() -> Result<(), Box<dyn Error>> {
-        let mut pending = Pending::default();
+        let mut pending = Pending::new(None, 1 << 20);
         let mut reader = RecordingReader::default();
         let request = ReadRequest {
             id: RequestId::from_raw(0),
@@ -281,7 +319,7 @@ mod tests {
 
     #[test]
     fn waiting_without_requests_preserves_progress_context() -> Result<(), Box<dyn Error>> {
-        let mut pending = Pending::default();
+        let mut pending = Pending::new(None, 1 << 20);
         let mut reader = RecordingReader::default();
         let error = pending
             .handle(progress(true, 7), &mut reader, |_, _| Ok(()))
@@ -302,7 +340,7 @@ mod tests {
 
     #[test]
     fn completion_requires_an_empty_queue() -> Result<(), Box<dyn Error>> {
-        let mut pending = Pending::default();
+        let mut pending = Pending::new(None, 1 << 20);
         pending.finish()?;
         let mut reader = RecordingReader::default();
         pending.handle(progress(false, 0), &mut reader, |_, _| Ok(()))?;
@@ -335,7 +373,7 @@ mod tests {
     #[test]
     fn invalid_and_overflowing_ranges_fail_before_reading() -> Result<(), Box<dyn Error>> {
         for offset in [4096, u64::MAX] {
-            let mut pending = Pending::default();
+            let mut pending = Pending::new(None, 1 << 20);
             let mut reader = RecordingReader::default();
             let error = pending
                 .handle(

@@ -1525,3 +1525,45 @@ fn chrome_trace_covers_snapshot_saving_loading_and_validation() -> TestResult {
     }
     Ok(())
 }
+
+#[test]
+fn invalid_resource_limits_exit_two_before_opening_source() -> TestResult {
+    for (flag, value) in [
+        ("--profile", "fast"),
+        ("--max-read-rate", "0"),
+        ("--max-read-rate", "unlimited"),
+        ("--max-read-rate", "999999999999999999999G"),
+        ("--threads", "0"),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_adamite"))
+            .args(["scan", "missing-source.img", flag, value])
+            .output()?;
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+        assert!(String::from_utf8(output.stderr)?.contains("error:"));
+    }
+    Ok(())
+}
+
+#[test]
+fn snapshot_queries_ignore_scan_limits() -> TestResult {
+    let case = Case::new("snapshot-resource-limits", "basic-4k")?;
+    let snapshot = case.snapshot("source.adm")?;
+    for name in ["info", "top", "ext", "ls"] {
+        let expected = case.json(name, &snapshot);
+        let actual = case.json_with(
+            name,
+            &snapshot,
+            &[
+                "--profile",
+                "background",
+                "--max-read-rate",
+                "1",
+                "--threads",
+                "8",
+            ],
+        );
+        assert_eq!(actual, expected);
+    }
+    Ok(())
+}

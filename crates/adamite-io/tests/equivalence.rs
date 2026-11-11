@@ -97,3 +97,57 @@ fn slice_and_image_scans_match_baseline_for_all_fixtures_and_configs() -> TestRe
     }
     Ok(())
 }
+
+#[derive(Debug)]
+struct RecordingReader<'a> {
+    inner: SliceReader<'a>,
+    requests: Vec<(u64, usize)>,
+}
+
+impl VolumeReader for RecordingReader<'_> {
+    fn len_bytes(&self) -> u64 {
+        self.inner.len_bytes()
+    }
+
+    fn read_exact_at(
+        &mut self,
+        offset: u64,
+        buffer: &mut [u8],
+    ) -> Result<(), adamite_io::error::VolumeError> {
+        self.requests.push((offset, buffer.len()));
+        self.inner.read_exact_at(offset, buffer)
+    }
+}
+
+#[test]
+fn limits_control_observed_reads_and_preserve_snapshot_bytes() -> TestResult {
+    use adamite_io::limits::ScanProfile;
+    use std::num::NonZeroUsize;
+
+    let fixture = Fixture::load(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/ntfs/basic-4k.json"),
+    )?;
+    let expected = baseline(ScanConfig::default(), fixture.image())?;
+    for chunk in [512, 1024, 4096, 16 << 20] {
+        for depth in [1, 2, 5] {
+            let mut limits = ScanProfile::Max.limits();
+            limits.chunk_size = chunk;
+            limits.io_depth = NonZeroUsize::new(depth).ok_or("depth")?;
+            limits.threads = NonZeroUsize::new(16).ok_or("threads")?;
+            let driver = SyncDriver::with_limits(limits, ScanContext::default())?;
+            assert_eq!(driver.config().max_outstanding, depth);
+            let mut reader = RecordingReader {
+                inner: SliceReader::new(fixture.image()),
+                requests: Vec::new(),
+            };
+            let actual = driver.run(&mut reader)?;
+            assert_eq!(actual.to_bytes()?, expected.to_bytes()?);
+            assert!(!reader.requests.is_empty());
+            assert!(reader.requests.iter().all(|(_, len)| *len <= chunk));
+            if chunk <= 4096 {
+                assert!(reader.requests.iter().any(|(_, len)| *len == chunk));
+            }
+        }
+    }
+    Ok(())
+}

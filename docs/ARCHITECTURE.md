@@ -217,129 +217,58 @@ summarize(root, budget_nodes, min_share):
 
 The planned MCP response convention includes snapshot timestamp and units in every result, with `format: text|json` and text as the default. The implemented CLI mirrors a subset: `scan`, `info`, `top`, `ext` and `ls` use text by default and accept `--json` with the `adamite/1` schema; `browse` opens the TUI. For example, `adamite top C.adm --n 20 --json` reads the stored file index. Budgeted `tree`, search and subtree filtering/ranking await `add-core-query`. See the [CLI README](../crates/adamite-cli/README.md) for the command and output contracts.
 
-## 5. Parallelism and Resource Limits (planned)
+## 5. Parallelism and Resource Limits
 
-`adamite-io` implements `VolumeReader` for borrowed slices, image files and Windows raw volumes, with `SyncDriver` feeding exact responses to core. The Windows reader opens volumes read-only with `FILE_FLAG_NO_BUFFERING` and performs synchronous reads at native depth 1. It expands requests to logical-sector boundaries in physically aligned storage and copies the exact requested range, including core's 512-byte boot request on a 4Kn source. `ImageReader::context()` supplies the current scan timestamp, and `RawVolumeReader::context()` supplies host metadata and the scan timestamp.
+### 5.1 Current driver limits
 
-The full design below is future roadmap step 3 work. CPU, I/O, transport memory and concurrent scans will each have their own cap, coordinated by a driver/service-level `ScanLimits`. Core already supports multiple outstanding requests through `ScanConfig.max_outstanding`; `SyncDriver` batches these requests and serves them in issue order when core waits for input. Parsing remains single-threaded. Buffer pools, parallelism, native I/O depth above 1 and rate limiting remain planned adapter/driver work, and core never uses a global thread pool.
-
-### 5.1 Resources and controls
-
-| Resource | Failure if unbounded | Planned control |
-|---|---|---|
-| CPU | Parse workers and sorting saturate all cores and the foreground stutters | A driver-owned dedicated rayon ThreadPool with a capped thread count and lowered priority |
-| Disk I/O | Large sequential reads fill the disk queue and increase other I/O latency | Adapter cap on in-flight native reads, optional rate limit and low I/O priority |
-| Transport memory | The reader outpaces consumption and buffers pile up | Fixed-size adapter buffer pool and bounded response queue, coordinated with core's request cap |
-| Concurrent scans | Several agents trigger scans and their loads stack | Service semaphore; one scan per volume, with duplicate requests sharing the running task |
-
-The retained scaling target is 10M nodes without per-node name allocation. A rough layout estimate is 640 MB of hot nodes, 40 MB of CSR children and approximately 150 MB of names, plus cold columns, scan intermediates and transport storage. This is a planning estimate, not a measured total-memory bound; metadata budgets remain future work.
-
-### 5.2 Configuration
-
-This proposed configuration belongs to the future adapter/scan driver; its profile defaults are separate from today's core defaults of cap 1 and 1 MiB chunks.
+Adamite limits its own reads and work through `adamite_io::limits::ScanLimits`. `SyncDriver::with_limits` configures core's chunk size and maximum outstanding requests, validates them through `ScanConfig`, and paces reads between requests. The driver runs on the calling thread, parses serially and reuses one response buffer. Native read depth remains one even when the logical request ceiling is larger. Core starts no threads, reads no clocks and never sleeps.
 
 ```rust
 pub struct ScanLimits {
-    /// Future parse/sort worker count. Planned default: max(1, cores / 2).
-    pub threads: NonZeroUsize,
-    /// Planned driver chunk size: 4 MiB; also configure ScanConfig.chunk_size.
-    pub chunk_size: usize,
-    /// Adapter buffers in flight or queued. Planned default: threads + 2.
-    pub buffers: NonZeroUsize,
-    /// Outstanding native reads. Planned default: 2; 1 for synchronous I/O.
-    pub io_depth: NonZeroUsize,
-    /// Optional adapter token-bucket throughput cap. Planned default: None.
     pub max_read_bytes_per_sec: Option<NonZeroU64>,
-    /// Lower driver/worker CPU and I/O priority. Planned default: true.
-    pub low_priority: bool,
+    pub io_depth: NonZeroUsize,
+    pub chunk_size: usize,
+    pub threads: NonZeroUsize,
 }
 
 pub enum ScanProfile { Background, Balanced, Max }
 ```
 
-| Planned profile | threads | io_depth | Rate limit | Low priority |
+| Profile | Read budget | Chunk size | io_depth | threads |
 |---|---|---|---|---|
-| Background | 2 | 1 | 200 MB/s | yes |
-| Balanced (default) | max(1, cores / 2) | 2 | none | yes |
-| Max | all cores | 4 | none | no |
+| Background | 64 MiB/s | 1 MiB | 1 | 1 |
+| Balanced (default) | 256 MiB/s | 1 MiB | 1 | 1 |
+| Max | Uncapped | 4 MiB | 1 | 1 |
 
-Future CLI resource options will include overrides such as `--threads 4 --io-depth 1 --max-read 300M`; planned MCP `scan_volume` will accept a profile plus overrides. The driver will coordinate native `io_depth`, buffer capacity and core's `max_outstanding`: native reads and unconsumed logical requests are different limits. Raising the request cap does not parallelize core.
+`threads` is a positive upper bound: the synchronous scan uses one thread for every accepted value. Future parallel work must honour this ceiling. `io_depth` sets `ScanConfig.max_outstanding`; increasing it batches logical requests without adding native read concurrency. Core accepts chunks that are multiples of 512 between 512 bytes and 16 MiB, and rejects an overflowing depth × chunk product. The legacy `SyncDriver::new(ScanConfig)` constructor retains uncapped reads for callers that directly configure core.
 
-### 5.3 CPU: dedicated pool
+Every CLI source command accepts `--profile background|balanced|max`, `--max-read-rate <BYTES>` and `--threads <N>`. Rate suffixes K/M/G and KiB/MiB/GiB use powers of 1024. The rate override replaces the selected profile's budget; zero is rejected, and `--profile max` selects uncapped reads. Snapshot loading ignores scan limits. The development benchmark defaults to Max and accepts `--profile`; its `--chunk-size` override keeps heap comparisons at a fixed request size.
 
-The future driver/service owns the CPU pool. A later parallel implementation will route parse and sort work onto it; the current Scanner remains serial.
+### 5.2 Read pacing and the one-second bound
 
-```rust
-let pool = rayon::ThreadPoolBuilder::new()
-    .num_threads(limits.threads.get())
-    .thread_name(|i| format!("adamite-scan-{i}"))
-    .start_handler(move |_| if low_priority { platform::lower_thread_priority() })
-    .build()?;
+The I/O-owned token bucket uses integer byte-nanosecond accounting, starts empty and has capacity B = max(C, floor(R / 1000)) bytes, where C is the configured chunk and R is the requested bytes per second. This uses a one-millisecond refill window, with space for at least one chunk. For R greater than B, it replenishes at R − B bytes per second, reserving the bucket capacity from the one-second budget for a possible burst after idle time. For every interval of duration t, admitted request bytes are at most B + (R − B)t. For the named profiles B = C. At t = 1 second the bound is R: Balanced replenishes at 255 MiB/s and admits at most 256 MiB in any one-second window; Background replenishes at 63 MiB/s and admits at most 64 MiB. Integer division rounds waits upward. For budgets at or below one chunk per second, refill uses R and the bound is R × t + C because an indivisible chunk can itself exceed a one-second budget.
 
-pool.install(|| {
-    // Planned Phase 1 parsing and Phase 6 sorting/extension-stat work.
-    // Nested parallel iterators stay on this dedicated pool.
-});
-```
+Before each read, the driver sleeps for the missing tokens through an I/O-owned clock abstraction. Production uses `Instant` and `thread::sleep`; unit tests inject a clock that advances immediately. Oversized acquisitions consume tokens in capacity-sized pieces so they progress; validated driver requests never exceed the configured chunk. Each sleep emits a `rate_limit_wait` span containing requested bytes and actual `waited_nanos`. The budget counts exact logical bytes requested from `VolumeReader`; Windows alignment can expand native reads to logical sectors.
 
-- Planned parallel work uses the supplied pool rather than `rayon::spawn` or a global pool, so embedding applications keep control of their threads.
-- The proposed blocking reader is one extra driver-owned, mostly I/O-blocked thread and does not count toward `threads`.
-- On Windows, the driver will lower worker priority with `SetThreadPriority(THREAD_PRIORITY_BELOW_NORMAL)`. A standalone CLI may use `PROCESS_MODE_BACKGROUND_BEGIN` to lower CPU, I/O and memory-page priority together.
+### 5.3 Future CPU pool and buffer backpressure
 
-### 5.4 I/O and memory: buffer-pool backpressure
+Parallel parsing and per-directory sorting will use a driver-owned dedicated rayon pool capped by `limits.threads`. Work and nested parallel iterators must stay in that pool. Core will continue to avoid the global pool. Adamite will enforce its limits through scheduling, pacing and bounded storage; it does not use operating-system priority APIs.
 
-The planned adapter/driver pipeline is:
+A future asynchronous reader will acquire a buffer from a fixed-size pool before issuing a read, acquire rate tokens, and publish the response through a bounded queue. Feeding the response returns the buffer to the pool. Pool exhaustion stops producers until consumers return buffers. The driver must coordinate pool capacity, native depth and core's outstanding-request ceiling. Today the synchronous driver serves one request at a time and keeps one reusable response buffer; the Windows reader separately reuses its physically aligned native buffer.
 
-```text
-          ┌──── free buffers (bounded, N = buffers) ◄───────────────────┐
-          ▼                                                            │
-adapter: take buffer → rate limit → aligned read → bounded ready queue  │
-                                                  │                   │
-driver:                               feed(id, exact slice) → return buffer
-                                                  │ copies response
-                                                  ▼
-core:                                  step() → consume request slot
-```
+The Windows reader opens volumes read-only with `FILE_FLAG_NO_BUFFERING`, expands requests to logical-sector boundaries and copies only the exact requested range. Device opening and volume context remain adapter responsibilities. Cross-extent assembly and virtual ordering remain core responsibilities.
 
-- Allocate the adapter's aligned buffers once and reuse them. Pool payload capacity is approximately `chunk_size × buffers`, with alignment padding; core's copied responses and growing metadata require additional memory.
-- The reader must acquire a free buffer before issuing a read. A full response queue or exhausted pool blocks the driver/reader. Core's occupied request slots independently cap accepted but unconsumed responses; the driver also stops issuing work when that cap is reached.
-- After a successful `feed`, core retains its own copy, so the adapter can return the source buffer to the pool immediately. Core neither borrows the pool nor waits on its channels.
-- On Windows, `RawVolumeReader` already uses `FILE_FLAG_NO_BUFFERING`, expanding each nonempty request to logical-sector boundaries in a physically aligned buffer and performing one synchronous native read. It feeds only the exact requested range; a pool of aligned buffers remains planned.
-- `io_depth` caps outstanding native reads, with 1 for synchronous reads. Depth 2 is the proposed balanced starting point for sequential HDD access, subject to measurement on the device.
-- The planned rate limiter is a token bucket: acquire `chunk_len` before reading and sleep in the adapter/driver when tokens run out.
-- Low I/O priority is planned through `SetFileInformationByHandle(FileIoPriorityHintInfo, IoPriorityHintLow)` on the volume handle.
+### 5.4 Future service scheduling and memory budgets
 
-### 5.5 Service-level scan scheduling
+A future service scheduler will deduplicate scans by volume and cap concurrent scans, initially at one. Cancellation checks belong before driver reads and between worker chunks. Queries may use a separate small pool. Dedicated pools, parallel parsing/sorting, buffer-pool backpressure, `$MFT:$BITMAP` skipping and service scheduling remain future work.
 
-The proposed service scheduler is:
-
-```rust
-pub struct ScanScheduler {
-    global: Semaphore,                                  // concurrent scans, default 1
-    running: Mutex<HashMap<VolumeId, Shared<ScanTask>>>,  // per-volume deduplication
-}
-```
-
-- A duplicate request for a volume will return the running task's handle; callers subscribe to its progress.
-- The planned global semaphore defaults to 1. Different-volume scans queue and run serially so their worker pools do not stack beyond configured limits.
-- Each future scan job carries a CancellationToken. The driver checks it before reads and driver calls, and future workers check it per chunk. Dropping the current Scanner stops further core work; no cancellation-token API exists in core. The planned cancellation target is tens of milliseconds, to be validated against directory-sort latency; MCP exposes `cancel_scan`.
-- Queries are planned as mostly single-threaded slice operations. Full-scan operations such as search may use a small shared query pool, initially 2 threads.
-
-### 5.6 Impact on the pipeline
-
-- Phase 0 device opening, aligned reads and future USN-position acquisition belong to the adapter/service. Core keeps its boot → record 0 → discovery protocol.
-- Phase 1 will use adapter buffer-pool backpressure and, in the later parallel design, capped parse workers. Cross-extent assembly and virtual ordering remain core responsibilities.
-- Phases 3–5 (link, CSR construction and aggregation) remain single-threaded linear passes in the proposed parallel pipeline.
-- Phase 6 is planned to use parallel per-directory sorting and extension-stat work on the same dedicated CPU pool.
-- Future driver/service telemetry will record `threads_used`, `peak_buffer_bytes` and `throttled_ms` so resource controls can be measured. Core ScanStats remains independent of transport counts and clocks.
-
-Dedicated CPU pools, parallel parse/sort, buffer-pool backpressure, `$BITMAP` skipping and general CPU/memory/scan limits remain roadmap step 3 work. No ScanLimits, resource profiles, global pool or service scheduler is implemented. Memory for metadata and a single directory sort's cost remain unbounded by a general budget.
+The retained scaling target is 10M nodes without per-node name allocation. A rough layout estimate is 640 MB of hot nodes, 40 MB of CSR children and approximately 150 MB of names, plus cold columns, scan intermediates and transport storage. Metadata memory and a single directory sort remain outside a general memory budget.
 
 ## 6. Implementation Order
 
 1. Done: `adamite-ntfs`, shared fixture support and independently measured v3 manifests; parser `no_std` builds remain supported.
 2. Done: single-threaded sans-io `adamite-core`, phases 0–6, fixture oracles, property tests and bounded fuzzing. Automated WizTree/`dir /s` comparison is deferred; manual Windows comparison has not been performed.
-3. Done: `adamite-io` with slice/image/Windows raw-volume readers, synchronous driving and adapter-supplied context. Next is roadmap step 3 parallelism, buffer ownership, bitmap skipping and resource controls, or `add-core-query`.
+3. Done: `adamite-io` with slice/image/Windows raw-volume readers, synchronous driving and adapter-supplied context. Self-imposed read limits and profiles are implemented. Next is roadmap step 3 parallelism, buffer ownership and bitmap skipping, or `add-core-query`.
 4. Done: core `.adm` snapshot persistence, the `adamite` CLI, shared display formatting and terminal browser. CI packages Linux/Windows binaries; the tag-triggered release workflow reuses CI artifacts. Future: `add-core-query` for budgeted summaries, search and dynamic subtree queries.
 5. Future: MCP and scan-job/snapshot services.
 6. Future: USN incremental refresh and a daemon; walkdir fallback remains separate future work.
@@ -352,6 +281,6 @@ Production types must not carry fields, variants or hook state used only by test
 
 Library errors use snafu with source chains and documented `# Errors` sections. Core separates configuration, feed, fatal scan, snapshot and persistence errors; ordinary rejected records are counted in `ScanStats`. Workspace snafu disables default features and enables `rust_1_81`, preserving parser `no_std` support.
 
-Crates that log use workspace tracing: core emits per-call phase spans and bootstrap/ingest/merge/link/build/aggregate/finalize stage spans; persistence emits encode/decode/validate spans; I/O emits batch and reader spans; the CLI emits source/load/scan/save/render spans; the TUI emits startup and frame-render spans. Stage handles may span driver calls, but entered guards never survive a driver call. The parser does not log. The `adamite` binary installs a tracing subscriber through `adamite-profile` only when `--trace-chrome <FILE>` is given. Its counting allocator tracks requested heap bytes; each span closes with a `heap_usage` event containing `heap_current` (current live bytes), `heap_peak` (the maximum live bytes while that span was open), `heap_delta` (the signed change since span creation) and `process_peak` (the process-wide maximum). At each span open/close boundary, the heap layer folds the allocator interval peak into every open span before adding or removing that span, preserving peaks for nested and overlapping lifetimes. The trace guard finishes the JSON file when the command returns, including errors. Adapters read the clock and supply timestamps through caller context; core reads no clocks.
+Crates that log use workspace tracing: core emits per-call phase spans and bootstrap/ingest/merge/link/build/aggregate/finalize stage spans; persistence emits encode/decode/validate spans; I/O emits batch, reader and rate-limit-wait spans; the CLI emits source/load/scan/save/render spans; the TUI emits startup and frame-render spans. Stage handles may span driver calls, but entered guards never survive a driver call. The parser does not log. The `adamite` binary installs a tracing subscriber through `adamite-profile` only when `--trace-chrome <FILE>` is given. Its counting allocator tracks requested heap bytes; each span closes with a `heap_usage` event containing `heap_current` (current live bytes), `heap_peak` (the maximum live bytes while that span was open), `heap_delta` (the signed change since span creation) and `process_peak` (the process-wide maximum). At each span open/close boundary, the heap layer folds the allocator interval peak into every open span before adding or removing that span, preserving peaks for nested and overlapping lifetimes. The trace guard finishes the JSON file when the command returns, including errors. Adapters read the clock and supply timestamps through caller context; core reads no clocks.
 
 Task automation and fixture generation use Deno TypeScript through root `deno.json`. `deno task check` includes `adamite-io`, `adamite-cli`, `adamite-tui`, `adamite-profile` and `adamite-bench` Clippy for `x86_64-pc-windows-gnu`; native Windows CI also runs the ignored elevated I/O and CLI raw-volume tests after workspace tests. Do not add bash, Python or just scripts; CI steps invoke only `cargo` or `deno` one-liners. The separate `deno task bench` runs release resource measurements for 300k and 1M in-use records through the shared profiling recorder. Plans live in `docs/plans/`, one file per change.

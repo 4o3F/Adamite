@@ -1,8 +1,9 @@
 use crate::error::CliError;
-use adamite_core::scan::{ScanConfig, ScanContext, ScanOutput};
+use adamite_core::scan::{ScanContext, ScanOutput};
 use adamite_io::{
     driver::SyncDriver,
     error::VolumeError,
+    limits::ScanLimits,
     reader::{ImageReader, VolumeReader},
 };
 use std::{
@@ -74,7 +75,7 @@ impl Source {
         matches!(self, Self::Snapshot { .. })
     }
 
-    pub(crate) fn load(self) -> Result<ScanOutput, CliError> {
+    pub(crate) fn load(self, limits: ScanLimits) -> Result<ScanOutput, CliError> {
         match self {
             Self::Snapshot { path, mut file } => {
                 let _entered = tracing::info_span!("snapshot_load").entered();
@@ -107,7 +108,7 @@ impl Source {
                     source,
                 })
             }
-            Self::Image { path } => Self::run_scan(&path, || {
+            Self::Image { path } => Self::run_scan(&path, limits, || {
                 let reader = ImageReader::open(&path)?;
                 let context = reader.context()?;
                 Ok((reader, context))
@@ -117,28 +118,25 @@ impl Source {
                 drive: false,
                 source,
             }),
-            Self::Drive { letter, path } => Self::scan_drive(letter, path),
+            Self::Drive { letter, path } => Self::scan_drive(letter, path, limits),
         }
     }
 
     fn run_scan<R: VolumeReader>(
         path: &Path,
+        limits: ScanLimits,
         open: impl FnOnce() -> Result<(R, ScanContext), VolumeError>,
     ) -> Result<ScanOutput, VolumeError> {
         let _entered = tracing::info_span!("scan").entered();
         let _ = writeln!(io::stderr().lock(), "scanning {}…", path.display());
         let (mut reader, context) = open()?;
-        let config = ScanConfig {
-            context,
-            ..ScanConfig::default()
-        };
-        SyncDriver::new(config)?.run(&mut reader)
+        SyncDriver::with_limits(limits, context)?.run(&mut reader)
     }
 
     #[cfg(windows)]
-    fn scan_drive(letter: char, path: PathBuf) -> Result<ScanOutput, CliError> {
+    fn scan_drive(letter: char, path: PathBuf, limits: ScanLimits) -> Result<ScanOutput, CliError> {
         use adamite_io::reader::RawVolumeReader;
-        Self::run_scan(&path, || {
+        Self::run_scan(&path, limits, || {
             let reader = RawVolumeReader::open_drive(letter)?;
             let context = reader.context()?;
             Ok((reader, context))
@@ -151,7 +149,11 @@ impl Source {
     }
 
     #[cfg(not(windows))]
-    fn scan_drive(_letter: char, _path: PathBuf) -> Result<ScanOutput, CliError> {
+    fn scan_drive(
+        _letter: char,
+        _path: PathBuf,
+        _limits: ScanLimits,
+    ) -> Result<ScanOutput, CliError> {
         Err(CliError::Usage {
             message: "raw volumes require Windows",
         })

@@ -6,7 +6,7 @@ pub(crate) struct Ls(pub(crate) LsArgs);
 impl Ls {
     pub(crate) fn run(&self, stdout: &mut impl Write) -> Result<(), CliError> {
         let args = &self.0;
-        let output = Source::open(&args.source.source)?.load()?;
+        let output = Source::open(&args.source.source)?.load(args.source.limits.limits())?;
         let report = LsReport::new(
             &args.source.source,
             &output,

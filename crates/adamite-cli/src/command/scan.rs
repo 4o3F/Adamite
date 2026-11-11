@@ -21,7 +21,7 @@ impl Scan {
             });
         }
         let Some(destination) = args.output else {
-            let output = source.load()?;
+            let output = source.load(args.source.limits.limits())?;
             return Info(args.source).render("scan", &output, stdout);
         };
         let mode = if args.force {
@@ -31,7 +31,7 @@ impl Scan {
         };
         let file = SnapshotFile::new(destination.clone(), mode);
         file.preflight(&source)?;
-        let output = source.load()?;
+        let output = source.load(args.source.limits.limits())?;
         let bytes = file.save(&output)?;
         let report = SavedReport::new(&args.source.source, &output, &destination, bytes);
         Renderer::from(&args.source).write(&report, stdout)

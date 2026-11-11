@@ -1,10 +1,11 @@
 //! Synthetic production-path scan and persistence resource measurements.
 
-use adamite_core::scan::{ScanConfig, ScanOutput};
+use adamite_core::scan::ScanOutput;
 use adamite_fixtures::{SyntheticConfig, SyntheticVolume};
 use adamite_io::{
     driver::SyncDriver,
     error::VolumeError,
+    limits::ScanProfile,
     reader::{ImageReader, VolumeReader},
 };
 use adamite_profile::{ChromeProfile, CountingAllocator, SpanRecorder, SpanSummary};
@@ -41,6 +42,12 @@ const STAGES: [&str; 9] = [
 #[derive(Debug, Parser)]
 #[command(about = "Measure scan and persistence on sparse synthetic NTFS images")]
 struct Bench {
+    /// Resource profile; defaults to uncapped reads for heap measurements.
+    #[arg(long, default_value_t = ScanProfile::Max)]
+    profile: ScanProfile,
+    /// Override the profile request size, in bytes, for comparable heap measurements.
+    #[arg(long)]
+    chunk_size: Option<usize>,
     /// In-use record counts; repeat the option or separate counts with commas.
     #[arg(long, value_delimiter = ',', default_values_t = [300_000u32, 1_000_000])]
     in_use: Vec<u32>,
@@ -108,10 +115,15 @@ impl Bench {
             self.image(used)?;
             let mut child = Command::new(std::env::current_exe()?);
             child
+                .arg("--profile")
+                .arg(self.profile.to_string())
                 .arg("--case")
                 .arg(used.to_string())
                 .arg("--output-dir")
                 .arg(&self.output_dir);
+            if let Some(bytes) = self.chunk_size {
+                child.arg("--chunk-size").arg(bytes.to_string());
+            }
             if let Some(path) = &self.trace_chrome {
                 let path = self.trace_path(path, used);
                 child.arg("--trace-chrome").arg(path);
@@ -165,7 +177,11 @@ impl Bench {
         let case = tracing::info_span!("bench_case");
         let started = Instant::now();
         let scan = tracing::info_span!("bench_scan");
-        let output = SyncDriver::new(ScanConfig::default())?.run(&mut reader)?;
+        let mut limits = self.profile.limits();
+        if let Some(bytes) = self.chunk_size {
+            limits.chunk_size = bytes;
+        }
+        let output = SyncDriver::with_limits(limits, Default::default())?.run(&mut reader)?;
         let snapshot_heap = ALLOCATOR.current();
         let nodes = output.snapshot.len();
         drop(scan);
@@ -216,7 +232,7 @@ impl Bench {
         );
         println!("\n| stage | duration ms | own peak heap bytes | heap delta bytes |");
         println!("|---|---:|---:|---:|");
-        for name in STAGES {
+        for name in ["bench_scan"].into_iter().chain(STAGES) {
             let stage = Self::stage(&summaries, name)?;
             println!(
                 "| {} | {:.3} | {} | {} |",
@@ -255,7 +271,7 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::{Bench, CountingReader, Result};
-    use adamite_core::scan::{ScanConfig, ScanOutput};
+    use adamite_core::scan::ScanOutput;
     use adamite_fixtures::SyntheticConfig;
     use adamite_io::{driver::SyncDriver, reader::ImageReader};
     use clap::Parser;
@@ -265,6 +281,8 @@ mod tests {
     fn tiny_cached_image_scans_and_round_trips_without_reading_payloads() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let bench = Bench {
+            profile: adamite_io::limits::ScanProfile::Max,
+            chunk_size: None,
             in_use: vec![202],
             output_dir: directory.path().to_owned(),
             trace_chrome: None,
@@ -284,7 +302,8 @@ mod tests {
             inner: ImageReader::open(&path)?,
             bytes: 0,
         };
-        let output = SyncDriver::new(ScanConfig::default())?.run(&mut reader)?;
+        let output = SyncDriver::with_limits(bench.profile.limits(), Default::default())?
+            .run(&mut reader)?;
         let config = SyntheticConfig::reference(202)?;
         assert_eq!(output.stats.records_total, u64::from(config.slot_count));
         assert_eq!(output.stats.records_in_use, 202);
@@ -312,6 +331,8 @@ mod tests {
     fn concurrent_generators_publish_complete_images() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let bench = Bench {
+            profile: adamite_io::limits::ScanProfile::Max,
+            chunk_size: None,
             in_use: vec![202],
             output_dir: directory.path().to_owned(),
             trace_chrome: None,
@@ -337,7 +358,8 @@ mod tests {
         assert_eq!(paths[0], paths[1]);
         let path = paths[0].as_ref().map_err(|error| error.to_owned())?;
         let mut reader = ImageReader::open(path)?;
-        let output = SyncDriver::new(ScanConfig::default())?.run(&mut reader)?;
+        let output = SyncDriver::with_limits(bench.profile.limits(), Default::default())?
+            .run(&mut reader)?;
         assert_eq!(output.stats.records_in_use, 202);
         assert_eq!(
             fs::read_dir(directory.path())?.count(),

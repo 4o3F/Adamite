@@ -14,10 +14,18 @@ const MAX_SNAPSHOT_HEAP_BYTES_PER_NODE: u64 = 147;
 #[test]
 fn reference_scan_stays_within_heap_budgets() -> Result<(), Box<dyn Error>> {
     let directory = tempfile::tempdir()?;
+    // Keep the M3 request size while the benchmark defaults to uncapped Max reads.
     // libtest threads share the global allocator. The child owns its CountingAllocator
     // and generates the image before starting a fresh measurement process.
     let output = Command::new(env!("CARGO_BIN_EXE_adamite-bench"))
-        .args(["--in-use", "40000", "--json", "--output-dir"])
+        .args([
+            "--in-use",
+            "40000",
+            "--chunk-size",
+            "1048576",
+            "--json",
+            "--output-dir",
+        ])
         .arg(directory.path())
         .output()?;
     assert!(

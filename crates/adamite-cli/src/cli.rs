@@ -2,11 +2,13 @@ use crate::{
     command::{browse::Browse, ext::Ext, info::Info, ls::Ls, scan::Scan, top::Top},
     error::CliError,
 };
+use adamite_io::limits::{ScanLimits, ScanProfile};
 use clap::{
     Args, Parser, Subcommand,
     builder::TypedValueParser,
     error::{ContextKind, ContextValue},
 };
+use std::num::{NonZeroU64, NonZeroUsize};
 use std::{ffi::OsStr, io::Write, path::PathBuf};
 
 #[derive(Debug, Parser)]
@@ -41,6 +43,8 @@ pub(crate) enum Command {
 
 #[derive(Debug, Args)]
 pub(crate) struct SourceArgs {
+    #[command(flatten)]
+    pub(crate) limits: LimitArgs,
     /// Image path, snapshot path, or Windows drive such as C:.
     pub(crate) source: PathBuf,
     /// Print one JSON object with byte counts.
@@ -123,6 +127,8 @@ pub(crate) struct LsArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct BrowseArgs {
+    #[command(flatten)]
+    pub(crate) limits: LimitArgs,
     /// Image path, snapshot path, or Windows drive such as C:.
     pub(crate) source: PathBuf,
     /// Directory path; #id selects a direct child by its decimal NodeId.
@@ -139,6 +145,146 @@ impl Command {
             Self::Ext(args) => Ext(args).run(stdout),
             Self::Ls(args) => Ls(args).run(stdout),
             Self::Browse(args) => Browse(args).run(),
+        }
+    }
+}
+
+/// Resource ceilings used whenever a source needs scanning.
+#[derive(Debug, Args)]
+pub(crate) struct LimitArgs {
+    /// Resource profile: background, balanced or max. Ignored for snapshots.
+    #[arg(long, default_value_t = ScanProfile::Balanced, value_name = "PROFILE")]
+    profile: ScanProfile,
+    /// Bytes per second; K/M/G use powers of 1024. Use --profile max to uncap.
+    #[arg(long, value_name = "BYTES", value_parser = Self::parse_rate)]
+    max_read_rate: Option<NonZeroU64>,
+    /// Worker ceiling (at least 1); the current scanner uses one thread.
+    #[arg(long, default_value = "1", value_name = "N")]
+    threads: NonZeroUsize,
+}
+
+impl LimitArgs {
+    pub(crate) fn limits(&self) -> ScanLimits {
+        let mut limits = self.profile.limits();
+        if let Some(rate) = self.max_read_rate {
+            limits.max_read_bytes_per_sec = Some(rate);
+        }
+        limits.threads = self.threads;
+        limits
+    }
+
+    fn parse_rate(value: &str) -> Result<NonZeroU64, String> {
+        let bytes = parse_size::Config::new()
+            .with_binary()
+            .parse_size(value)
+            .map_err(|error| error.to_string())?;
+        NonZeroU64::new(bytes)
+            .ok_or_else(|| "rate must be positive; use --profile max for uncapped reads".to_owned())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Cli, Command};
+    use adamite_io::limits::ScanProfile;
+    use clap::Parser;
+    use std::error::Error;
+
+    #[test]
+    fn every_source_command_shares_limits() -> Result<(), Box<dyn Error>> {
+        for name in ["scan", "info", "top", "ext", "ls", "browse"] {
+            let cli = Cli::try_parse_from([
+                "adamite",
+                name,
+                "source.img",
+                "--profile",
+                "background",
+                "--max-read-rate",
+                "128MiB",
+                "--threads",
+                "7",
+            ])?;
+            let args = match cli.command.ok_or("missing command")? {
+                Command::Scan(args) => args.source.limits,
+                Command::Info(args) => args.limits,
+                Command::Top(args) => args.source.limits,
+                Command::Ext(args) => args.source.limits,
+                Command::Ls(args) => args.source.limits,
+                Command::Browse(args) => args.limits,
+            };
+            let limits = args.limits();
+            assert_eq!(
+                limits.max_read_bytes_per_sec.map(|r| r.get()),
+                Some(128 << 20)
+            );
+            assert_eq!(limits.threads.get(), 7);
+            assert_eq!(limits.chunk_size, 1 << 20);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn profile_defaults_names_and_binary_rate_suffixes() -> Result<(), Box<dyn Error>> {
+        let cli = Cli::try_parse_from(["adamite", "info", "source.adm"])?;
+        let Some(Command::Info(args)) = cli.command else {
+            return Err("missing info".into());
+        };
+        assert_eq!(args.limits.limits(), ScanProfile::Balanced.limits());
+        for (name, expected) in [
+            ("background", ScanProfile::Background),
+            ("balanced", ScanProfile::Balanced),
+            ("max", ScanProfile::Max),
+        ] {
+            let cli = Cli::try_parse_from(["adamite", "scan", "source.img", "--profile", name])?;
+            let Some(Command::Scan(args)) = cli.command else {
+                return Err("missing scan".into());
+            };
+            assert_eq!(args.source.limits.limits(), expected.limits());
+        }
+        for (text, bytes) in [
+            ("1", 1),
+            ("2K", 2 << 10),
+            ("3M", 3 << 20),
+            ("4G", 4 << 30),
+            ("2KiB", 2 << 10),
+            ("3MiB", 3 << 20),
+            ("4GiB", 4 << 30),
+        ] {
+            let cli =
+                Cli::try_parse_from(["adamite", "scan", "source.img", "--max-read-rate", text])?;
+            let Some(Command::Scan(args)) = cli.command else {
+                return Err("missing scan".into());
+            };
+            assert_eq!(
+                args.source
+                    .limits
+                    .limits()
+                    .max_read_bytes_per_sec
+                    .map(|r| r.get()),
+                Some(bytes)
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_limits_are_usage_errors() {
+        for (flag, value) in [
+            ("--profile", "fast"),
+            ("--profile", "Max"),
+            ("--threads", "0"),
+            ("--threads", "-1"),
+            ("--max-read-rate", "0"),
+            ("--max-read-rate", "unlimited"),
+            ("--max-read-rate", "-1M"),
+            ("--max-read-rate", "999999999999999999999G"),
+            ("--max-read-rate", "nonsense"),
+        ] {
+            let result = Cli::try_parse_from(["adamite", "scan", "source.img", flag, value]);
+            let error = result
+                .err()
+                .unwrap_or_else(|| unreachable!("invalid limits accepted"));
+            assert_eq!(error.exit_code(), 2);
         }
     }
 }

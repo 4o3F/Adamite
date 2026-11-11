@@ -56,7 +56,7 @@ Each milestone ends with one reviewed commit, `deno task check` green and CI gre
 
 ### M4 — Self-imposed limits
 
-- [ ] Implement D6 in `adamite-io` and the CLI; update ARCHITECTURE §5 per D1.
+- [x] Implement D6 in `adamite-io` and the CLI; update ARCHITECTURE §5 per D1.
 
 ### M5 — Streaming `.adm`
 
