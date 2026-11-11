@@ -1,0 +1,38 @@
+use std::fmt::{self, Write};
+
+/// Displays text with control characters escaped for terminal output.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Escaped<'a>(pub(crate) &'a str);
+
+impl fmt::Display for Escaped<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for character in self.0.chars() {
+            if character.is_control() {
+                write!(f, "{}", character.escape_unicode())?;
+            } else {
+                f.write_char(character)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Escaped;
+
+    #[test]
+    fn escapes_controls_and_preserves_printable_text() {
+        for (input, expected) in [
+            ("", ""),
+            ("plain text", "plain text"),
+            ("目录 café 🐈", "目录 café 🐈"),
+            (
+                "a\n\t\0\u{1b}\u{7f}\u{85}b",
+                "a\\u{a}\\u{9}\\u{0}\\u{1b}\\u{7f}\\u{85}b",
+            ),
+        ] {
+            assert_eq!(Escaped(input).to_string(), expected, "input {input:?}");
+        }
+    }
+}

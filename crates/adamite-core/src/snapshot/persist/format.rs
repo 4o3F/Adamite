@@ -16,7 +16,7 @@
 
 use super::PersistError;
 
-pub(super) const MAGIC: &[u8; 8] = b"ADAMITE\0";
+pub(super) const MAGIC: &[u8; 8] = &crate::scan::ScanOutput::ADM_MAGIC;
 pub(super) const VERSION: u32 = 1;
 pub(super) const HEADER_LEN: usize = 64;
 pub(super) const TABLE_ENTRY_LEN: usize = 32;

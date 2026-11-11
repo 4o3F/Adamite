@@ -54,6 +54,9 @@ pub struct ScanOutput {
 }
 
 impl ScanOutput {
+    /// Eight-byte `.adm` signature used to identify snapshot files before decoding.
+    pub const ADM_MAGIC: [u8; 8] = *b"ADAMITE\0";
+
     /// Encodes the complete snapshot and scan counters in canonical `.adm` v1 format.
     ///
     /// # Errors

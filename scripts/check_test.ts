@@ -135,6 +135,8 @@ Deno.test("normal checks run once without feature flags and keep the no_std buil
         "clippy",
         "-p",
         "adamite-io",
+        "-p",
+        "adamite-cli",
         "--target",
         "x86_64-pc-windows-gnu",
         "--all-targets",

@@ -47,7 +47,7 @@ Self logical size is unnamed DATA; ADS logical bytes are separate. Allocation in
 
 ## Persistence
 
-`scan::ScanOutput::to_bytes(&self)` returns `Result<Vec<u8>, snapshot::PersistError>`; `ScanOutput::from_bytes(&[u8])` returns `Result<ScanOutput, snapshot::PersistError>`. Both preserve the complete snapshot, caller context and scan counters. The codec lives in private `snapshot/persist/`; callers own file reads and writes.
+`scan::ScanOutput::to_bytes(&self)` returns `Result<Vec<u8>, snapshot::PersistError>`; `ScanOutput::from_bytes(&[u8])` returns `Result<ScanOutput, snapshot::PersistError>`. Both preserve the complete snapshot, caller context and scan counters. `ScanOutput::ADM_MAGIC` exposes the eight-byte signature for identifying snapshot files before decoding. The codec lives in private `snapshot/persist/`; callers own file reads and writes.
 
 Canonical `.adm` v1 uses little-endian fields, a 64-byte header with version, lengths and whole-file CRC-32, a 13-entry section table and 8-byte-aligned sections. Optional columns store a presence bitmap followed by a full value array. Accepted bytes re-encode identically.
 

@@ -109,7 +109,7 @@ Each milestone ends with one reviewed commit and `deno task check` green. A mile
 
 ### C2 — CLI skeleton, sources and info
 
-- [ ] Add the crate per D1 with `cli.rs`, `source.rs`, `error.rs`, `report.rs` and `render/*` for `info` and `scan` without `-o`, D3 source detection, D5 envelope and D8 exit codes. Extend Windows Clippy (D14). Integration tests for info on images and snapshots, JSON structure, time rendering and source/usage failures.
+- [x] Add the crate per D1 with `cli.rs`, `source.rs`, `error.rs`, `report.rs` and `render/*` for `info` and `scan` without `-o`, D3 source detection, D5 envelope and D8 exit codes. Extend Windows Clippy (D14). Integration tests for info on images and snapshots, JSON structure, time rendering and source/usage failures.
 
 ### C3 — Saving
 

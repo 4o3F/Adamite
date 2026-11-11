@@ -130,6 +130,8 @@ export function checkSteps(options: { packages: readonly FuzzPackage[]; fuzz: bo
         "clippy",
         "-p",
         "adamite-io",
+        "-p",
+        "adamite-cli",
         "--target",
         "x86_64-pc-windows-gnu",
         "--all-targets",

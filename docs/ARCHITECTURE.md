@@ -168,7 +168,7 @@ Checked arithmetic protects counters and totals. Output is independent of reques
 
 ### 3.4 Snapshot persistence
 
-`scan::ScanOutput::to_bytes` returns an owned byte buffer containing the snapshot and `ScanStats`; `ScanOutput::from_bytes` reconstructs an owned output from a byte slice. Both return `snapshot::PersistError` on failure. The codec lives in private `snapshot/persist/`, keeping storage access within the snapshot module family. Callers own file I/O; the planned CLI will read and write `.adm` files.
+`scan::ScanOutput::to_bytes` returns an owned byte buffer containing the snapshot and `ScanStats`; `ScanOutput::from_bytes` reconstructs an owned output from a byte slice. Both return `snapshot::PersistError` on failure. `ScanOutput::ADM_MAGIC` exposes the eight-byte signature used by the codec and callers identifying snapshot files. The codec lives in private `snapshot/persist/`, keeping storage access within the snapshot module family. Callers own file I/O; the planned CLI will read and write `.adm` files.
 
 The canonical `.adm` v1 format uses explicitly packed little-endian fields. Its 64-byte header contains magic `ADAMITE\0`, version, header length, `file_len`, `section_count`, flags, CRC-32 and reserved bytes. A 13-entry section table records kinds, offsets, lengths and counts for volume metadata, scan counters, nodes, name pools, children, cold columns and indexes. Sections start on 8-byte boundaries with minimal zero padding, and the file ends at the last section's end. Optional FileRef and reparse-tag columns use a presence bitmap followed by an 8-byte-aligned full value array, with absent values and unused bits zero. IEEE CRC-32 covers the whole file with the checksum field treated as zero.
 
