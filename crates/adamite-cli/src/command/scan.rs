@@ -5,6 +5,7 @@ use crate::{
     render::Renderer,
     report::SavedReport,
     save::{PublishMode, SnapshotFile},
+    scan_progress_view::ScanProgressView,
     source::Source,
     status_file::StatusFile,
 };
@@ -58,9 +59,11 @@ impl Scan {
         let elevated = source.elevation(&args.source.limits, Some((&destination, mode)))?;
         let saved_by_child = elevated.is_some();
         let output = if let Some(elevated) = elevated {
-            elevated.run(&args.source.source, &args.source.limits, status.as_mut())?
+            elevated.run(&args.source.source, &args.source.limits, || {
+                ScanProgressView::observer(&args.source.source, status.as_mut())
+            })?
         } else {
-            source.load_in_process(&args.source.limits, status.as_mut())?
+            source.load_cli(&args.source.limits, status.as_mut())?
         };
         if let Some(status) = status {
             status.check()?;

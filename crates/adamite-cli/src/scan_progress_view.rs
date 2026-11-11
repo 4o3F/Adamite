@@ -1,3 +1,4 @@
+use crate::status_file::StatusFile;
 use adamite_core::scan::ScanPhase;
 use adamite_io::driver::DriverProgress;
 use indicatif::{HumanBytes, ProgressBar, ProgressState, ProgressStyle, style::TemplateError};
@@ -48,6 +49,21 @@ impl ScanProgressView {
         })
     }
 
+    pub(crate) fn observer<'a>(
+        path: &Path,
+        mut status: Option<&'a mut StatusFile>,
+    ) -> impl FnMut(DriverProgress) + use<'a> {
+        let mut view = Self::new(path);
+        move |progress| {
+            if let Some(view) = &mut view {
+                view.update(progress);
+            }
+            if let Some(status) = &mut status {
+                status.progress(&progress);
+            }
+        }
+    }
+
     fn stream_style(bytes_read: Arc<AtomicU64>) -> Result<ProgressStyle, TemplateError> {
         let rate_bytes = Arc::clone(&bytes_read);
         Ok(ProgressStyle::with_template(Self::STREAM_TEMPLATE)?
@@ -77,7 +93,7 @@ impl ScanProgressView {
         ProgressStyle::with_template(Self::SPINNER_TEMPLATE)
     }
 
-    fn phase_label(phase: ScanPhase) -> &'static str {
+    pub(crate) fn phase_label(phase: ScanPhase) -> &'static str {
         match phase {
             ScanPhase::Boot => "booting",
             ScanPhase::Record0 | ScanPhase::Discover | ScanPhase::Stream => "reading MFT",

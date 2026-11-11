@@ -4,7 +4,7 @@ Adamite gives users and agents a size-aggregated view of NTFS filesystems. The l
 
 The project is split into two layers:
 
-- **Core layer:** scanning, tree building and snapshot persistence, with query operations planned.
+- **Core layer:** scanning, tree building, snapshot persistence and immutable queries.
 - **Access layer:** CLI reports and terminal browsing, with MCP and snapshot/scan-job services planned.
 
 Implementation language: Rust (Cargo workspace).
@@ -58,7 +58,7 @@ crates/
 | `adamite-core`     | Single-threaded `std` scan driver, private NTFS reading/merge and graph resolution, snapshot construction, immutable reads and `.adm` persistence                            |
 | `adamite-io`       | Exact positional `VolumeReader`, `SliceReader`, `ImageReader`, Windows `RawVolumeReader` and synchronous `SyncDriver`; adapter-owned alignment and volume context            |
 | `adamite-format`   | Shared byte sizes, escaped terminal text, extension labels, scan timestamps, volume serials and ordered info fields                                                          |
-| `adamite-tui`      | `Browser` and `TuiError`; read-only Tree, Top files, Extensions and Info tabs over a borrowed `ScanOutput`                                                                   |
+| `adamite-tui`      | `Launcher`, `Sources`/`ScanJob` and `Browser`; Home, progress and five read-only snapshot tabs                                                                               |
 | `adamite-cli`      | The `adamite` binary: source classification, scan/save, text/JSON reports, path resolution and browser startup                                                               |
 | `adamite-profile`  | Unpublished executable support: counting System allocator, span heap events, in-memory span summaries and an opt-in Chrome trace guard                                       |
 | `adamite-fixtures` | Unpublished development support: image loading, independent manifests/reference MFT reconstruction, synthetic builders and streaming volumes                                 |
@@ -74,7 +74,7 @@ Private `mft/` owns bootstrap, discovery, mapping, ingestion, decoding and merge
 
 Graph depends on snapshot types/build inputs; MFT depends on graph, and the scan driver orchestrates MFT, graph and snapshot build passes. Private `snapshot/persist/` encodes snapshot storage and scan counters, with the dependency edge `snapshot::persist → scan::{config, stats}` for `ScanContext` and `ScanStats`; it does not depend on scan status, protocol or scanner. NTFS contribution-to-entry conversion stays in MFT, so graph does not depend on NTFS contribution models. Pipeline operations belong to their record, mapping, contribution, linker or pass types. Snapshot persistence is described in §3; implemented CLI and synchronous I/O, plus planned parallelism, query, service, MCP and USN components, are described in §4–§6.
 
-`adamite-cli` owns source detection, image/drive scanning through `adamite-io`, snapshot file I/O, path resolution and exit codes. `adamite-tui` borrows a completed `ScanOutput` through `Browser`, owns terminal setup/restoration and never loads sources. Both use `adamite-format` for display values; core owns scan-counter names, node classification and flag names.
+`adamite-cli` owns source detection, image/drive scanning through `adamite-io`, snapshot file I/O, path resolution and exit codes. `adamite-tui` owns terminal setup/restoration, borrows completed output through `Browser`, and drives caller-supplied source jobs through `Launcher`. Both use `adamite-format` for display values; core owns scan-counter names, node classification and flag names.
 
 ### Key decisions
 
@@ -157,7 +157,7 @@ Linking retains raw names for alias selection and ordering, then writes lossy UT
 
 The implementation has a compile-time `assert!(size_of::<Node>() == 64)`. Node count, CSR indices and pool length must fit `u32`; individual UTF-8 name lengths must fit `u16`. Overflow is an error. Node flags are directory, reparse, sparse, compressed, hidden, system, hard-link duplicate and synthetic; orphan/metadata placement is represented by the tree.
 
-All snapshot storage is private and frozen when delivered. `Snapshot` is Send + Sync and can be shared through `Arc`; cloning a snapshot copies its owned arrays. `node(NodeId)` returns a read-only `NodeView` covering hot and cold fields. `children` and `name` borrow slices; `path` constructs a string iteratively and fallibly. `len`, `is_empty`, `volume`, `top_files` and `ext_stats` expose the remaining read-only data. Unknown ids return `None`. Dynamic query operations remain future work (§4).
+All snapshot storage is private and frozen when delivered. `Snapshot` is Send + Sync and can be shared through `Arc`; cloning a snapshot copies its owned arrays. `node(NodeId)` returns a read-only `NodeView` covering hot and cold fields. `children` and `name` borrow slices; `path` constructs a string iteratively and fallibly. `len`, `is_empty`, `volume`, `top_files` and `ext_stats` expose the remaining read-only data. Unknown ids return `None`. Subtree ranking and totals and paginated name search are described in §4.
 
 ### 3.3 Accounting and final ordering
 
@@ -181,17 +181,21 @@ The canonical `.adm` v1 format uses explicitly packed little-endian fields. Its 
 
 The second pass decodes values and performs full snapshot invariant validation: geometry and UTF-8, column lengths, root and arena order, hard-link groups, flags, CSR edges and connectivity, subtree aggregates, child ordering, top files and extension summaries. Ranking and extension rules are shared with snapshot finalization. Unknown versions, section kinds and flags are rejected; every accepted encoding re-encodes byte-identically. `ScanStats` counters are preserved without cross-validation against the tree.
 
-## 4. Access Layer (planned)
+## 4. Access Layer
 
-`add-core-query` will add operations such as summary, directory listing and search over immutable snapshots. Precomputed `top_files` and `ext_stats` are available now; filtering/ranking arbitrary subtrees is not.
+Core exposes subtree file ranking, extension and file-kind totals, and paginated glob/substring name search over immutable snapshots. The CLI uses these for `top --under/--ext/--kind`, `ext --under/--by` and `search`; the browser also scopes, filters and searches its snapshot. Budgeted summaries, MCP, a snapshot/job service and USN-based refresh remain planned.
 
-The CLI implements saved-snapshot queries and terminal browsing. Budgeted summaries, MCP, a snapshot/job service and USN-based refresh remain planned.
+`browse [SOURCE [PATH]]` opens Home without a source and the browser directly with one. `adamite` without a subcommand opens Home when standard input and output are terminals, and prints long help otherwise. Home lists Windows NTFS drives, unclaimed saved snapshots and `Open file…`. Enter opens a saved result or scans a drive, `r` rescans, and `o` returns from the browser to refreshed Home.
+
+`adamite-tui` owns rendering, navigation and the 100 ms event loop. Its `Sources` and `ScanJob` traits describe rows and nonblocking `Running`/`Done`/`Failed` results using TUI-owned progress data. CLI `CliSources` implements source I/O and jobs. Snapshot loads, image scans and in-process drive scans run on detached workers; channels move the completed `ScanOutput` back and coalesce progress to the latest report. The shared scan observer feeds either the CLI progress display or a job channel. Launcher owns the completed output while App borrows it, then drops it on return to Home.
+
+`adamite-io::SnapshotDir` uses the platform data directory from `etcetera::choose_base_strategy()` plus `adamite/snapshots`. Windows uses roaming application data; Unix uses XDG_DATA_HOME or `~/.local/share`. The directory is created before the first drive save. Each drive owns `<LETTER>.adm`; saves reuse CLI atomic replacement. Image jobs are not saved. See the [CLI README](../crates/adamite-cli/README.md#home-and-saved-scans) for paths and controls.
 
 ### 4.1 Privilege model
 
 Scanning a Windows raw volume needs elevated device access, while an MCP process spawned by an agent host usually runs unelevated. `adamite_io::reader::RawVolumeReader` owns that access today; a future service will manage privileged scan jobs.
 
-- **Implemented:** CLI commands with a Windows drive source automatically request UAC elevation when the current process is unelevated. The parent launches an elevated `scan` child, follows its JSON lines status file through the existing progress view, then loads the saved snapshot and continues the requested command. `scan -o FILE` saves to FILE after destination checks; other commands use a temporary snapshot removed after loading. The parent closes its status reader before cleanup. `--no-elevate` keeps the scan in the current process. `adamite_io::snapshot::SnapshotWriter` patches the CRC and publishes through a synchronized same-directory temporary file closed before publication. Image scans and snapshot queries run in the current process; `SnapshotReader` loads snapshots in two passes, given file read access.
+- **Implemented:** Windows drive scans request UAC when the parent is unelevated, unless `--no-elevate` is set. The poll-based elevated job follows the child's JSON-lines status and preserves its failure message and exit code. Command-line commands drive it through their progress observer. Home launches and polls it on a worker through requests from `ScanJob::poll`, keeping the UAC prompt and process handle on that worker; after completion, another worker loads the result. `scan -o FILE` uses its checked destination; other command-line queries use a temporary snapshot removed after loading. Home uses `<LETTER>.adm` with replacement. Dropping a Home job closes the process handle and cleans its status path without killing the child or deleting its destination. The parent closes its status reader before cleanup. SnapshotWriter supplies the codec adapter; CLI SnapshotFile synchronizes and closes a same-directory temporary file before publication.
 - **Later:** an elevated `adamite-daemon` Windows service holds snapshots and keeps them fresh through the USN journal. CLI and MCP become thin clients over a named pipe.
 
 ### 4.2 Budgeted summary (planned agent-oriented query)
@@ -221,7 +225,7 @@ summarize(root, budget_nodes, min_share):
 | `search(pattern, under?, min_size?)` | Name search by glob/regex |
 | `node_info(path)` | Size, alloc, mtime, attributes, hard links, reparse flag |
 
-The planned MCP response convention includes snapshot timestamp and units in every result, with `format: text|json` and text as the default. The implemented CLI mirrors a subset: `scan`, `info`, `top`, `ext` and `ls` use text by default and accept `--json` with the `adamite/1` schema; `browse` opens the TUI. For example, `adamite top C.adm --n 20 --json` reads the stored file index. Budgeted `tree`, search and subtree filtering/ranking await `add-core-query`. See the [CLI README](../crates/adamite-cli/README.md) for the command and output contracts.
+The planned MCP response convention includes snapshot timestamp and units in every result, with `format: text|json` and text as the default. The implemented CLI mirrors a subset: `scan`, `info`, `top`, `ext`, `ls` and `search` use text by default and accept `--json` with the `adamite/1` schema; `browse` opens the TUI. For example, `adamite top C.adm --n 20 --json` reads the stored file index. Budgeted `tree` remains planned; `search` and subtree filtering/ranking are implemented. See the [CLI README](../crates/adamite-cli/README.md) for the command and output contracts.
 
 ## 5. Parallelism and Resource Limits
 
@@ -279,7 +283,7 @@ The retained scaling target is 10M nodes without per-node name allocation. A rou
 1. Done: `adamite-ntfs`, shared fixture support and independently measured v3 manifests; parser `no_std` builds remain supported.
 2. Done: single-threaded sans-io `adamite-core`, phases 0–6, fixture oracles, property tests and bounded fuzzing. Automated WizTree/`dir /s` comparison is deferred; manual Windows comparison has not been performed.
 3. Done: `adamite-io` with slice/image/Windows raw-volume readers, synchronous driving and adapter-supplied context. Self-imposed read limits and profiles are implemented. Next is roadmap step 3 parallelism, buffer ownership and bitmap skipping, or `add-core-query`.
-4. Done: core `.adm` snapshot persistence, the `adamite` CLI, shared display formatting and terminal browser. CI packages Linux/Windows binaries; the tag-triggered release workflow reuses CI artifacts. Future: `add-core-query` for budgeted summaries, search and dynamic subtree queries.
+4. Done: core `.adm` snapshot persistence, the `adamite` CLI, shared display formatting and terminal browser. CI packages Linux/Windows binaries; the tag-triggered release workflow reuses CI artifacts. Core queries, the Home launcher and background scan jobs are implemented; budgeted summaries remain planned.
 5. Future: MCP and scan-job/snapshot services.
 6. Future: USN incremental refresh and a daemon; walkdir fallback remains separate future work.
 

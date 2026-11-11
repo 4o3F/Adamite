@@ -4,7 +4,7 @@ use crate::{
 };
 use adamite_core::scan::{ScanContext, ScanOutput};
 use adamite_io::{
-    driver::SyncDriver,
+    driver::{DriverProgress, SyncDriver},
     error::VolumeError,
     reader::{ImageReader, VolumeReader},
     snapshot::{SnapshotIoError, SnapshotReader},
@@ -94,15 +94,34 @@ impl Source {
         if let Some(elevated) = self.elevation(limits, None)?
             && let Self::Drive { path, .. } = &self
         {
-            return elevated.run(path, limits, None);
+            return elevated.run(path, limits, || ScanProgressView::observer(path, None));
         }
-        self.load_in_process(limits, None)
+        self.load_cli(limits, None)
     }
 
-    pub(crate) fn load_in_process(
+    pub(crate) fn load_cli(
         self,
         limits: &LimitArgs,
         status: Option<&mut StatusFile>,
+    ) -> Result<ScanOutput, CliError> {
+        if self.is_snapshot() || (!cfg!(windows) && matches!(self, Self::Drive { .. })) {
+            return self.load_in_process(limits, |_| {});
+        }
+        let observer = ScanProgressView::observer(self.path(), status);
+        self.load_in_process(limits, observer)
+    }
+
+    fn path(&self) -> &Path {
+        match self {
+            Self::Drive { path, .. } | Self::Image { path } | Self::Snapshot { path, .. } => path,
+        }
+    }
+
+    /// Loads or scans without creating a terminal progress view.
+    pub(crate) fn load_in_process(
+        self,
+        limits: &LimitArgs,
+        observer: impl FnMut(DriverProgress),
     ) -> Result<ScanOutput, CliError> {
         match self {
             Self::Snapshot { path, mut file } => {
@@ -131,7 +150,7 @@ impl Source {
                     _ => CliError::SnapshotLength { path },
                 })
             }
-            Self::Image { path } => Self::run_scan(&path, limits, status, || {
+            Self::Image { path } => Self::run_scan(limits, observer, || {
                 let reader = ImageReader::open(&path)?;
                 let context = reader.context()?;
                 Ok((reader, context))
@@ -142,27 +161,18 @@ impl Source {
                 no_elevate: limits.no_elevate,
                 source,
             }),
-            Self::Drive { letter, path } => Self::scan_drive(letter, path, limits, status),
+            Self::Drive { letter, path } => Self::scan_drive(letter, path, limits, observer),
         }
     }
 
     fn run_scan<R: VolumeReader>(
-        path: &Path,
         limits: &LimitArgs,
-        mut status: Option<&mut StatusFile>,
+        observer: impl FnMut(DriverProgress),
         open: impl FnOnce() -> Result<(R, ScanContext), VolumeError>,
     ) -> Result<ScanOutput, VolumeError> {
         let _entered = tracing::info_span!("scan").entered();
-        let mut view = ScanProgressView::new(path);
         let (mut reader, context) = open()?;
-        SyncDriver::with_limits(limits.limits(), context)?.run_observed(&mut reader, |progress| {
-            if let Some(view) = &mut view {
-                view.update(progress);
-            }
-            if let Some(status) = &mut status {
-                status.progress(&progress);
-            }
-        })
+        SyncDriver::with_limits(limits.limits(), context)?.run_observed(&mut reader, observer)
     }
 
     #[cfg(windows)]
@@ -170,10 +180,10 @@ impl Source {
         letter: char,
         path: PathBuf,
         limits: &LimitArgs,
-        status: Option<&mut StatusFile>,
+        observer: impl FnMut(DriverProgress),
     ) -> Result<ScanOutput, CliError> {
         use adamite_io::reader::RawVolumeReader;
-        Self::run_scan(&path, limits, status, || {
+        Self::run_scan(limits, observer, || {
             let reader = RawVolumeReader::open_drive(letter)?;
             let context = reader.context()?;
             Ok((reader, context))
@@ -191,7 +201,7 @@ impl Source {
         _letter: char,
         _path: PathBuf,
         _limits: &LimitArgs,
-        _status: Option<&mut StatusFile>,
+        _observer: impl FnMut(DriverProgress),
     ) -> Result<ScanOutput, CliError> {
         Err(CliError::Usage {
             message: "raw volumes require Windows",

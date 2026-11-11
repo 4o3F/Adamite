@@ -10,6 +10,8 @@ Each platform artifact contains a package and its `.sha256` checksum: `adamite-<
 
 ## Quick start
 
+Run `adamite` or `adamite browse` in an interactive terminal to open Home. Select a Windows NTFS drive or a saved snapshot, or use `Open file…` for an image or snapshot path. Drive scans request administrator access when needed and save their result for the next launch. Press `r` to rescan a drive, `o` to return from the browser to Home, or `q` to quit. See [snapshot locations](crates/adamite-cli/README.md#home-and-saved-scans).
+
 In an elevated Windows terminal, scan the NTFS C: volume and save the result:
 
 ```text
@@ -49,7 +51,7 @@ The gate checks Rust formatting, Clippy (including Windows cross-target checks),
 | Crate                                                 | Responsibility                                                                            |
 | ----------------------------------------------------- | ----------------------------------------------------------------------------------------- |
 | [adamite-cli](crates/adamite-cli/README.md)           | The `adamite` binary: source loading, saving, reports and launching the browser.          |
-| [adamite-tui](crates/adamite-tui/README.md)           | Read-only terminal browsing of a completed scan.                                          |
+| [adamite-tui](crates/adamite-tui/README.md)           | Source selection, scan progress and read-only snapshot browsing.                          |
 | [adamite-format](crates/adamite-format/README.md)     | Shared display formatting for the CLI and TUI.                                            |
 | [adamite-io](crates/adamite-io/README.md)             | Slice, image and Windows raw-volume readers with a synchronous scan driver.               |
 | [adamite-core](crates/adamite-core/README.md)         | Scanning, tree aggregation, immutable snapshots and `.adm` persistence.                   |

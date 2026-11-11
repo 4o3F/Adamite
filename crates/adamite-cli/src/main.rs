@@ -12,6 +12,7 @@ mod cli;
 mod command;
 mod elevated_scan;
 mod error;
+mod launcher;
 mod locate;
 mod render;
 mod report;
@@ -25,7 +26,7 @@ use clap::{CommandFactory, Parser};
 
 use cli::Cli;
 use std::{
-    io::{self, Write},
+    io::{self, IsTerminal, Write},
     process::ExitCode,
 };
 
@@ -64,6 +65,9 @@ fn main() -> ExitCode {
     let mut stdout = io::stdout().lock();
     let result = match cli.command {
         Some(command) => command.run(&mut stdout),
+        None if io::stdout().is_terminal() && io::stdin().is_terminal() => {
+            command::browse::Browse(cli::BrowseArgs::default()).run()
+        }
         None => Cli::command()
             .write_long_help(&mut stdout)
             .and_then(|()| writeln!(stdout))

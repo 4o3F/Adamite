@@ -12,9 +12,9 @@
 | `adamite ext <SOURCE> [--under PATH] [--by extension\|kind] [--n 20]` | Show extension or file-category totals, ordered by allocation. The default is extension grouping from the stored index; `--under` restricts totals to a directory. `--n` must be at least 1. |
 | `adamite ls <SOURCE> [PATH] [--offset 0] [--limit 50]` | List a directory's children in subtree allocation order. PATH defaults to `/`; an offset past the end returns an empty list. A file path is an error. |
 | `adamite search <SOURCE> <PATTERN> [--under PATH] [--offset 0] [--limit 50]` | Search descendant names in stored-child pre-order. The offset counts matches; `--limit` accepts 1 through 500. |
-| `adamite browse <SOURCE> [PATH]` | Open the terminal browser at a directory, default `/`. Standard output must be a terminal; this is checked before source loading. |
+| `adamite browse [SOURCE [PATH]]` | Without SOURCE, open Home. With SOURCE, load it and open the browser at PATH, default `/`. PATH requires SOURCE. Standard output must be a terminal; this is checked before source loading. |
 
-`scan`, `info`, `top`, `ext`, `ls` and `search` accept `--json` and `--bytes`. Text is the default; `--bytes` prints raw byte counts in text. JSON always uses bytes. `browse` rejects both flags. `--help` shows command help; `adamite --version` shows the version. Running `adamite` without a subcommand prints help.
+`scan`, `info`, `top`, `ext`, `ls` and `search` accept `--json` and `--bytes`. Text is the default; `--bytes` prints raw byte counts in text. JSON always uses bytes. `browse` rejects both flags. `--help` shows command help; `adamite --version` shows the version. Running `adamite` without a subcommand opens Home when both standard input and standard output are terminals; otherwise it prints the long help.
 
 `top --ext` accepts comma-separated suffixes and may repeat, for example `--ext mp4,mkv --ext .webm`. One leading dot is removed and ASCII letters are lowercased. An empty value (`--ext ''`) includes names without a usable extension. `--ext` and `--kind` conflict. The accepted kind names are `video`, `audio`, `image`, `archive`, `disk-image`, `document`, `code`, `executable` and `other`; `ts` belongs to video. Rankings and totals count primary files, excluding duplicate hard links.
 
@@ -27,6 +27,21 @@ adamite ext C.adm --under /Users --by kind
 adamite search C.adm '*.iso' --under /Users --limit 50
 adamite search C.adm steam --offset 50
 ```
+
+## Home and saved scans
+
+Run `adamite` or `adamite browse` to select a source in the terminal. Home lists NTFS drives on Windows, saved snapshots on either platform, and a final `Open file…` row for image or snapshot paths. Enter opens a drive's saved snapshot or scans it when none exists; `r` rescans the selected drive. A typed drive such as `D:` opens its saved snapshot when listed, or starts a drive scan when none is available. Images opened from Home are scanned without saving. In the browser, `o` returns to refreshed Home; `q` quits outside input lines. See the [TUI controls](../adamite-tui/README.md).
+
+Drive scans save to `<snapshot directory>/<LETTER>.adm`, replacing the previous snapshot through the same synchronized temporary-file publication as `scan --force`. The directory is created before the first drive save. `adamite-io` locates it with `etcetera::choose_base_strategy()`:
+
+| Platform | Snapshot directory |
+| --- | --- |
+| Windows | `%APPDATA%\adamite\snapshots` (the user's roaming application-data directory). |
+| Linux / macOS | `$XDG_DATA_HOME/adamite/snapshots`, or `~/.local/share/adamite/snapshots` when XDG_DATA_HOME is unset or relative. |
+
+Snapshot loads, image scans and saves run on background threads. Unelevated Windows drive scans request UAC through the existing elevated child, then load its published snapshot on a worker. The progress page displays phase, records, bytes and rate without writing progress to standard error. Failures return to Home with their message. Quitting drops the job: an elevated child continues and publishes its saved result, while in-process work ends with the parent process.
+
+`browse` accepts the scan-resource flags below for all jobs started from Home. The global `--trace-chrome FILE` also works without a subcommand and records background work and browser rendering.
 
 ## Chrome tracing
 
@@ -47,7 +62,7 @@ SOURCE is classified in this order:
 2. A file with the eight-byte `.adm` magic (`ADAMITE\0`), or an `.adm` extension ignoring ASCII case, selects a snapshot. Decoding failures return exit code 3 without attempting an image scan.
 3. Any other file selects an image, starting at NTFS volume byte zero. Decompress images first; extract the volume from partitioned disk or VHD/VHDX containers before scanning.
 
-Image and supported drive scans show progress on standard error when it is a terminal, including scans started by `browse` before the browser opens. MFT streaming shows processed and planned records, percentage, binary bytes read, average logical read rate since scan start and ETA. Boot, discovery and later processing phases show a spinner with the phase label. Indicatif limits redraw frequency, and the display clears on success or failure before results or errors print. When standard error is piped or redirected, scans print the single line `scanning <source>…`.
+Command-line image and supported drive scans show progress on standard error when it is a terminal, including `browse SOURCE` before the browser opens. Home jobs display progress inside the TUI. MFT streaming shows processed and planned records, percentage, binary bytes read, average logical read rate since scan start and ETA. Boot, discovery and later processing phases show a spinner with the phase label. Indicatif limits redraw frequency, and the display clears on success or failure before results or errors print. When standard error is piped or redirected, scans print the single line `scanning <source>…`.
 
 Image scans record the current scan timestamp; Windows drive scans also obtain the volume label and free bytes. Queries on snapshots reuse their saved metadata.
 

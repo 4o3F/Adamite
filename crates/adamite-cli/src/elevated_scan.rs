@@ -1,7 +1,4 @@
-use crate::{
-    cli::LimitArgs, error::CliError, save::PublishMode, scan_progress_view::ScanProgressView,
-    source::Source, status_file::StatusFile,
-};
+use crate::{cli::LimitArgs, error::CliError, save::PublishMode, source::Source};
 use adamite_core::scan::ScanOutput;
 use adamite_io::{
     driver::DriverProgress,
@@ -128,11 +125,11 @@ impl ElevatedScan {
         Ok(ElevatedJob::new(self, process))
     }
 
-    pub(crate) fn run(
+    pub(crate) fn run<O: FnMut(DriverProgress)>(
         self,
         drive: &Path,
         limits: &LimitArgs,
-        status: Option<&mut StatusFile>,
+        observer: impl FnOnce() -> O,
     ) -> Result<ScanOutput, CliError> {
         let _ = writeln!(
             io::stderr().lock(),
@@ -140,13 +137,13 @@ impl ElevatedScan {
             drive.display()
         );
         let mut job = self.launch(drive, limits)?;
-        let result = job.monitor(drive, status);
+        let result = job.monitor(observer());
         let waited = job.process.wait();
         if result.is_ok() {
             waited?;
         }
         let completed = result?;
-        Source::open(&completed.snapshot)?.load_in_process(limits, None)
+        Source::open(&completed.snapshot)?.load_in_process(limits, |_| {})
     }
 }
 
@@ -278,19 +275,12 @@ impl ElevatedJob {
 
     fn monitor(
         &mut self,
-        drive: &Path,
-        mut status: Option<&mut StatusFile>,
+        mut observer: impl FnMut(DriverProgress),
     ) -> Result<CompletedScan, CliError> {
-        let mut view = ScanProgressView::new(drive);
         loop {
             let state = self.poll();
             for progress in &self.progress {
-                if let Some(view) = &mut view {
-                    view.update(*progress);
-                }
-                if let Some(status) = &mut status {
-                    status.progress(progress);
-                }
+                observer(*progress);
             }
             match state? {
                 JobState::Done(completed) => return Ok(completed),
@@ -316,6 +306,7 @@ mod tests {
         cli::{Cli, Command, LimitArgs},
         error::CliError,
         save::PublishMode,
+        scan_progress_view::ScanProgressView,
         status_file::StatusFile,
     };
     use adamite_core::scan::{ScanPhase, ScanProgress};
@@ -463,7 +454,7 @@ mod tests {
             let process_code = u32::try_from(exit_code)?;
             let mut job = job(scan, move || Ok(Some(process_code)));
             let error = job
-                .monitor(Path::new("C:"), None)
+                .monitor(ScanProgressView::observer(Path::new("C:"), None))
                 .err()
                 .ok_or("child failure accepted")?;
             assert_eq!(error.message(), "child message");
@@ -477,7 +468,7 @@ mod tests {
         let scan = ElevatedScan::new(None)?;
         let mut job = job(scan, || Ok(Some(9)));
         let error = job
-            .monitor(Path::new("C:"), None)
+            .monitor(ScanProgressView::observer(Path::new("C:"), None))
             .err()
             .ok_or("missing outcome accepted")?;
         assert_eq!(error.exit_code(), 1);
@@ -528,7 +519,10 @@ mod tests {
             }
             Ok((polls >= 3).then_some(0))
         });
-        job.monitor(Path::new("C:"), Some(&mut relay))?;
+        job.monitor(ScanProgressView::observer(
+            Path::new("C:"),
+            Some(&mut relay),
+        ))?;
         let polls = counter.get();
         assert_eq!(polls, 3);
         drop(relay);
@@ -634,7 +628,10 @@ mod tests {
         })?;
         drop(writer);
         let mut job = job(scan, || Ok(Some(0)));
-        job.monitor(Path::new("C:"), Some(&mut relay))?;
+        job.monitor(ScanProgressView::observer(
+            Path::new("C:"),
+            Some(&mut relay),
+        ))?;
         drop(relay);
         let mut reader = ScanStatusReader::open(&relay_paths.status)?;
         assert_eq!(reader.poll()?, expected);

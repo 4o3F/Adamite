@@ -2210,3 +2210,16 @@ fn query_filter_help_conflicts_ranges_and_glob_errors_are_usage_errors() -> Test
     );
     Ok(())
 }
+
+#[test]
+fn browse_path_without_a_source_is_a_usage_error() -> TestResult {
+    let output = Command::new(env!("CARGO_BIN_EXE_adamite"))
+        .args(["browse", "", "/Users"])
+        .output()?;
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr)?;
+    assert!(stderr.starts_with("error:"));
+    assert!(!stderr.contains("scanning"));
+    Ok(())
+}

@@ -106,7 +106,7 @@ Each task ends with one reviewed commit, `deno task check` green and CI green. E
 - [x] Q3 — CLI `top`/`ext` flags and `adamite search`, with the core and CLI READMEs (D2).
 - [x] Q4 — TUI scope, filter, kind grouping, Search tab and jumps (D3).
 - [x] Q5 — `Volume::list`, the snapshot directory and the poll-based elevated job; CLI behaviour unchanged (D4).
-- [ ] Q6 — Home screen, in-TUI scanning, `adamite`/`browse` without a source, the TUI README and ARCHITECTURE §4 (D4).
+- [x] Q6 — Home screen, in-TUI scanning, `adamite`/`browse` without a source, the TUI README and ARCHITECTURE §4 (D4).
 
 ## Acceptance criteria
 

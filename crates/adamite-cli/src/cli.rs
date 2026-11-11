@@ -183,15 +183,15 @@ pub(crate) struct LsArgs {
     pub(crate) limit: usize,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Default, Args)]
 pub(crate) struct BrowseArgs {
     #[command(flatten)]
     pub(crate) limits: LimitArgs,
-    /// Image path, snapshot path, or Windows drive such as C:.
-    pub(crate) source: PathBuf,
+    /// Image path, snapshot path, or Windows drive such as C:; omit to open Home.
+    pub(crate) source: Option<PathBuf>,
     /// Directory path; #id selects a direct child by its decimal NodeId.
-    #[arg(default_value = "/")]
-    pub(crate) path: String,
+    #[arg(requires = "source")]
+    pub(crate) path: Option<String>,
 }
 
 impl Command {
@@ -209,7 +209,7 @@ impl Command {
 }
 
 /// Resource ceilings used whenever a source needs scanning.
-#[derive(Debug, Args)]
+#[derive(Debug, Default, Clone, Args)]
 pub(crate) struct LimitArgs {
     /// Resource profile: background, balanced or max. Ignored for snapshots.
     #[arg(long, value_name = "PROFILE")]
