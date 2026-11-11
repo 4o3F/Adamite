@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_call:
 
 permissions:
   contents: read
@@ -48,6 +49,19 @@ jobs:
       - run: cargo test --workspace --locked
       - run: cargo test -p adamite-io --test raw_volume --locked -- --ignored
         if: runner.os == 'Windows'
+      - run: cargo test -p adamite-cli --test raw_volume --locked -- --ignored
+        if: runner.os == 'Windows'
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: "2.9.8"
+          cache: true
+      - run: cargo build --release -p adamite-cli --locked
+      - run: deno task package ${{ runner.os }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: adamite-${{ runner.os }}
+          path: dist/
+          if-no-files-found: error
       - run: cargo doc --workspace --no-deps
         env:
           RUSTDOCFLAGS: -D warnings

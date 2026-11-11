@@ -1,5 +1,7 @@
 //! Process-level coverage of source detection, reports, snapshot saving and command failures.
 
+mod support;
+
 use adamite_core::{
     scan::{ScanConfig, ScanContext, ScanOutput, ScanStats},
     snapshot::{NodeId, Snapshot},
@@ -18,7 +20,7 @@ use std::{
     process::{Command, Output, Stdio},
 };
 
-type TestResult = Result<(), Box<dyn Error>>;
+use support::TestResult;
 
 struct Case {
     directory: PathBuf,
@@ -50,12 +52,7 @@ impl Case {
     }
 
     fn command(&self, name: &str, source: &Path, flags: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_adamite"))
-            .arg(name)
-            .arg(source)
-            .args(flags)
-            .output()
-            .expect("run adamite")
+        support::command(name, source, flags)
     }
 
     fn json(&self, name: &str, source: &Path) -> Value {
@@ -63,15 +60,7 @@ impl Case {
     }
 
     fn json_with(&self, name: &str, source: &Path, flags: &[&str]) -> Value {
-        let mut flags = flags.to_vec();
-        flags.push("--json");
-        let output = self.command(name, source, &flags);
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        serde_json::from_slice(&output.stdout).expect("JSON report")
+        support::json_with(name, source, flags)
     }
 
     fn path_id(&self, path: &str) -> NodeId {
@@ -102,14 +91,7 @@ impl Case {
     }
 
     fn save(&self, destination: &Path, flags: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_adamite"))
-            .arg("scan")
-            .arg(&self.image)
-            .arg("-o")
-            .arg(destination)
-            .args(flags)
-            .output()
-            .expect("save snapshot with adamite")
+        support::save(&self.image, destination, flags)
     }
 
     fn assert_no_temporary_files(&self) -> TestResult {

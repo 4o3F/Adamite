@@ -425,23 +425,108 @@ Deno.test("fuzz target inventory matches both Cargo manifests", async () => {
 });
 
 type WorkflowStep = {
+  uses?: string;
   run?: string;
   if?: string;
   "working-directory"?: string;
-  with?: Record<string, string>;
+  with?: Record<string, string | boolean | number>;
   env?: Record<string, string>;
 };
-type WorkflowJob = {
+type WorkflowJobSettings = {
+  needs?: string | string[];
+  permissions?: Record<string, string>;
+};
+type StepsJob = WorkflowJobSettings & {
   "runs-on": string;
+  uses?: never;
   steps: WorkflowStep[];
   strategy?: { matrix: { include?: { package: string; target: string }[]; os?: string[] } };
 };
+type ReusableWorkflowJob = WorkflowJobSettings & {
+  uses: string;
+  steps?: never;
+};
+type WorkflowJob = StepsJob | ReusableWorkflowJob;
+type Workflow = {
+  on: Record<string, unknown>;
+  jobs: Record<string, WorkflowJob>;
+};
+
+async function readWorkflow(path: string): Promise<Workflow> {
+  return parseYaml(await Deno.readTextFile(path)) as Workflow;
+}
+
+function stepsJob(workflow: Workflow, name: string): StepsJob {
+  const job = workflow.jobs[name];
+  assert(job && job.uses === undefined, `${name} must be an ordinary job with steps`);
+  assert(Array.isArray(job.steps), `${name} must have steps`);
+  return job;
+}
+
+function assertOneLineRuns(workflow: Workflow, path: string): void {
+  for (const [name, job] of Object.entries(workflow.jobs)) {
+    const context = `${path}: ${name}`;
+    if (job.uses !== undefined) {
+      assert(typeof job.uses === "string", `${context} must name a reusable workflow`);
+      equal(job.steps, undefined, `${context} reusable-workflow job cannot have steps`);
+      continue;
+    }
+    assert(Array.isArray(job.steps), `${context} must have steps`);
+    for (const step of job.steps) {
+      if (step.run !== undefined) {
+        assert(
+          /^(cargo|deno) [^\r\n]+$/.test(step.run) && !/[\r\n]/.test(step.run),
+          `${context} step is not a cargo/deno one-liner: ${step.run}`,
+        );
+      }
+    }
+  }
+}
+
+Deno.test("every workflow's ordinary jobs use cargo/deno run one-liners", async () => {
+  let count = 0;
+  for await (const entry of Deno.readDir(".github/workflows")) {
+    if (!entry.isFile || !/\.ya?ml$/.test(entry.name)) continue;
+    const path = `.github/workflows/${entry.name}`;
+    assertOneLineRuns(await readWorkflow(path), path);
+    count++;
+  }
+  assert(count > 0, "no workflow files checked");
+});
+
+Deno.test("run rules allow reusable-workflow jobs and still check ordinary jobs beside them", () => {
+  const workflow = parseYaml(`
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: denoland/setup-deno@v2
+      - run: deno task release-check v0.1.0
+`) as Workflow;
+  assertOneLineRuns(workflow, "test.yml");
+  const publish = stepsJob(workflow, "publish");
+  for (const run of ["echo shell", "", "cargo test\ndeno lint", "cargo test\n"]) {
+    publish.steps = [{ run }];
+    let rejected = false;
+    try {
+      assertOneLineRuns(workflow, "test.yml");
+    } catch (error) {
+      rejected = error instanceof Error && error.message.includes("test.yml: publish");
+    }
+    assert(rejected, `accepted invalid run: ${JSON.stringify(run)}`);
+  }
+});
 
 Deno.test("CI covers every fuzz target, Deno tests and Windows while keeping no_std parser-only", async () => {
-  const workflow = parseYaml(await Deno.readTextFile(".github/workflows/ci.yml")) as {
-    jobs: Record<string, WorkflowJob>;
+  const workflow = await readWorkflow(".github/workflows/ci.yml");
+  const jobs = {
+    check: stepsJob(workflow, "check"),
+    fuzz: stepsJob(workflow, "fuzz"),
+    no_std: stepsJob(workflow, "no_std"),
+    deno: stepsJob(workflow, "deno"),
   };
-  const jobs = workflow.jobs;
   const expected = fuzzPackages.flatMap((pkg) =>
     pkg.targets.map((target) => `${pkg.name}/${target}`)
   );
@@ -506,14 +591,54 @@ Deno.test("CI covers every fuzz target, Deno tests and Windows while keeping no_
       `CI omitted ${step.name}`,
     );
   }
-  for (const job of Object.values(jobs)) {
-    for (const step of job.steps) {
-      if (step.run) {
-        assert(
-          /^(cargo|deno) [^\r\n]+$/.test(step.run),
-          `CI step is not a cargo/deno one-liner: ${step.run}`,
-        );
-      }
+});
+
+Deno.test("CI is callable, packages both runners after tests and uploads their artifacts", async () => {
+  const workflow = await readWorkflow(".github/workflows/ci.yml");
+  equal(workflow.on, {
+    push: { branches: ["main"] },
+    pull_request: null,
+    workflow_call: null,
+  }, "CI triggers preserve branch and PR runs without tag runs");
+
+  const check = stepsJob(workflow, "check");
+  equal(check.strategy?.matrix.os, ["ubuntu-latest", "windows-latest"], "packaging runners");
+  equal(check["runs-on"], "${{ matrix.os }}", "check uses the runner matrix");
+  const cliSmoke = "cargo test -p adamite-cli --test raw_volume --locked -- --ignored";
+  equal(check.steps.filter((step) => step.run === cliSmoke), [{
+    run: cliSmoke,
+    if: "runner.os == 'Windows'",
+  }], "Windows elevated CLI smoke");
+
+  const setup = { uses: "denoland/setup-deno@v2", with: { "deno-version": "2.9.8", cache: true } };
+  const deno = stepsJob(workflow, "deno");
+  equal(deno.steps.filter((step) => step.uses === setup.uses), [setup], "pinned Deno setup");
+  const setupIndex = check.steps.findIndex((step) => step.uses === setup.uses);
+  assert(setupIndex >= 0, "check matrix must install Deno");
+  equal(check.steps.slice(setupIndex, setupIndex + 4), [
+    setup,
+    { run: "cargo build --release -p adamite-cli --locked" },
+    { run: "deno task package ${{ runner.os }}" },
+    {
+      uses: "actions/upload-artifact@v7",
+      with: {
+        name: "adamite-${{ runner.os }}",
+        path: "dist/",
+        "if-no-files-found": "error",
+      },
+    },
+  ], "release build, package and upload sequence");
+  for (const run of ["cargo test --workspace --locked", cliSmoke]) {
+    const index = check.steps.findIndex((step) => step.run === run);
+    assert(index >= 0 && index < setupIndex, `${run} must precede packaging`);
+  }
+
+  for (const [name, job] of Object.entries(workflow.jobs)) {
+    if (job.uses !== undefined) continue;
+    for (const [index, step] of job.steps.entries()) {
+      if (!step.run?.startsWith("deno task package ")) continue;
+      const setups = job.steps.slice(0, index).filter((step) => step.uses === setup.uses);
+      equal(setups, [setup], `${name} must install pinned Deno before packaging`);
     }
   }
 });
