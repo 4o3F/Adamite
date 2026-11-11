@@ -79,8 +79,8 @@ Each task ends with one reviewed commit, `deno task check` green and CI green. E
 
 ## Acceptance criteria
 
-- [ ] In an unelevated Windows terminal, `adamite scan C: -o C.adm` shows the UAC prompt; accepting it shows the progress bar and then the save confirmation.
-- [ ] `adamite browse C:` and `adamite top C:` work the same way, and leave no temporary files behind.
-- [ ] Declining the prompt prints `error: elevation was declined` and exits 4. `--no-elevate` in an unelevated terminal fails with access denied and the hint, without a prompt.
-- [ ] In an elevated terminal, and for image or snapshot sources, no prompt appears and output is unchanged.
+- [x] In an unelevated Windows terminal, `adamite scan C: -o C.adm` shows the UAC prompt; accepting it shows the progress bar and then the save confirmation.
+- [x] `adamite browse C:` and `adamite top C:` work the same way, and leave no temporary files behind.
+- [x] Declining the prompt prints `error: elevation was declined` and exits 4. `--no-elevate` in an unelevated terminal fails with access denied and the hint, without a prompt.
+- [x] In an elevated terminal, and for image or snapshot sources, no prompt appears and output is unchanged.
 - [x] Existing CLI exact-text and JSON tests are unchanged; `deno task check` and CI pass on Linux and Windows.
