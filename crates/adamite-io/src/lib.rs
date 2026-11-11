@@ -45,4 +45,7 @@ mod pacer;
 pub mod reader;
 
 pub mod snapshot;
+pub mod snapshot_dir;
 pub mod status;
+#[cfg(windows)]
+pub mod volume;

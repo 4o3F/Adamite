@@ -3,7 +3,10 @@ use crate::{
     source::Source, status_file::StatusFile,
 };
 use adamite_core::scan::ScanOutput;
-use adamite_io::status::{ScanStatus, ScanStatusReader};
+use adamite_io::{
+    driver::DriverProgress,
+    status::{ScanStatus, ScanStatusReader},
+};
 use std::{
     ffi::OsString,
     fs,
@@ -119,6 +122,12 @@ impl ElevatedScan {
         args
     }
 
+    /// Launches with the explicit destination and publication mode selected by `new`.
+    pub(crate) fn launch(self, drive: &Path, limits: &LimitArgs) -> Result<ElevatedJob, CliError> {
+        let process = launch_process(self.child_arguments(drive, limits))?;
+        Ok(ElevatedJob::new(self, process))
+    }
+
     pub(crate) fn run(
         self,
         drive: &Path,
@@ -130,88 +139,163 @@ impl ElevatedScan {
             "requesting administrator access for {}…",
             drive.display()
         );
-        let arguments = self.child_arguments(drive, limits);
-        #[cfg(windows)]
-        let mut process = adamite_io::elevation::ElevatedProcess::launch(arguments)
+        let mut job = self.launch(drive, limits)?;
+        let result = job.monitor(drive, status);
+        let waited = job.process.wait();
+        if result.is_ok() {
+            waited?;
+        }
+        let completed = result?;
+        Source::open(&completed.snapshot)?.load_in_process(limits, None)
+    }
+}
+
+/// Process operations needed by a polling scan, independent of any terminal view.
+trait ChildProcess: std::fmt::Debug {
+    fn try_wait(&mut self) -> Result<Option<u32>, CliError>;
+    fn wait(&mut self) -> Result<u32, CliError>;
+}
+
+fn launch_process(arguments: Vec<OsString>) -> Result<Box<dyn ChildProcess>, CliError> {
+    #[cfg(windows)]
+    {
+        let process = adamite_io::elevation::ElevatedProcess::launch(arguments)
             .map_err(CliError::elevation)?;
-        #[cfg(not(windows))]
+        Ok(Box::new(process))
+    }
+    #[cfg(not(windows))]
+    {
         let _ = arguments;
-        let result = self.monitor(drive, status, || {
-            #[cfg(windows)]
-            {
-                process.try_wait().map_err(CliError::elevation)
-            }
-            #[cfg(not(windows))]
-            {
-                Err(CliError::elevation(
-                    adamite_io::elevation::ElevationError::Launch {
-                        source: io::Error::from(io::ErrorKind::Unsupported),
-                    },
-                ))
-            }
-        });
-        #[cfg(windows)]
-        {
-            let waited = process.wait().map_err(CliError::elevation);
-            if result.is_ok() {
-                waited?;
+        Err(CliError::elevation(
+            adamite_io::elevation::ElevationError::Launch {
+                source: io::Error::from(io::ErrorKind::Unsupported),
+            },
+        ))
+    }
+}
+
+#[cfg(windows)]
+impl ChildProcess for adamite_io::elevation::ElevatedProcess {
+    fn try_wait(&mut self) -> Result<Option<u32>, CliError> {
+        adamite_io::elevation::ElevatedProcess::try_wait(self).map_err(CliError::elevation)
+    }
+    fn wait(&mut self) -> Result<u32, CliError> {
+        adamite_io::elevation::ElevatedProcess::wait(self).map_err(CliError::elevation)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CompletedScan {
+    pub(crate) snapshot: PathBuf,
+    pub(crate) saved: String,
+    pub(crate) bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum JobState {
+    Running(Option<DriverProgress>),
+    Done(CompletedScan),
+}
+
+/// Owns the child and scan paths; polling neither sleeps nor renders a terminal view.
+#[derive(Debug)]
+pub(crate) struct ElevatedJob {
+    // Close file and process handles before the path owner attempts cleanup.
+    reader: Option<ScanStatusReader>,
+    process: Box<dyn ChildProcess>,
+    progress: Vec<DriverProgress>,
+    outcome: Option<ScanStatus>,
+    exit_code: Option<u32>,
+    scan: ElevatedScan,
+}
+
+impl ElevatedJob {
+    fn new(scan: ElevatedScan, process: Box<dyn ChildProcess>) -> Self {
+        Self {
+            reader: None,
+            process,
+            progress: Vec::new(),
+            outcome: None,
+            exit_code: None,
+            scan,
+        }
+    }
+
+    pub(crate) fn poll(&mut self) -> Result<JobState, CliError> {
+        self.progress.clear();
+        if let Some(exit_code) = self.exit_code {
+            return self.completed(exit_code);
+        }
+        let exited = self.process.try_wait()?;
+        if self.reader.is_none() {
+            match ScanStatusReader::open(&self.scan.status) {
+                Ok(reader) => self.reader = Some(reader),
+                Err(source) if source.kind() == io::ErrorKind::NotFound => {}
+                Err(source) => {
+                    return Err(CliError::Io {
+                        operation: "open scan status",
+                        path: self.scan.status.clone(),
+                        source,
+                    });
+                }
             }
         }
-        result?;
-        Source::open(&self.snapshot)?.load_in_process(limits, None)
+        if let Some(reader) = &mut self.reader {
+            for line in reader
+                .poll()
+                .map_err(|source| CliError::Status { source })?
+            {
+                if let Some(progress) = line.driver_progress() {
+                    self.progress.push(progress);
+                } else if matches!(line, ScanStatus::Done { .. } | ScanStatus::Failed { .. }) {
+                    self.outcome = Some(line);
+                }
+            }
+        }
+        if let Some(exit_code) = exited {
+            self.exit_code = Some(exit_code);
+            self.reader = None;
+            self.completed(exit_code)
+        } else {
+            Ok(JobState::Running(self.progress.last().copied()))
+        }
+    }
+
+    fn completed(&self, exit_code: u32) -> Result<JobState, CliError> {
+        match &self.outcome {
+            Some(ScanStatus::Done { saved, bytes }) => Ok(JobState::Done(CompletedScan {
+                snapshot: self.scan.snapshot.clone(),
+                saved: saved.clone(),
+                bytes: *bytes,
+            })),
+            Some(ScanStatus::Failed { message, exit_code }) => Err(CliError::ChildFailed {
+                message: message.clone(),
+                exit_code: *exit_code,
+            }),
+            _ => Err(CliError::ChildExited { exit_code }),
+        }
     }
 
     fn monitor(
-        &self,
+        &mut self,
         drive: &Path,
         mut status: Option<&mut StatusFile>,
-        mut try_wait: impl FnMut() -> Result<Option<u32>, CliError>,
-    ) -> Result<(), CliError> {
-        let mut reader = None;
+    ) -> Result<CompletedScan, CliError> {
         let mut view = ScanProgressView::new(drive);
-        let mut outcome = None;
         loop {
-            let exited = try_wait()?;
-            if reader.is_none() {
-                match ScanStatusReader::open(&self.status) {
-                    Ok(opened) => reader = Some(opened),
-                    Err(source) if source.kind() == io::ErrorKind::NotFound => {}
-                    Err(source) => {
-                        return Err(CliError::Io {
-                            operation: "open scan status",
-                            path: self.status.clone(),
-                            source,
-                        });
-                    }
+            let state = self.poll();
+            for progress in &self.progress {
+                if let Some(view) = &mut view {
+                    view.update(*progress);
+                }
+                if let Some(status) = &mut status {
+                    status.progress(progress);
                 }
             }
-            if let Some(reader) = &mut reader {
-                for line in reader
-                    .poll()
-                    .map_err(|source| CliError::Status { source })?
-                {
-                    if let Some(progress) = line.driver_progress() {
-                        if let Some(view) = &mut view {
-                            view.update(progress);
-                        }
-                        if let Some(status) = &mut status {
-                            status.progress(&progress);
-                        }
-                    } else if matches!(line, ScanStatus::Done { .. } | ScanStatus::Failed { .. }) {
-                        outcome = Some(line);
-                    }
-                }
+            match state? {
+                JobState::Done(completed) => return Ok(completed),
+                JobState::Running(_) => std::thread::sleep(Duration::from_millis(100)),
             }
-            if let Some(exit_code) = exited {
-                return match outcome {
-                    Some(ScanStatus::Done { .. }) => Ok(()),
-                    Some(ScanStatus::Failed { message, exit_code }) => {
-                        Err(CliError::ChildFailed { message, exit_code })
-                    }
-                    _ => Err(CliError::ChildExited { exit_code }),
-                };
-            }
-            std::thread::sleep(Duration::from_millis(100));
         }
     }
 }
@@ -227,7 +311,7 @@ impl Drop for ElevatedScan {
 
 #[cfg(test)]
 mod tests {
-    use super::ElevatedScan;
+    use super::{ChildProcess, ElevatedJob, ElevatedScan, JobState};
     use crate::{
         cli::{Cli, Command, LimitArgs},
         error::CliError,
@@ -240,7 +324,33 @@ mod tests {
         status::{ScanStatus, ScanStatusReader, ScanStatusWriter},
     };
     use clap::Parser;
-    use std::{error::Error, ffi::OsString, fs, path::Path};
+    use std::{cell::Cell, error::Error, ffi::OsString, fmt, fs, path::Path, rc::Rc};
+
+    struct TestProcess<F>(F);
+
+    impl<F> fmt::Debug for TestProcess<F> {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("TestProcess")
+        }
+    }
+
+    impl<F: FnMut() -> Result<Option<u32>, CliError>> ChildProcess for TestProcess<F> {
+        fn try_wait(&mut self) -> Result<Option<u32>, CliError> {
+            (self.0)()
+        }
+
+        fn wait(&mut self) -> Result<u32, CliError> {
+            self.try_wait()?
+                .ok_or(CliError::ChildExited { exit_code: 1 })
+        }
+    }
+
+    fn job<F>(scan: ElevatedScan, poll: F) -> ElevatedJob
+    where
+        F: FnMut() -> Result<Option<u32>, CliError> + 'static,
+    {
+        ElevatedJob::new(scan, Box::new(TestProcess(poll)))
+    }
 
     fn limits(flags: &[&str]) -> Result<LimitArgs, Box<dyn Error>> {
         let cli = Cli::try_parse_from(
@@ -351,21 +461,23 @@ mod tests {
             })?;
             drop(writer);
             let process_code = u32::try_from(exit_code)?;
-            let error = scan
-                .monitor(Path::new("C:"), None, || Ok(Some(process_code)))
+            let mut job = job(scan, move || Ok(Some(process_code)));
+            let error = job
+                .monitor(Path::new("C:"), None)
                 .err()
                 .ok_or("child failure accepted")?;
             assert_eq!(error.message(), "child message");
             assert_eq!(i32::from(error.exit_code()), exit_code);
-            let snapshot = scan.snapshot.clone();
-            let status = scan.status.clone();
-            drop(scan);
+            let snapshot = job.scan.snapshot.clone();
+            let status = job.scan.status.clone();
+            drop(job);
             assert!(!snapshot.exists());
             assert!(!status.exists());
         }
         let scan = ElevatedScan::new(None)?;
-        let error = scan
-            .monitor(Path::new("C:"), None, || Ok(Some(9)))
+        let mut job = job(scan, || Ok(Some(9)));
+        let error = job
+            .monitor(Path::new("C:"), None)
             .err()
             .ok_or("missing outcome accepted")?;
         assert_eq!(error.exit_code(), 1);
@@ -388,20 +500,24 @@ mod tests {
             },
             bytes_read: 4096,
         };
-        let mut polls: u32 = 0;
-        scan.monitor(Path::new("C:"), Some(&mut relay), || {
-            polls = polls.saturating_add(1);
+        let counter = Rc::new(Cell::new(0u32));
+        let polled = Rc::clone(&counter);
+        let status_path = scan.status.clone();
+        let snapshot_path = scan.snapshot.clone();
+        let mut job = job(scan, move || {
+            let polls = polled.get().saturating_add(1);
+            polled.set(polls);
             if polls == 2 {
                 let mut writer =
-                    ScanStatusWriter::create(&scan.status).map_err(|source| CliError::Io {
+                    ScanStatusWriter::create(&status_path).map_err(|source| CliError::Io {
                         operation: "create test status",
-                        path: scan.status.clone(),
+                        path: status_path.clone(),
                         source,
                     })?;
                 for status in [
                     ScanStatus::from_progress(&progress),
                     ScanStatus::Done {
-                        saved: scan.snapshot.to_string_lossy().into_owned(),
+                        saved: snapshot_path.to_string_lossy().into_owned(),
                         bytes: 100,
                     },
                 ] {
@@ -411,12 +527,133 @@ mod tests {
                 }
             }
             Ok((polls >= 3).then_some(0))
-        })?;
+        });
+        job.monitor(Path::new("C:"), Some(&mut relay))?;
+        let polls = counter.get();
         assert_eq!(polls, 3);
         drop(relay);
         let mut reader = ScanStatusReader::open(&relay_paths.status)?;
         assert_eq!(reader.poll()?, [ScanStatus::from_progress(&progress)]);
         drop(reader);
+        Ok(())
+    }
+
+    #[test]
+    fn poll_returns_latest_progress_then_saved_outcome_without_a_view() -> Result<(), Box<dyn Error>>
+    {
+        let scan = ElevatedScan::new(None)?;
+        let status_path = scan.status.clone();
+        let snapshot_path = scan.snapshot.clone();
+        let exited = Rc::new(Cell::new(false));
+        let process_exited = Rc::clone(&exited);
+        let mut job = job(scan, move || Ok(process_exited.get().then_some(0)));
+        assert_eq!(job.poll()?, JobState::Running(None));
+        let progress = |records_processed| DriverProgress {
+            scan: ScanProgress {
+                phase: ScanPhase::Stream,
+                records_processed,
+                records_planned: Some(20),
+                outstanding: 0,
+                waiting_for_input: false,
+            },
+            bytes_read: 4096,
+        };
+        let mut writer = ScanStatusWriter::create(&status_path)?;
+        writer.write(&ScanStatus::from_progress(&progress(1)))?;
+        writer.write(&ScanStatus::from_progress(&progress(2)))?;
+        assert_eq!(job.poll()?, JobState::Running(Some(progress(2))));
+        assert_eq!(job.progress, [progress(1), progress(2)]);
+        assert_eq!(job.poll()?, JobState::Running(None));
+        fs::write(&snapshot_path, b"saved snapshot")?;
+        writer.write(&ScanStatus::Done {
+            saved: "C.adm".into(),
+            bytes: 123,
+        })?;
+        drop(writer);
+        assert_eq!(job.poll()?, JobState::Running(None));
+        exited.set(true);
+        let completed = job.poll()?;
+        let JobState::Done(outcome) = &completed else {
+            return Err("missing completed outcome".into());
+        };
+        assert_eq!(outcome.snapshot, snapshot_path);
+        assert_eq!(outcome.saved, "C.adm");
+        assert_eq!(outcome.bytes, 123);
+        assert_eq!(fs::read(&outcome.snapshot)?, b"saved snapshot");
+        assert!(job.reader.is_none());
+        assert_eq!(job.poll()?, completed);
+        drop(job);
+        assert!(!status_path.exists());
+        assert!(!snapshot_path.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn dropping_job_closes_reader_and_preserves_explicit_destination() -> Result<(), Box<dyn Error>>
+    {
+        let paths = ElevatedScan::new(None)?;
+        fs::write(&paths.snapshot, b"saved snapshot")?;
+        let scan = ElevatedScan::new(Some((&paths.snapshot, PublishMode::Replace)))?;
+        let status_path = scan.status.clone();
+        let writer = ScanStatusWriter::create(&status_path)?;
+        drop(writer);
+        let mut job = job(scan, || Ok(None));
+        assert_eq!(job.poll()?, JobState::Running(None));
+        assert!(job.reader.is_some());
+        drop(job);
+        assert!(!status_path.exists());
+        assert_eq!(fs::read(&paths.snapshot)?, b"saved snapshot");
+        Ok(())
+    }
+
+    #[test]
+    fn monitor_relays_each_phase_from_one_poll_before_completion() -> Result<(), Box<dyn Error>> {
+        let scan = ElevatedScan::new(None)?;
+        let relay_paths = ElevatedScan::new(None)?;
+        let mut relay = StatusFile::create(&relay_paths.status)?;
+        let mut writer = ScanStatusWriter::create(&scan.status)?;
+        let mut expected = Vec::new();
+        for phase in [ScanPhase::Boot, ScanPhase::Stream, ScanPhase::Finalize] {
+            let progress = DriverProgress {
+                scan: ScanProgress {
+                    phase,
+                    records_processed: 10,
+                    records_planned: Some(20),
+                    outstanding: 0,
+                    waiting_for_input: false,
+                },
+                bytes_read: 4096,
+            };
+            let status = ScanStatus::from_progress(&progress);
+            writer.write(&status)?;
+            expected.push(status);
+        }
+        writer.write(&ScanStatus::Done {
+            saved: scan.snapshot.to_string_lossy().into_owned(),
+            bytes: 100,
+        })?;
+        drop(writer);
+        let mut job = job(scan, || Ok(Some(0)));
+        job.monitor(Path::new("C:"), Some(&mut relay))?;
+        drop(relay);
+        let mut reader = ScanStatusReader::open(&relay_paths.status)?;
+        assert_eq!(reader.poll()?, expected);
+        drop(reader);
+        Ok(())
+    }
+
+    #[test]
+    fn malformed_status_error_retains_cleanup() -> Result<(), Box<dyn Error>> {
+        let scan = ElevatedScan::new(None)?;
+        let status_path = scan.status.clone();
+        let snapshot_path = scan.snapshot.clone();
+        fs::write(&snapshot_path, b"temporary snapshot")?;
+        fs::write(&status_path, b"invalid json\n")?;
+        let mut job = job(scan, || Ok(None));
+        assert!(matches!(job.poll(), Err(CliError::Status { .. })));
+        drop(job);
+        assert!(!status_path.exists());
+        assert!(!snapshot_path.exists());
         Ok(())
     }
 

@@ -2,7 +2,7 @@
 
 `adamite-io` reads NTFS volume bytes and drives `adamite-core` scans to an immutable snapshot and statistics. It provides borrowed slices, read-only image files and Windows raw volumes through `reader::VolumeReader`, with exact positional reads into caller-owned buffers. `driver::SyncDriver` runs on the calling thread and serves queued requests in issue order when core waits for input.
 
-The public API lives under `reader::`, `driver::`, `limits::`, `error::`, `snapshot::`, `elevation::` and `status::`; the crate root exports modules only. Reader implementation modules are private and their types are exported directly under `reader::`.
+The public API lives under `reader::`, `driver::`, `limits::`, `error::`, `snapshot::`, `snapshot_dir::`, `elevation::`, `status::` and Windows-only `volume::`; the crate root exports modules only. Reader implementation modules are private and their types are exported directly under `reader::`.
 
 ```text
 src/
@@ -10,6 +10,8 @@ src/
   error.rs          VolumeError with host and core error sources
   driver.rs         SyncDriver and private request batching
   limits.rs         ScanLimits and shared ScanProfile defaults
+  snapshot_dir.rs   platform snapshot directory and saved-file listings
+  volume/ffi.rs     Windows NTFS drive discovery boundary
   pacer.rs          private token bucket and clock abstraction
   reader/
     mod.rs          VolumeReader and reader type exports
@@ -67,7 +69,15 @@ Live volumes can change during scanning. Core counts torn ordinary records as co
 
 ## Unsafe policy
 
-The crate denies unsafe code and forbids it on non-Windows targets. Private `reader/windows/ffi.rs` wraps volume queries, and Windows-only `elevation/ffi.rs` wraps process-token queries, shell launching, process waiting and handle cleanup. Both use the `windows` crate behind safe, typed operations and deny undocumented unsafe blocks and multiple unsafe operations per block. Device opening, positional reads and aligned-buffer storage use safe Rust.
+The crate denies unsafe code and forbids it on non-Windows targets. Private `reader/windows/ffi.rs` wraps raw-volume queries, Windows-only `volume/ffi.rs` wraps drive discovery, and `elevation/ffi.rs` wraps process-token queries, shell launching, process waiting and handle cleanup. These boundaries use the `windows` crate behind safe, typed operations and deny undocumented unsafe blocks and multiple unsafe operations per block. Device opening, positional reads and aligned-buffer storage use safe Rust.
+
+## Volume discovery and snapshot directory
+
+On Windows, `volume::Volume::list()` returns fixed and removable NTFS volumes sorted by drive letter. Each volume exposes its uppercase `letter()`, `label()` and total `capacity()` in bytes. Discovery uses `GetLogicalDriveStringsW`, `GetDriveTypeW`, `GetVolumeInformationW` and `GetDiskFreeSpaceExW`. Drives whose filesystem, label or capacity cannot be queried are skipped, including empty card readers; enumeration failures return `VolumeListError`. The Windows CI test checks that the system volume `C` appears.
+
+`snapshot_dir::SnapshotDir::default_path()` uses `etcetera::choose_base_strategy()` to locate the platform data directory and appends `adamite/snapshots`. `SnapshotDir::new(path)` selects a directory without creating it; call `create()` before the first save. `path()` borrows the directory, and `drive_snapshot('c')` returns its `C.adm` path.
+
+`entries()` lists direct files with an ASCII case-insensitive `.adm` extension, follows symbolic links, ignores subdirectories and sorts by filename. A missing directory gives an empty list. Each `SnapshotEntry` exposes `path()`, `file_stem()`, `byte_len()` and `modified()`; `error()` retains individual metadata or enumeration failures so other files remain available. An enumeration failure without a filename has no path or stem and sorts last. Failure to open the directory itself returns `SnapshotDirError`.
 
 ## Elevation and scan status
 
