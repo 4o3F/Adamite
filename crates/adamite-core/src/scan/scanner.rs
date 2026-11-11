@@ -271,6 +271,10 @@ impl Scanner {
             }
             DiscoveryStep::Progress => Ok(self.progress(InputStatus::Ready)),
             DiscoveryStep::Complete => {
+                self.ingest = Some(Ingest::new(
+                    base.data_size,
+                    base.mapping.geometry.file_record_size(),
+                )?);
                 self.discovery = None;
                 self.phase = ScanPhase::Stream;
                 Ok(self.progress(InputStatus::Ready))
@@ -308,13 +312,6 @@ impl Scanner {
         let base = self.bootstrap.as_ref().ok_or(ScanError::Stream {
             reason: "missing complete MFT mapping",
         })?;
-        if self.ingest.is_none() {
-            self.ingest = Some(Ingest::new(
-                base.data_size,
-                base.mapping.geometry.file_record_size(),
-            )?);
-            return Ok(self.progress(InputStatus::Ready));
-        }
         let state = self.ingest.as_mut().ok_or(ScanError::Stream {
             reason: "missing ingestion state",
         })?;
@@ -499,6 +496,7 @@ impl Scanner {
                 .ingest
                 .as_ref()
                 .map_or(0, |state| state.stats.records_total),
+            records_planned: self.ingest.as_ref().map(Ingest::records_planned),
             outstanding: self.requests.len(),
             waiting_for_input: matches!(input, InputStatus::Waiting),
         })

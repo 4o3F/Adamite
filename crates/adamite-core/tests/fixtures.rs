@@ -2,7 +2,9 @@
 
 use adamite_core::{
     error::ScanError,
-    scan::{FeedError, ReadRequest, RequestId, ScanConfig, ScanOutput, ScanStep, Scanner},
+    scan::{
+        FeedError, ReadRequest, RequestId, ScanConfig, ScanOutput, ScanPhase, ScanStep, Scanner,
+    },
     snapshot::{NodeFlags, NodeId, NodeView, Snapshot},
 };
 use adamite_fixtures::{Entry, EntryKind, Fixture, Manifest, MappedAllocation, Name, ReferenceMft};
@@ -35,7 +37,12 @@ struct Driven {
 }
 
 // This driver deliberately has no manifest parameter: all addresses come from Scanner.
-fn scan(image: &[u8], config: ScanConfig, arrival: Arrival) -> TestResult<Driven> {
+fn scan(
+    image: &[u8],
+    config: ScanConfig,
+    arrival: Arrival,
+    records_planned: u64,
+) -> TestResult<Driven> {
     let chunk_size = config.chunk_size;
     let max_outstanding = config.max_outstanding;
     let mut scanner = Scanner::new(config)?;
@@ -49,6 +56,7 @@ fn scan(image: &[u8], config: ScanConfig, arrival: Arrival) -> TestResult<Driven
         .and_then(|n| n.checked_add(4096))
         .ok_or("driver call bound")?;
     let mut previous_records = 0;
+    let mut phases = Vec::new();
     for _ in 0..limit {
         match scanner.step()? {
             ScanStep::Need(request) => {
@@ -61,6 +69,19 @@ fn scan(image: &[u8], config: ScanConfig, arrival: Arrival) -> TestResult<Driven
                 assert!(pending.len() <= max_outstanding);
             }
             ScanStep::Progress(progress) => {
+                if phases.last() != Some(&progress.phase) {
+                    phases.push(progress.phase);
+                }
+                let expected = match progress.phase {
+                    ScanPhase::Boot | ScanPhase::Record0 | ScanPhase::Discover => None,
+                    _ => Some(records_planned),
+                };
+                assert_eq!(
+                    progress.records_planned, expected,
+                    "phase {:?}",
+                    progress.phase
+                );
+                assert!(progress.records_processed <= records_planned);
                 assert!(
                     progress
                         .records_processed
@@ -89,6 +110,23 @@ fn scan(image: &[u8], config: ScanConfig, arrival: Arrival) -> TestResult<Driven
                 }
             }
             ScanStep::Done(output) => {
+                assert_eq!(previous_records, records_planned);
+                assert_eq!(output.stats.records_total, records_planned);
+                assert_eq!(
+                    phases,
+                    [
+                        ScanPhase::Boot,
+                        ScanPhase::Record0,
+                        ScanPhase::Discover,
+                        ScanPhase::Stream,
+                        ScanPhase::Merge,
+                        ScanPhase::Link,
+                        ScanPhase::Snapshot,
+                        ScanPhase::Aggregate,
+                        ScanPhase::Finalize,
+                        ScanPhase::Done
+                    ]
+                );
                 assert!(pending.is_empty());
                 for _ in 0..2 {
                     assert!(matches!(scanner.step(), Err(ScanError::Inactive)));
@@ -1155,7 +1193,14 @@ fn fixture_suite(name: &str, expected_root_alloc: u64) -> TestResult {
             .join(format!("{name}.json")),
     )?;
     assert_eq!(fixture.manifest().schema_version, 3);
-    let baseline = scan(fixture.image(), ScanConfig::default(), Arrival::Issued)?;
+    let records_planned =
+        fixture.manifest().mft.data_size / u64::from(fixture.manifest().geometry.file_record_size);
+    let baseline = scan(
+        fixture.image(),
+        ScanConfig::default(),
+        Arrival::Issued,
+        records_planned,
+    )?;
     let actual_paths = paths(&baseline.output.snapshot)?;
     let snapshot = &baseline.output.snapshot;
     let root = node(snapshot, NodeId::ROOT)?;
@@ -1216,7 +1261,7 @@ fn fixture_suite(name: &str, expected_root_alloc: u64) -> TestResult {
         ),
     ];
     for (config, arrival) in configs {
-        let driven = scan(fixture.image(), config, arrival)?;
+        let driven = scan(fixture.image(), config, arrival, records_planned)?;
         if matches!(arrival, Arrival::Reversed) {
             assert!(
                 driven.reversed_batches > 0,
@@ -1241,4 +1286,26 @@ fn fixtures_fragmented_512_public_oracle() -> TestResult {
 #[test]
 fn fixtures_native_4kn_64k_public_oracle() -> TestResult {
     fixture_suite("4kn-64k", 3_538_944)
+}
+
+#[test]
+fn synthetic_progress_counts_every_slot_including_unused_records() -> TestResult {
+    use adamite_fixtures::{SyntheticConfig, SyntheticVolume};
+    let config = SyntheticConfig::reference(1_002)?;
+    let slots = u64::from(config.slot_count);
+    let volume = SyntheticVolume::new(config)?;
+    let mut image = std::io::Cursor::new(Vec::new());
+    volume.write(&mut image)?;
+    let driven = scan(
+        image.get_ref(),
+        ScanConfig {
+            chunk_size: 4096,
+            max_outstanding: 4,
+            ..ScanConfig::default()
+        },
+        Arrival::Reversed,
+        slots,
+    )?;
+    assert!(driven.output.stats.unused > 0);
+    Ok(())
 }

@@ -7,9 +7,18 @@ use crate::{
     reader::VolumeReader,
 };
 use adamite_core::scan::{
-    FeedError, ReadRequest, ScanConfig, ScanOutput, ScanPhase, ScanStep, Scanner,
+    FeedError, ReadRequest, ScanConfig, ScanOutput, ScanPhase, ScanProgress, ScanStep, Scanner,
 };
 use std::{collections::VecDeque, num::NonZeroU64};
+
+/// Latest scanner progress and cumulative logical bytes successfully read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DriverProgress {
+    /// Most recent scanner progress report.
+    pub scan: ScanProgress,
+    /// Bytes read through the volume reader, including bootstrap and discovery.
+    pub bytes_read: u64,
+}
 
 /// Reusable synchronous scan driver with validated configuration.
 #[derive(Debug, Clone)]
@@ -65,6 +74,21 @@ impl SyncDriver {
     ///
     /// Returns read and bounds failures, allocation or arithmetic failures, wrapped core errors, or [`VolumeError::Protocol`] for inconsistent scanner steps.
     pub fn run<R: VolumeReader + ?Sized>(&self, reader: &mut R) -> Result<ScanOutput, VolumeError> {
+        self.run_observed(reader, |_| {})
+    }
+
+    /// Runs a fresh scanner, observing every progress step and completed read batch.
+    ///
+    /// Reports contain the latest scanner state and cumulative logical bytes read.
+    /// The observer runs synchronously and cannot fail or cancel the scan.
+    ///
+    /// # Errors
+    /// Returns the same read, allocation, arithmetic, core and protocol errors as [`Self::run`].
+    pub fn run_observed<R: VolumeReader + ?Sized>(
+        &self,
+        reader: &mut R,
+        mut observer: impl FnMut(DriverProgress),
+    ) -> Result<ScanOutput, VolumeError> {
         let mut scanner =
             Scanner::new(self.config.clone()).map_err(|source| VolumeError::Config { source })?;
         let mut pending = Pending::new(self.max_read_bytes_per_sec, self.config.chunk_size);
@@ -72,9 +96,28 @@ impl SyncDriver {
             let step = scanner
                 .step()
                 .map_err(|source| VolumeError::Scan { source })?;
-            if let Some(output) = pending.handle(step, reader, |request, bytes| {
+            let progress = if let ScanStep::Progress(scan) = &step {
+                observer(DriverProgress {
+                    scan: *scan,
+                    bytes_read: pending.bytes_read,
+                });
+                Some(*scan)
+            } else {
+                None
+            };
+            let previous_bytes = pending.bytes_read;
+            let output = pending.handle(step, reader, |request, bytes| {
                 scanner.feed(request.id, bytes)
-            })? {
+            })?;
+            if let Some(scan) = progress
+                && pending.bytes_read != previous_bytes
+            {
+                observer(DriverProgress {
+                    scan,
+                    bytes_read: pending.bytes_read,
+                });
+            }
+            if let Some(output) = output {
                 return Ok(output);
             }
         }
@@ -84,6 +127,7 @@ impl SyncDriver {
 struct Pending {
     requests: VecDeque<ReadRequest>,
     buffer: Vec<u8>,
+    bytes_read: u64,
     phase: Option<ScanPhase>,
     pacer: Pacer<SystemClock>,
 }
@@ -93,6 +137,7 @@ impl Pending {
         Self {
             requests: VecDeque::new(),
             buffer: Vec::new(),
+            bytes_read: 0,
             phase: None,
             pacer: Pacer::new(SystemClock::default(), max_read_bytes_per_sec, chunk_size),
         }
@@ -168,6 +213,16 @@ impl Pending {
                 self.pacer.acquire(request.len);
                 reader.read_exact_at(request.offset, &mut self.buffer)?;
             }
+            self.bytes_read = self
+                .bytes_read
+                .checked_add(
+                    u64::try_from(request.len).map_err(|_| VolumeError::Overflow {
+                        operation: "read byte count",
+                    })?,
+                )
+                .ok_or(VolumeError::Overflow {
+                    operation: "read byte count",
+                })?;
             bytes = bytes
                 .checked_add(request.len)
                 .ok_or(VolumeError::Overflow {
@@ -227,6 +282,7 @@ mod tests {
         ScanStep::Progress(ScanProgress {
             phase: ScanPhase::Stream,
             records_processed: 0,
+            records_planned: None,
             outstanding,
             waiting_for_input,
         })

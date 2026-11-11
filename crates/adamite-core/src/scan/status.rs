@@ -38,6 +38,8 @@ pub struct ScanProgress {
     pub phase: ScanPhase,
     /// MFT records processed; boot processing leaves this zero.
     pub records_processed: u64,
+    /// Total MFT record slots, available after discovery and retained through completion.
+    pub records_planned: Option<u64>,
     /// Issued requests not yet consumed, including responses already supplied.
     pub outstanding: usize,
     /// True when the caller must supply input before further work is possible.

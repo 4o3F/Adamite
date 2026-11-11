@@ -37,6 +37,8 @@ use adamite_core::{
 3. Continue on `Progress`; when `waiting_for_input` is true, wait for the caller's pending reads and feed responses. Core never waits itself.
 4. `Done(ScanOutput { snapshot, stats })` transfers the result once. Later calls are inactive.
 
+`ScanProgress` reports the current phase, `records_processed`, `records_planned`, outstanding requests and whether input is needed. `records_planned` is `None` during boot, record-zero reading and discovery. From the first `Stream` report through completion it contains the MFT DATA size divided by the record size, including unused slots.
+
 The [crate docs](src/lib.rs) contain a runnable in-memory driver loop. Bootstrap follows boot → record 0 → attribute-list extension discovery → MFT streaming. Records are assembled across response and extent boundaries; the caller never needs to buffer the whole raw MFT. Transport bounds do not bound owned metadata memory.
 
 ## Snapshot and errors

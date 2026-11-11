@@ -1,6 +1,6 @@
 //! Complete scan equivalence against an independent immediate-response loop.
 
-use adamite_core::scan::{ScanConfig, ScanContext, ScanOutput, ScanStep, Scanner};
+use adamite_core::scan::{ScanConfig, ScanContext, ScanOutput, ScanPhase, ScanStep, Scanner};
 use adamite_fixtures::Fixture;
 use adamite_io::{
     driver::SyncDriver,
@@ -82,11 +82,38 @@ fn slice_and_image_scans_match_baseline_for_all_fixtures_and_configs() -> TestRe
                 immediate,
                 "fixture {name}, config {config:?}"
             );
+            let mut reports = Vec::new();
+            let observed = driver.run_observed(reader, |progress| reports.push(progress))?;
             assert_eq!(
-                driver.run(reader)?,
-                immediate,
-                "reused driver for {name}, config {config:?}"
+                observed, immediate,
+                "observed fixture {name}, config {config:?}"
             );
+            assert_eq!(observed.to_bytes()?, immediate.to_bytes()?);
+            assert_eq!(reports.first().ok_or("no reports")?.bytes_read, 0);
+            let last = reports.last().ok_or("no final report")?;
+            assert_eq!(last.scan.phase, ScanPhase::Done);
+            assert_eq!(last.scan.records_processed, immediate.stats.records_total);
+            assert_eq!(
+                last.scan.records_planned,
+                Some(immediate.stats.records_total)
+            );
+            let mut batches = 0;
+            for pair in reports.windows(2) {
+                let [previous, current] = pair else {
+                    return Err("report pair".into());
+                };
+                assert!(current.scan.records_processed >= previous.scan.records_processed);
+                assert!(current.bytes_read >= previous.bytes_read);
+                if current.bytes_read > previous.bytes_read {
+                    assert_eq!(
+                        previous.scan, current.scan,
+                        "batch must retain latest scanner report"
+                    );
+                    assert!(previous.scan.waiting_for_input);
+                    batches += 1;
+                }
+            }
+            assert!(batches > 0);
             let mut reader = ImageReader::open(&image_path)?;
             assert_eq!(
                 driver.run(&mut reader)?,
@@ -140,7 +167,11 @@ fn limits_control_observed_reads_and_preserve_snapshot_bytes() -> TestResult {
                 inner: SliceReader::new(fixture.image()),
                 requests: Vec::new(),
             };
-            let actual = driver.run(&mut reader)?;
+            let mut reported_bytes = 0;
+            let actual = driver
+                .run_observed(&mut reader, |progress| reported_bytes = progress.bytes_read)?;
+            let read_bytes: usize = reader.requests.iter().map(|(_, len)| len).sum();
+            assert_eq!(reported_bytes, u64::try_from(read_bytes)?);
             assert_eq!(actual.to_bytes()?, expected.to_bytes()?);
             assert!(!reader.requests.is_empty());
             assert!(reader.requests.iter().all(|(_, len)| *len <= chunk));

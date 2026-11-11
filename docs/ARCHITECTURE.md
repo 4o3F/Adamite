@@ -104,6 +104,8 @@ Graph depends on snapshot types/build inputs; MFT depends on graph, and the scan
 
 `Scanner::step()` returns `Need`, `Progress` or one `Done`; fatal errors enter `Failed`. Calls after delivery or failure return an inactive error. A phase-work tracing span is entered and dropped within each call. CPU passes process at most 256 items before yielding, with at most one directory sort per call; bulk allocation/resize/fill and loops over the small set of attribute lists may run within a call. This is a work-count bound, not a wall-clock deadline.
 
+`ScanProgress` carries the phase, processed records, outstanding requests and input-wait status. Its `records_planned: Option<u64>` is absent during bootstrap and discovery, then holds the MFT DATA size divided by record size from the first `Stream` report through completion, including unused slots. This count is derived from MFT state without I/O or clocks.
+
 `ScanConfig` defaults to one outstanding request and 1 MiB chunks. Chunks must be multiples of 512 between 512 bytes and 16 MiB; cap must be positive and cap × chunk must fit `usize`. Every request has a checked, monotonic `RequestId`, a volume-relative byte offset and a nonzero length no larger than the chunk bound.
 
 `feed(id, bytes)` copies an exact response and retains no borrow. Responses may arrive in any order; slots remain occupied until consumed in virtual order. Unknown/consumed ids, duplicates, wrong lengths and inactive scans are rejected without changing state. `Progress.waiting_for_input` asks the caller to wait for its own reads. Feed pending responses before polling again when waiting; other progress calls need no input.
@@ -226,6 +228,10 @@ The planned MCP response convention includes snapshot timestamp and units in eve
 ### 5.1 Current driver limits
 
 Adamite limits its own reads and work through `adamite_io::limits::ScanLimits`. `SyncDriver::with_limits` configures core's chunk size and maximum outstanding requests, validates them through `ScanConfig`, and paces reads between requests. The driver runs on the calling thread, parses serially and reuses one response buffer. Native read depth remains one even when the logical request ceiling is larger. Core starts no threads, reads no clocks and never sleeps.
+
+`SyncDriver::run_observed` calls a synchronous observer after each scanner progress step and completed read batch with `DriverProgress { scan, bytes_read }`; the cumulative logical byte count includes bootstrap and discovery. Batch reports retain the latest scanner state. `run` delegates to this loop with a no-op observer.
+
+The CLI uses these reports for an indicatif display when standard error is a terminal: record percentage and ETA during streaming, phase spinners otherwise, and cleanup before results or errors. Redirected standard error retains the single scan-start line.
 
 ```rust
 pub struct ScanLimits {

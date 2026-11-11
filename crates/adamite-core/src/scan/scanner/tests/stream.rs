@@ -410,7 +410,10 @@ fn ingest_issues_before_consuming_and_retains_partial_response_slots() -> TestRe
         ..ScanConfig::default()
     })?;
     drive_to(&mut scanner, &volume, ScanPhase::Stream)?.1?;
-    assert!(matches!(scanner.step()?, ScanStep::Progress(_)));
+    assert_eq!(
+        scanner.ingest.as_ref().ok_or("ingest")?.records_planned(),
+        700
+    );
     for _ in 0..3 {
         let ScanStep::Need(request) = scanner.step()? else {
             return Err("stream must fill available request slots before consuming".into());

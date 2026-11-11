@@ -15,6 +15,7 @@ mod locate;
 mod render;
 mod report;
 mod save;
+mod scan_progress_view;
 mod source;
 
 use adamite_profile::{ChromeProfile, CountingAllocator};

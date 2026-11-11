@@ -22,6 +22,7 @@ serde_json.workspace = true
 snafu.workspace = true
 tracing.workspace = true
 parse-size = "1.1.0"
+indicatif = { version = "0.18.6", default-features = false, features = ["unicode-width"] }
 
 [dev-dependencies]
 adamite-fixtures = { version = "0.1.0", path = "../adamite-fixtures" }

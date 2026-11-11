@@ -1,4 +1,4 @@
-use crate::error::CliError;
+use crate::{error::CliError, scan_progress_view::ScanProgressView};
 use adamite_core::scan::{ScanContext, ScanOutput};
 use adamite_io::{
     driver::SyncDriver,
@@ -9,7 +9,7 @@ use adamite_io::{
 };
 use std::{
     fs::File,
-    io::{self, Read, Seek, Write},
+    io::{self, Read, Seek},
     path::{Path, PathBuf},
 };
 
@@ -124,9 +124,13 @@ impl Source {
         open: impl FnOnce() -> Result<(R, ScanContext), VolumeError>,
     ) -> Result<ScanOutput, VolumeError> {
         let _entered = tracing::info_span!("scan").entered();
-        let _ = writeln!(io::stderr().lock(), "scanning {}…", path.display());
+        let mut view = ScanProgressView::new(path);
         let (mut reader, context) = open()?;
-        SyncDriver::with_limits(limits, context)?.run(&mut reader)
+        SyncDriver::with_limits(limits, context)?.run_observed(&mut reader, |progress| {
+            if let Some(view) = &mut view {
+                view.update(progress);
+            }
+        })
     }
 
     #[cfg(windows)]

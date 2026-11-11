@@ -34,7 +34,9 @@ SOURCE is classified in this order:
 2. A file with the eight-byte `.adm` magic (`ADAMITE\0`), or an `.adm` extension ignoring ASCII case, selects a snapshot. Decoding failures return exit code 3 without attempting an image scan.
 3. Any other file selects an image, starting at NTFS volume byte zero. Decompress images first; extract the volume from partitioned disk or VHD/VHDX containers before scanning.
 
-Image and supported drive scans print `scanning <source>…` to standard error. Image scans record the current scan timestamp; Windows drive scans also obtain the volume label and free bytes. Queries on snapshots reuse their saved metadata.
+Image and supported drive scans show progress on standard error when it is a terminal, including scans started by `browse` before the browser opens. MFT streaming shows processed and planned records, percentage, binary bytes read, average logical read rate since scan start and ETA. Boot, discovery and later processing phases show a spinner with the phase label. Indicatif limits redraw frequency, and the display clears on success or failure before results or errors print. When standard error is piped or redirected, scans print the single line `scanning <source>…`.
+
+Image scans record the current scan timestamp; Windows drive scans also obtain the volume label and free bytes. Queries on snapshots reuse their saved metadata.
 
 For `ls` and `browse`, PATH is relative to the snapshot root. Both `/` and `\` separate components; empty components are skipped, so a leading separator is optional. `.` and `..` are literal names. Exact name matches take precedence; otherwise names are compared after Unicode lowercase expansion. Multiple matches produce `AmbiguousPath` with candidate NodeIds. A component such as `#1234` selects that decimal NodeId among the current directory's direct children. Synthetic directories such as `<NTFS metadata>` and `<orphaned>` use the same rules. Returned paths use `/` separators.
 

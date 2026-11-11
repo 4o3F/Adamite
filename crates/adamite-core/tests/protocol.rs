@@ -94,6 +94,7 @@ fn protocol_boot_request_and_repeated_waiting() -> Result<(), Box<dyn Error>> {
         let waiting = ScanStep::Progress(ScanProgress {
             phase: ScanPhase::Boot,
             records_processed: 0,
+            records_planned: None,
             outstanding: 1,
             waiting_for_input: true,
         });

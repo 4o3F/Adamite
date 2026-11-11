@@ -27,6 +27,7 @@ pub(crate) struct ReadPlan {
 pub(crate) struct Ingest {
     data_size: u64,
     record_size: usize,
+    records_planned: u64,
     planned: u64,
     raw: Vec<u8>,
     pub slots: RecordSlots,
@@ -36,10 +37,11 @@ pub(crate) struct Ingest {
 
 impl Ingest {
     pub(crate) fn new(data_size: u64, record_size: u32) -> Result<Self, ScanError> {
-        let count = data_size
+        let records_planned = data_size
             .checked_div(u64::from(record_size))
-            .and_then(|count| usize::try_from(count).ok())
             .ok_or_else(|| ScanError::overflow("planned MFT record count"))?;
+        let count = usize::try_from(records_planned)
+            .map_err(|_| ScanError::overflow("planned MFT record count"))?;
         let slots = RecordSlots::new(count)?;
         let record_size =
             usize::try_from(record_size).map_err(|_| ScanError::overflow("record size"))?;
@@ -48,12 +50,17 @@ impl Ingest {
         Ok(Self {
             data_size,
             record_size,
+            records_planned,
             planned: 0,
             raw,
             slots,
             patches: Vec::new(),
             stats: ScanStats::default(),
         })
+    }
+
+    pub(crate) fn records_planned(&self) -> u64 {
+        self.records_planned
     }
 
     pub(crate) fn buffer_capacity(&self) -> usize {
