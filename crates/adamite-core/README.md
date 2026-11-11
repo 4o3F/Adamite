@@ -1,6 +1,6 @@
 # adamite-core
 
-`adamite-core` scans caller-supplied NTFS bytes into an immutable `snapshot::Snapshot` and `scan::ScanStats`. It uses `std`, forbids unsafe code and depends on `adamite-ntfs`, snafu and tracing. It performs no I/O, defines no reader trait or callback, and starts no threads or timers.
+`adamite-core` scans caller-supplied NTFS bytes into an immutable `snapshot::Snapshot` and `scan::ScanStats`. It uses `std`, forbids unsafe code and depends on `adamite-ntfs`, crc32fast, snafu and tracing. It performs no I/O, defines no reader trait or callback, and starts no threads or timers.
 
 The public API lives under `scan::`, `snapshot::` and `error::`; the crate root exports modules only. Every scan item has one path directly under `scan::`, and its implementation children are private.
 
@@ -12,6 +12,8 @@ src/
   graph/            private entry model and parent/name/hard-link resolution
   snapshot/         immutable nodes, pooled names, indexes, volume and errors
     build/          private input, builder, aggregation and finalization passes
+    persist/        private canonical .adm v1 encoder, decoder and validation
+    rules.rs        private ranking and extension rules shared by build/persist
   error.rs          fatal ScanError and explicit domain constructors
   util.rs           private fallible collection and checked-counter traits
 ```
@@ -43,6 +45,14 @@ Self logical size is unnamed DATA; ADS logical bytes are separate. Allocation in
 
 `scan::ConfigError` rejects invalid bounds, `scan::FeedError` rejects responses without changing state, `error::ScanError` terminates a failed scan, and `snapshot::SnapshotError` covers snapshot construction/path failures. Ordinary corrupt records are discarded and counted; a missing/corrupt root or bootstrap is fatal. Errors preserve parser/allocation sources through snafu.
 
+## Persistence
+
+`scan::ScanOutput::to_bytes(&self)` returns `Result<Vec<u8>, snapshot::PersistError>`; `ScanOutput::from_bytes(&[u8])` returns `Result<ScanOutput, snapshot::PersistError>`. Both preserve the complete snapshot, caller context and scan counters. The codec lives in private `snapshot/persist/`; callers own file reads and writes.
+
+Canonical `.adm` v1 uses little-endian fields, a 64-byte header with version, lengths and whole-file CRC-32, a 13-entry section table and 8-byte-aligned sections. Optional columns store a presence bitmap followed by a full value array. Accepted bytes re-encode identically.
+
+Decode checks the header, table, placement, padding, lengths and CRC before fallible column allocation, then validates geometry, UTF-8 and all snapshot invariants, including tree connectivity, hard-link groups, aggregates, ordering and indexes. Scan counters are preserved without cross-validation against the tree. The non-exhaustive `snapshot::PersistError` reports format, checksum, invariant, geometry, UTF-8, overflow, allocation and encoding-width failures.
+
 ## Local checks and fixtures
 
 From the repository root:
@@ -57,6 +67,6 @@ The shared `adamite-fixtures` crate loads committed images and independent v3 ma
 
 ## Fuzzing and future work
 
-The [standalone nightly scan harness](fuzz/README.md) bounds images, advertised metadata and driver calls while checking protocol and aggregation invariants. `deno task fuzz-corpus` generates both parser/core seeds; `deno task check --fuzz` runs all six smoke targets. Smoke mutations go to scratch directories under `target/fuzz-smoke`; committed seed corpora are read without changes.
+The [standalone nightly fuzz harnesses](fuzz/README.md) check bounded scan inputs, protocol and aggregation invariants, plus `.adm` decoding and canonical re-encoding. `deno task fuzz-corpus` generates parser seeds and both core corpora; `deno task check --fuzz` runs all seven smoke targets. Smoke mutations go to scratch directories under `target/fuzz-smoke`; committed seed corpora are read without changes.
 
-[`adamite-io`](../adamite-io/README.md) provides `VolumeReader`, slice/image/Windows raw-volume readers and `SyncDriver` for synchronous scans. Parallelism, buffer pools, `$BITMAP` skipping, general resource limits, query operations (`add-core-query`), persistence, CLI, MCP, USN and walkdir fallback remain future changes. Mirror fallback, reparse-target traversal and atomic live-volume snapshots are not provided.
+[`adamite-io`](../adamite-io/README.md) provides `VolumeReader`, slice/image/Windows raw-volume readers and `SyncDriver` for synchronous scans. Parallelism, buffer pools, `$BITMAP` skipping, general resource limits, query operations (`add-core-query`), CLI, MCP, USN and walkdir fallback remain future changes. Mirror fallback, reparse-target traversal and atomic live-volume snapshots are not provided.

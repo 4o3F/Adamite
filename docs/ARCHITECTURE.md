@@ -4,14 +4,14 @@ Adamite aims to give agents a WizTree-like view of a filesystem through MCP, CLI
 
 The project is split into two layers:
 
-- **Core layer:** scanning and tree building, with query and persistence modules planned.
+- **Core layer:** scanning, tree building and snapshot persistence, with query operations planned.
 - **Access layer (planned):** MCP, CLI and other front ends, backed by snapshot and scan-job services.
 
 Implementation language: Rust (Cargo workspace).
 
 ## 1. Overall Architecture
 
-The diagram includes planned components; the parser, single-threaded scan/snapshot implementation, synchronous volume readers/driver and fixture support exist today.
+The diagram includes planned components; the parser, single-threaded scan/snapshot implementation, snapshot persistence, synchronous volume readers/driver and fixture support exist today.
 
 ```text
 ┌──────────────────── Access layer (planned) ────────────────────┐
@@ -38,9 +38,9 @@ The diagram includes planned components; the parser, single-threaded scan/snapsh
 │   graph/: entries + parent/hard-link resolution                │
 │   snapshot/build/: arena/CSR → aggregate → finalize            │
 │   snapshot/: immutable nodes, names, indexes + volume info     │
+│   snapshot/persist/: canonical .adm v1 encoding/decoding       │
 │   error.rs / util.rs: stage errors + fallible storage helpers  │
 │   query/ (planned): summary / listing / search / subtree ranks │
-│   persist/ (planned): flat-array snapshot serialization        │
 │ adamite-ntfs: boot/record/attribute/value/utf16 decoding       │
 └────────────────────────────────────────────────────────────────┘
 ```
@@ -61,7 +61,7 @@ crates/
 | Implemented crate | Responsibility |
 |---|---|
 | `adamite-ntfs` | `no_std` byte decoding through `boot`, `record`, `attribute`, `value` and `utf16` modules; record parsing owns fixup, and attribute runlists live under `attribute::runlist` |
-| `adamite-core` | Single-threaded `std` scan driver, private NTFS reading/merge and graph resolution, snapshot construction and immutable reads |
+| `adamite-core` | Single-threaded `std` scan driver, private NTFS reading/merge and graph resolution, snapshot construction, immutable reads and `.adm` persistence |
 | `adamite-io` | Exact positional `VolumeReader`, `SliceReader`, `ImageReader`, Windows `RawVolumeReader` and synchronous `SyncDriver`; adapter-owned alignment and volume context |
 | `adamite-fixtures` | Unpublished development support: image loading, independent manifests/reference MFT reconstruction and synthetic builders |
 
@@ -69,11 +69,11 @@ Parser operations belong to their types: `boot::VolumeGeometry::from_boot_sector
 
 Core performs no file, device or network I/O. It defines no reader trait or callback, starts no threads, reads no clocks and never sleeps. `adamite_io::reader::VolumeReader` defines the exact positional read contract, and `adamite_io::driver::SyncDriver` owns synchronous transport and scheduling. `adamite_core::scan::ScanContext` supplies optional label, scan FILETIME and free bytes; Windows callers obtain them through `RawVolumeReader::context()` before constructing the driver.
 
-The public core modules are `scan`, `snapshot` and `error`. `adamite_core::scan::Scanner` drives phase changes and owns request identifiers, queue capacity, waiting decisions and the shared per-call work budget. Configuration, protocol, status and `ScanStats` definitions live in private scan children and are exported directly under `scan::`. `adamite_core::snapshot::Snapshot` exposes immutable reads, and `adamite_core::error::ScanError` carries fatal stage failures. The crate root contains module declarations without item re-exports.
+The public core modules are `scan`, `snapshot` and `error`. `adamite_core::scan::Scanner` drives phase changes and owns request identifiers, queue capacity, waiting decisions and the shared per-call work budget. Configuration, protocol, status and `ScanStats` definitions live in private scan children and are exported directly under `scan::`. `scan::ScanOutput::{to_bytes, from_bytes}` encode and decode complete scan outputs, with failures exposed as `snapshot::PersistError`. `adamite_core::snapshot::Snapshot` exposes immutable reads, and `adamite_core::error::ScanError` carries fatal stage failures. The crate root contains module declarations without item re-exports.
 
 Private `mft/` owns bootstrap, discovery, mapping, ingestion, decoding and merge. Its stages return byte ranges, planning commits and consumption progress; only the scan driver handles request slots and ids. MFT merge constructs `graph::entry::EntryRecord` values, and `graph::link::Linker` resolves their names and parents into snapshot-owned build inputs. Private `snapshot/build/` contains separate bounded builder, aggregation and finalization passes; storage and its mutable access stay within snapshot modules. `util.rs` supplies domain-free fallible collection/counter traits, while `error.rs` wraps the snapshot error leaf. Configuration and statistics remain independent leaves.
 
-Graph depends on snapshot types/build inputs; MFT depends on graph, and the scan driver orchestrates MFT, graph and snapshot build passes. NTFS contribution-to-entry conversion stays in MFT, so graph does not depend on NTFS contribution models. Pipeline operations belong to their record, mapping, contribution, linker or pass types. Implemented synchronous I/O and future parallelism, query, persistence, service, CLI, MCP and USN components are described in §4–§6.
+Graph depends on snapshot types/build inputs; MFT depends on graph, and the scan driver orchestrates MFT, graph and snapshot build passes. Private `snapshot/persist/` encodes snapshot storage and scan counters, with the dependency edge `snapshot::persist → scan::{config, stats}` for `ScanContext` and `ScanStats`; it does not depend on scan status, protocol or scanner. NTFS contribution-to-entry conversion stays in MFT, so graph does not depend on NTFS contribution models. Pipeline operations belong to their record, mapping, contribution, linker or pass types. Snapshot persistence is described in §3; implemented synchronous I/O and future parallelism, query, service, CLI, MCP and USN components are described in §4–§6.
 
 ### Key decisions
 
@@ -84,7 +84,7 @@ Graph depends on snapshot types/build inputs; MFT depends on graph, and the scan
 | Unsafe code is confined to `adamite-io/src/reader/windows/ffi.rs` | Safe, typed wrappers isolate the `windows` crate's device-control and volume-query calls; opening, reads and aligned storage use safe Rust. |
 | MFT mapping comes from record 0's own runlist and attribute-list discovery, not `FSCTL_GET_RETRIEVAL_POINTERS` | Live volumes and images can use the same bootstrap algorithm. |
 | Snapshot is immutable and can be shared through `Arc` | Multiple consumers can read it without locking; cloning Snapshot itself copies its arrays. |
-| Scanning is decoupled from queries; persistence is planned | Future raw-volume scans can run elevated while saved-snapshot queries run unelevated (§4.1). |
+| Scanning is decoupled from queries; `.adm` persistence is implemented in core | The planned CLI will save elevated scan results for unelevated queries (§4.1). |
 | A planned walkdir fallback emits the same EntryRecord boundary | FAT/exFAT/ReFS/network drives could reuse tree building without an NTFS parser. |
 
 ## 2. Scan Pipeline
@@ -166,17 +166,25 @@ All snapshot storage is private and frozen when delivered. `Snapshot` is Send + 
 
 Checked arithmetic protects counters and totals. Output is independent of request chunk size and response arrival order. Root totals describe retained entries, not a reconciliation of all allocated volume clusters.
 
+### 3.4 Snapshot persistence
+
+`scan::ScanOutput::to_bytes` returns an owned byte buffer containing the snapshot and `ScanStats`; `ScanOutput::from_bytes` reconstructs an owned output from a byte slice. Both return `snapshot::PersistError` on failure. The codec lives in private `snapshot/persist/`, keeping storage access within the snapshot module family. Callers own file I/O; the planned CLI will read and write `.adm` files.
+
+The canonical `.adm` v1 format uses explicitly packed little-endian fields. Its 64-byte header contains magic `ADAMITE\0`, version, header length, `file_len`, `section_count`, flags, CRC-32 and reserved bytes. A 13-entry section table records kinds, offsets, lengths and counts for volume metadata, scan counters, nodes, name pools, children, cold columns and indexes. Sections start on 8-byte boundaries with minimal zero padding, and the file ends at the last section's end. Optional FileRef and reparse-tag columns use a presence bitmap followed by an 8-byte-aligned full value array, with absent values and unused bits zero. IEEE CRC-32 covers the whole file with the checksum field treated as zero.
+
+Decoding validates the header → section table → placement, padding and section lengths → CRC before allocating columns fallibly. It then decodes values and performs full snapshot invariant validation: geometry and UTF-8, column lengths, root and arena order, hard-link groups, flags, CSR edges and connectivity, subtree aggregates, child ordering, top files and extension summaries. Ranking and extension rules are shared with snapshot finalization. Unknown versions, section kinds and flags are rejected; every accepted encoding re-encodes byte-identically. `ScanStats` counters are preserved without cross-validation against the tree.
+
 ## 4. Access Layer (planned)
 
 `add-core-query` will add operations such as summary, directory listing and search over immutable snapshots. Precomputed `top_files` and `ext_stats` are available now; filtering/ranking arbitrary subtrees is not.
 
-The following privilege model, algorithms and tools are planned. Snapshot persistence, CLI, MCP, a snapshot/job service and USN-based refresh are unimplemented. Planned persistence uses a header and flat-array sections; mmap-friendly encoding or `rkyv` are candidates, with no serialized format or daemon protocol established yet.
+The following privilege model, algorithms and tools are planned. CLI, MCP, a snapshot/job service and USN-based refresh remain unimplemented; they will use core's `.adm` persistence for saved snapshots.
 
 ### 4.1 Privilege model
 
 Scanning a Windows raw volume needs elevated device access, while an MCP process spawned by an agent host usually runs unelevated. `adamite_io::reader::RawVolumeReader` owns that access today; a future service will manage privileged scan jobs.
 
-- **Planned MVP:** run `adamite scan C: -o C.adm` elevated once to produce a snapshot file. MCP and CLI queries read the `.adm` file without elevation.
+- **Planned MVP:** run `adamite scan C: -o C.adm` elevated once; the CLI will encode the scan through `ScanOutput::to_bytes` and write the snapshot file. MCP and CLI queries will read it through `ScanOutput::from_bytes` without elevation.
 - **Later:** an elevated `adamite-daemon` Windows service holds snapshots and keeps them fresh through the USN journal. CLI and MCP become thin clients over a named pipe.
 
 ### 4.2 Budgeted summary (planned agent-oriented query)
@@ -331,7 +339,7 @@ Dedicated CPU pools, parallel parse/sort, buffer-pool backpressure, `$BITMAP` sk
 1. Done: `adamite-ntfs`, shared fixture support and independently measured v3 manifests; parser `no_std` builds remain supported.
 2. Done: single-threaded sans-io `adamite-core`, phases 0–6, fixture oracles, property tests and bounded fuzzing. Automated WizTree/`dir /s` comparison is deferred; manual Windows comparison has not been performed.
 3. Done: `adamite-io` with slice/image/Windows raw-volume readers, synchronous driving and adapter-supplied context. Next is roadmap step 3 parallelism, buffer ownership, bitmap skipping and resource controls, or `add-core-query`.
-4. Future: `add-core-query`, snapshot persistence and CLI.
+4. Implemented: core `.adm` snapshot persistence. Future: `add-core-query` and CLI.
 5. Future: MCP and scan-job/snapshot services.
 6. Future: USN incremental refresh and a daemon; walkdir fallback remains separate future work.
 
@@ -341,7 +349,7 @@ Rust crates use edition 2024 and toolchain 1.99. Keep `rust-toolchain.toml` and 
 
 Production types must not carry fields, variants or hook state used only by tests; tests observe real outputs or existing production state.
 
-Library errors use snafu with source chains and documented `# Errors` sections. Core separates configuration, feed, fatal scan and snapshot errors; ordinary rejected records are counted in `ScanStats`. Workspace snafu disables default features and enables `rust_1_81`, preserving parser `no_std` support.
+Library errors use snafu with source chains and documented `# Errors` sections. Core separates configuration, feed, fatal scan, snapshot and persistence errors; ordinary rejected records are counted in `ScanStats`. Workspace snafu disables default features and enables `rust_1_81`, preserving parser `no_std` support.
 
 Crates that log use workspace tracing, beginning with core's per-call phase spans and `SyncDriver`'s per-batch debug events; entered guards never survive a driver call. The parser does not log. Future binaries will install subscribers. Adapters read the clock and supply timestamps through caller context; core reads no clocks.
 

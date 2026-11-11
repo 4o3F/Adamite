@@ -2,7 +2,7 @@
 
 #![cfg(windows)]
 
-use adamite_core::scan::ScanConfig;
+use adamite_core::scan::{ScanConfig, ScanOutput};
 use adamite_io::{
     driver::SyncDriver,
     error::VolumeError,
@@ -82,5 +82,14 @@ fn full_scan_produces_a_nonempty_snapshot() -> TestResult {
     let output = driver.run(&mut reader)?;
     assert!(!output.snapshot.is_empty());
     assert!(output.stats.records_in_use > 0);
+
+    let bytes = output.to_bytes()?;
+    let decoded = ScanOutput::from_bytes(&bytes)?;
+    assert_eq!(decoded, output, "real-volume scan output must round-trip");
+    assert_eq!(
+        decoded.to_bytes()?,
+        bytes,
+        "re-encoding the decoded output must preserve every byte"
+    );
     Ok(())
 }
