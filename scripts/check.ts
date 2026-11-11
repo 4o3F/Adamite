@@ -21,7 +21,7 @@ export const fuzzPackages: readonly FuzzPackage[] = [
     targets: ["boot_sector", "file_record", "attributes", "runlist", "typed_values"],
     tests: [],
   },
-  { name: "adamite-core", targets: ["scan"], tests: ["harness"] },
+  { name: "adamite-core", targets: ["scan", "persist"], tests: ["harness"] },
 ];
 
 async function run(step: Step): Promise<void> {

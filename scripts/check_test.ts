@@ -199,7 +199,11 @@ Deno.test("fuzz checks build both packages and smoke every target with bounded f
   equal(installs.length, 1, "cargo-fuzz installation count");
   equal(installs[0].args, ["install", "cargo-fuzz", "--locked"], "cargo-fuzz installation");
   const runs = steps.filter((step) => step.args.slice(0, 3).join(" ") === "+nightly fuzz run");
-  equal(runs.length, 6, "fuzz target count");
+  equal(
+    runs.length,
+    fuzzPackages.reduce((count, pkg) => count + pkg.targets.length, 0),
+    "fuzz target count",
+  );
   for (const pkg of fuzzPackages) {
     const build = steps.find((step) => step.name === `fuzz build ${pkg.name}`);
     equal(build?.cwd, `crates/${pkg.name}`, `${pkg.name} build directory`);
@@ -246,7 +250,11 @@ Deno.test("fuzz smoke writes to scratch first and reads committed seeds second",
     equal(step.args[6], "--", "exactly two corpus directories");
     scratchPaths.add(scratch.href);
   }
-  equal(scratchPaths.size, 6, "each smoke target has its own output directory");
+  equal(
+    scratchPaths.size,
+    fuzzPackages.reduce((count, pkg) => count + pkg.targets.length, 0),
+    "each smoke target has its own output directory",
+  );
   assert(
     checkSteps({ packages: fuzzPackages, fuzz: false }).every((step) => !step.scratchCorpus),
     "normal checks must not reset scratch directories",
@@ -314,7 +322,7 @@ Deno.test("absent fuzz packages produce no formatting, linting, builds or instal
   );
   equal(
     coreOnly.filter((step) => step.args[1] === "fuzz" && step.args[2] === "run").length,
-    1,
+    fuzzPackages[1].targets.length,
     "core-only smoke count",
   );
 });
@@ -519,7 +527,7 @@ Deno.test("Deno tasks permit both corpus paths without broadening executable acc
     "check writes only to ignored fuzz output",
   );
   assert(
-    config.tasks["fuzz-corpus"].includes("--allow-run=zstd "),
+    config.tasks["fuzz-corpus"].includes("--allow-run=cargo,zstd "),
     "corpus executable permission changed",
   );
 });

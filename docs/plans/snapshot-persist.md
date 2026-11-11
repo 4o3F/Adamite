@@ -103,7 +103,7 @@ Each milestone ends with one reviewed commit and `deno task check` green. A mile
 
 ### P5 — Fuzzing and gate
 
-- [ ] Add the `persist` target, harness test, `persist_seeds` example and corpus generation per D8; update `fuzzPackages`, CI matrix, `check_test.ts`, `deno.json`. Finish with `deno task check --fuzz` green.
+- [x] Add the `persist` target, harness test, `persist_seeds` example and corpus generation per D8; update `fuzzPackages`, CI matrix, `check_test.ts`, `deno.json`. Finish with `deno task check --fuzz` green.
 
 ### P6 — Real-volume round trip and documentation
 

@@ -14,6 +14,7 @@ libfuzzer-sys = "0.4"
 adamite-core = { path = ".." }
 adamite-ntfs = { path = "../../adamite-ntfs" }
 adamite-fixtures = { path = "../../adamite-fixtures" }
+crc32fast = { version = "1.5", default-features = false, features = ["std"] }
 
 [[bin]]
 name = "scan"
@@ -21,6 +22,17 @@ path = "fuzz_targets/scan.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "persist"
+path = "fuzz_targets/persist.rs"
+test = false
+doc = false
+bench = false
+
+[[example]]
+name = "persist_seeds"
+path = "examples/persist_seeds.rs"
 
 [[test]]
 name = "harness"

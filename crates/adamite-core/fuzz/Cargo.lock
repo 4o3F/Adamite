@@ -19,6 +19,7 @@ dependencies = [
  "adamite-core",
  "adamite-fixtures",
  "adamite-ntfs",
+ "crc32fast",
  "libfuzzer-sys",
 ]
 

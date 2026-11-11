@@ -1,4 +1,8 @@
-# Full-scan fuzzing
+# Core fuzzing
+
+The `scan` target exercises the scanner protocol and snapshot construction. The `persist` target exercises `.adm` decoding, public snapshot accessors and canonical re-encoding. Both targets use the same bounded smoke flags and separate committed corpus directories.
+
+## Scan target
 
 This standalone nightly package drives `Scanner` through its public request/feed API. Synthetic images contain 24 records in 64 KiB, resident and non-resident DATA, ADS, DOS aliases and hard links. Fragmented layouts require two extension discoveries and assemble records across extent boundaries. Raw inputs and up to 16 XOR mutations exercise malformed storage.
 
@@ -17,17 +21,42 @@ cargo +nightly fuzz run scan ../../target/fuzz-smoke/adamite-core/scan/ fuzz/cor
 
 libFuzzer writes new inputs to the first corpus directory, so the scratch directory receives discoveries while the committed corpus remains a read-only seed source.
 
+## Persist target
+
+Each input is decoded with `ScanOutput::from_bytes`. Successful decodes visit every node through `node`, `children` and `name`, read all node fields, top files, extension summaries and volume information, and build paths for the first 64 nodes and a deepest node. Re-encoding must equal the input byte for byte. Inputs of at least 64 bytes also pass through a second decode after repairing the CRC-32 field at bytes 32–35, allowing mutations to reach structural and semantic validation.
+
+From `crates/adamite-core`, create `../../target/fuzz-smoke/adamite-core/persist/` before running:
+
+```sh
+cargo +nightly fuzz build persist
+cargo +nightly fuzz run persist ../../target/fuzz-smoke/adamite-core/persist/ fuzz/corpus/persist/ -- -max_total_time=30 -max_len=262144 -timeout=2 -rss_limit_mb=2048
+```
+
+## Harness checks and corpus generation
+
 From `crates/adamite-core/fuzz`, run the harness checks:
 
 ```sh
 cargo test --test harness --locked
-cargo clippy --all-targets --locked -- -D warnings
+RUSTFLAGS='--cfg fuzzing' cargo clippy --all-targets --locked -- -D warnings
 ```
 
 Generate or restore the deterministic corpus from the repository root:
 
 ```sh
-deno run --frozen --allow-run=zstd --allow-read=tests/fixtures/ntfs --allow-write=crates/adamite-core/fuzz/corpus scripts/fuzz_corpus.ts --core
+deno task fuzz-corpus --core
 ```
 
-The corpus contains 128 synthetic configurations and three reduced fixture images, totaling 48,676 bytes under the 64 KiB budget. Fixture reductions retain real boot sectors and records 0/5, use one-sector clusters, relocate the MFT into six records, rewrite its DATA mapping, remove its attribute list, remap the root's non-resident streams and restore update-sequence protection. The harness tests require every deterministic seed to reach Done.
+The scan corpus contains 128 synthetic configurations and three reduced fixture images, totaling 48,676 bytes under the 64 KiB budget. Fixture reductions retain real boot sectors and records 0/5, use one-sector clusters, relocate the MFT into six records, rewrite its DATA mapping, remove its attribute list, remap the root's non-resident streams and restore update-sequence protection. The harness tests require every deterministic scan seed to reach Done.
+
+The persist corpus contains 28 seeds totaling 41,200 bytes. The `persist_seeds` example scans a tiny single-file image, nested directories, hard links with multiple extensions, fragmented sparse files with alternate data streams, and the three reduced fixture images from the scan corpus. Each output produces a valid encoding, a half-length truncation, a corrupted CRC and a single-byte mutation in the Nodes section with a repaired CRC. The example skips encodings above 65,536 bytes and asserts a total budget of 1 MiB; these bounds fit the smoke limit of 262,144 bytes per input. The persist harness test checks every seed and requires at least one successful decode.
+
+Both the default `deno task fuzz-corpus` and its `--core` mode regenerate the scan and persist corpora. The default also regenerates the NTFS corpora. The script clears only the target corpus directory before generating it and names persist seeds with the hexadecimal SHA-256 of their contents. Cargo subprocesses have their own filesystem access, so the Deno task grants direct read access only to fixtures, selectors and the persist corpus, and direct write access only to corpus directories.
+
+To run the Rust generator directly from the repository root, supply an output directory:
+
+```sh
+cargo run --manifest-path crates/adamite-core/fuzz/Cargo.toml --example persist_seeds --locked -- <out-dir>
+```
+
+The example writes deterministic shape-and-variant filenames; the Deno script replaces these names with content hashes. Generate the scan corpus first so its reduced fixture images are available.

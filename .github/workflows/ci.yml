@@ -110,6 +110,8 @@ jobs:
             target: typed_values
           - package: adamite-core
             target: scan
+          - package: adamite-core
+            target: persist
     steps:
       - uses: actions/checkout@v6
       - uses: actions-rust-lang/setup-rust-toolchain@v2

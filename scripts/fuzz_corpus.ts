@@ -238,8 +238,60 @@ async function scanCorpus(): Promise<void> {
   console.log(`scan: ${seeds.length} seeds, ${total}/${budget} bytes`);
 }
 
+async function persistCorpus(): Promise<void> {
+  const path = "crates/adamite-core/fuzz/corpus/persist";
+  try {
+    await Deno.remove(path, { recursive: true });
+  } catch (error) {
+    if (!(error instanceof Deno.errors.NotFound)) throw error;
+  }
+  await Deno.mkdir(path, { recursive: true });
+  const status = await new Deno.Command("cargo", {
+    args: [
+      "run",
+      "--manifest-path",
+      "crates/adamite-core/fuzz/Cargo.toml",
+      "--example",
+      "persist_seeds",
+      "--locked",
+      "--",
+      path,
+    ],
+    stdout: "inherit",
+    stderr: "inherit",
+  }).spawn().status;
+  if (!status.success) throw new Error(`persist seed generation failed (exit ${status.code})`);
+  const names: string[] = [];
+  for await (const entry of Deno.readDir(path)) {
+    if (entry.isFile) names.push(entry.name);
+  }
+  let total = 0;
+  const hashes = new Set<string>();
+  for (const name of names.sort()) {
+    const seed = await Deno.readFile(`${path}/${name}`);
+    if (seed.length === 0 || seed.length > budget) {
+      throw new Error(`persist seed ${name} exceeds the per-seed budget`);
+    }
+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", seed.slice()));
+    const hash = Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
+    if (!hashes.has(hash)) {
+      total += seed.length;
+      hashes.add(hash);
+    }
+    await Deno.writeFile(`${path}/${hash}`, seed);
+    await Deno.remove(`${path}/${name}`);
+  }
+  if (hashes.size === 0 || total > 1024 * 1024) throw new Error("invalid persist corpus budget");
+  console.log(`persist: ${hashes.size} seeds, ${total}/${1024 * 1024} bytes`);
+}
+
+async function coreCorpora(): Promise<void> {
+  await scanCorpus();
+  await persistCorpus();
+}
+
 async function main() {
-  if (Deno.args.length === 1 && Deno.args[0] === "--core") return await scanCorpus();
+  if (Deno.args.length === 1 && Deno.args[0] === "--core") return await coreCorpora();
   if (Deno.args.length !== 0) throw new Error("usage: fuzz_corpus.ts [--core]");
   const selectorSource = await Deno.readTextFile(
     "crates/adamite-ntfs/fuzz/fuzz_targets/typed_values/selectors.rs",
@@ -407,7 +459,7 @@ async function main() {
     if (count === 0) throw new Error(`no seeds for ${target}`);
     console.log(`${target}: ${count} seeds, ${total}/${budget} bytes`);
   }
-  await scanCorpus();
+  await coreCorpora();
 }
 
 if (import.meta.main) await main();

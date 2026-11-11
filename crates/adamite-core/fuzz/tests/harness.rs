@@ -4,11 +4,35 @@
 mod driver;
 #[path = "../fuzz_targets/scan/input.rs"]
 mod input;
+#[path = "../fuzz_targets/persist/driver.rs"]
+mod persist;
 #[path = "../fuzz_targets/scan/volume.rs"]
 mod volume;
 
 use adamite_core::scan::{ScanStep, Scanner};
 use std::{error::Error, fs, path::Path};
+
+#[test]
+fn persist_corpus_round_trips_or_rejects() -> Result<(), Box<dyn Error>> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus/persist");
+    let mut accepted = 0;
+    let mut seeds = 0;
+    let mut total = 0;
+    for entry in fs::read_dir(path)? {
+        let bytes = fs::read(entry?.path())?;
+        assert!(bytes.len() <= 65_536, "persist seed exceeds byte budget");
+        accepted += usize::from(persist::exercise(&bytes));
+        seeds += 1;
+        total += bytes.len();
+    }
+    assert!(seeds > 0, "persist corpus must not be empty");
+    assert!(accepted > 0, "persist corpus must contain a valid encoding");
+    assert!(
+        total <= 1_048_576,
+        "persist corpus exceeds total byte budget"
+    );
+    Ok(())
+}
 
 fn assert_seed(bytes: &[u8]) -> Result<(), Box<dyn Error>> {
     let input = input::Input::parse(bytes)?;
