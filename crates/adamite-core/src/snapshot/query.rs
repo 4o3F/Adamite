@@ -135,17 +135,6 @@ impl FileFilter {
         keys.dedup();
         Ok(Self::Extensions(keys))
     }
-
-    fn matches(&self, name: &str) -> bool {
-        match self {
-            Self::All => true,
-            Self::Extensions(keys) => {
-                let suffix = Extension::from_name(name);
-                keys.iter().any(|key| suffix.compare_folded(key).is_eq())
-            }
-            Self::Kind(kind) => FileKind::from_extension(&Extension::from_name(name)) == *kind,
-        }
-    }
 }
 
 impl Snapshot {
@@ -163,17 +152,48 @@ impl Snapshot {
         n: usize,
     ) -> Result<Vec<NodeId>, QueryError> {
         self.check_scope(under)?;
-        let mut result = Vec::new();
         if n == 0 {
-            return Ok(result);
+            return Ok(Vec::new());
         }
+        let data = self.data();
         let ranking = Ranking {
-            nodes: &self.data().nodes,
-            names: &self.data().names,
-            refs: &self.data().file_refs,
+            nodes: &data.nodes,
+            names: &data.names,
+            refs: &data.file_refs,
         };
-        self.visit_primary_files(under, |id, _, name| {
-            if filter.matches(name) {
+        let name = |id| {
+            ranking
+                .name(id)
+                .ok_or_else(|| SnapshotError::invalid("missing query name"))
+        };
+        match filter {
+            FileFilter::All => self.rank_matching_files(under, &ranking, n, |_| Ok(true)),
+            FileFilter::Extensions(keys) => {
+                let keys = keys.as_slice();
+                self.rank_matching_files(under, &ranking, n, |id| {
+                    let suffix = Extension::from_name(name(id)?);
+                    Ok(keys.iter().any(|key| suffix.compare_folded(key).is_eq()))
+                })
+            }
+            FileFilter::Kind(kind) => {
+                let kind = *kind;
+                self.rank_matching_files(under, &ranking, n, |id| {
+                    Ok(FileKind::from_extension(&Extension::from_name(name(id)?)) == kind)
+                })
+            }
+        }
+    }
+
+    fn rank_matching_files(
+        &self,
+        under: NodeId,
+        ranking: &Ranking<'_>,
+        n: usize,
+        matches: impl Fn(NodeId) -> Result<bool, QueryError>,
+    ) -> Result<Vec<NodeId>, QueryError> {
+        let mut result = Vec::new();
+        self.visit_preorder(under, |id, node| {
+            if node.is_primary_file() && matches(id)? {
                 ranking.select_top(&mut result, id, n)?;
             }
             Ok(())

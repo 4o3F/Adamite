@@ -57,7 +57,7 @@ Out of scope:
      - `u` toggles the scope between the Tree's current directory and `/`.
      - The tab bar shows `under <path>` when the scope is not `/`.
    - Top files: `f` opens an input line that takes `mp4,mkv`, `kind:video` or empty to clear. Invalid input shows an error in the status line and keeps the old filter.
-   - Extensions: `k` toggles between extension and kind grouping. Enter on a row opens Top files filtered by it, with the same scope.
+   - Extensions: `g` toggles between extension and kind grouping. Enter on a row opens Top files filtered by it, with the same scope.
    - Search: a new tab 5. `/` opens its input from any tab, and Enter runs the search. It shows the first 1000 matches, plus `N more, refine the pattern` when there are more.
    - Enter on a Top files or Search row jumps to the file in Tree. The existing `jump_to_file` becomes a general `jump_to(node)`.
    - Input lines use the `tui-input` crate when it supports ratatui 0.30. Otherwise `input.rs` gains a minimal line editor: insert, backspace, left/right, Enter, Esc.
@@ -104,7 +104,7 @@ Each task ends with one reviewed commit, `deno task check` green and CI green. E
 - [x] Q1 — `FileKind`, `FileFilter`, `rank_files`, `extension_stats_under`, `kind_stats` (D1).
 - [x] Q2 — `NamePattern` and `search` (D1).
 - [x] Q3 — CLI `top`/`ext` flags and `adamite search`, with the core and CLI READMEs (D2).
-- [ ] Q4 — TUI scope, filter, kind grouping, Search tab and jumps (D3).
+- [x] Q4 — TUI scope, filter, kind grouping, Search tab and jumps (D3).
 - [ ] Q5 — `Volume::list`, the snapshot directory and the poll-based elevated job; CLI behaviour unchanged (D4).
 - [ ] Q6 — Home screen, in-TUI scanning, `adamite`/`browse` without a source, the TUI README and ARCHITECTURE §4 (D4).
 
@@ -112,6 +112,6 @@ Each task ends with one reviewed commit, `deno task check` green and CI green. E
 
 - [ ] `adamite top C.adm --ext mp4,mkv --under /Users` and `--kind video` list files beyond the stored top 100. `adamite ext C.adm --by kind` shows kind totals that add up to the volume's file allocation.
 - [ ] `adamite search C.adm '*.iso'` and `adamite search C.adm steam` page through `next offset` to the end.
-- [ ] In the TUI, `u`, `f kind:video`, `k` and `/` work as described, Enter jumps to the file in Tree, and each query answers in under 200 ms on the bench synthetic volume.
+- [ ] In the TUI, `u`, `f kind:video`, `g` and `/` work as described, Enter jumps to the file in Tree, and each query answers in under 200 ms on the bench synthetic volume.
 - [ ] In an unelevated Windows terminal, `adamite` opens the home screen with the NTFS drives. Enter on `C:` shows the UAC prompt, then the progress screen, then Tree; next time `C:` opens the saved snapshot, and `r` rescans.
 - [ ] `adamite | cat` and `adamite --help` print help as today; existing CLI exact-text and JSON tests are unchanged; `deno task check` and CI pass on Linux and Windows.

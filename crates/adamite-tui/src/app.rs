@@ -1,10 +1,11 @@
 use crate::{
-    input::{Event, Key},
+    input::{Event, InputLine, Key, Prompt},
+    queries::{Groups, Queries},
     view::View,
 };
 use adamite_core::{
     scan::ScanOutput,
-    snapshot::{NodeId, NodeView, Snapshot},
+    snapshot::{FileFilter, FileKind, NodeId, NodeView, QueryError, Snapshot},
 };
 use adamite_format::InfoFields;
 
@@ -21,10 +22,17 @@ pub(crate) enum Tab {
     TopFiles,
     Extensions,
     Info,
+    Search,
 }
 
 impl Tab {
-    pub(crate) const ALL: [Self; 4] = [Self::Tree, Self::TopFiles, Self::Extensions, Self::Info];
+    pub(crate) const ALL: [Self; 5] = [
+        Self::Tree,
+        Self::TopFiles,
+        Self::Extensions,
+        Self::Info,
+        Self::Search,
+    ];
 
     pub(crate) fn title(self) -> &'static str {
         match self {
@@ -32,6 +40,7 @@ impl Tab {
             Self::TopFiles => "Top files",
             Self::Extensions => "Extensions",
             Self::Info => "Info",
+            Self::Search => "Search",
         }
     }
 
@@ -121,6 +130,10 @@ pub(crate) struct App<'a> {
     pub(crate) top_files: Cursor,
     pub(crate) extensions: Cursor,
     pub(crate) info: Cursor,
+    pub(crate) search: Cursor,
+    pub(crate) queries: Queries<'a>,
+    pub(crate) input: Option<InputLine>,
+    pub(crate) status: Option<String>,
     pub(crate) raw_bytes: bool,
     pub(crate) help: bool,
     parents: Vec<DirectoryView>,
@@ -141,6 +154,10 @@ impl<'a> App<'a> {
             top_files: Cursor::default(),
             extensions: Cursor::default(),
             info: Cursor::default(),
+            search: Cursor::default(),
+            queries: Queries::new(&output.snapshot),
+            input: None,
+            status: None,
             raw_bytes: false,
             help: false,
             parents: Vec::new(),
@@ -166,6 +183,38 @@ impl<'a> App<'a> {
         .rows()
     }
 
+    pub(crate) fn handle_terminal(&mut self, event: ratatui::crossterm::event::Event) -> Action {
+        use ratatui::crossterm::event::{Event as TerminalEvent, KeyCode, KeyEventKind};
+        if self.input.is_some()
+            && let TerminalEvent::Key(key) = &event
+        {
+            if key.kind == KeyEventKind::Release {
+                return Action::Continue;
+            }
+            match key.code {
+                KeyCode::Esc if key.kind == KeyEventKind::Press => {
+                    return self.handle(Event::Key(Key::Escape));
+                }
+                KeyCode::Enter if key.kind == KeyEventKind::Press => {
+                    return self.handle(Event::Key(Key::Enter));
+                }
+                _ => {
+                    if let Some(input) = self.input.as_mut() {
+                        input.handle(&event);
+                    }
+                }
+            }
+            return Action::Continue;
+        }
+        Event::from_terminal(event).map_or(Action::Continue, |event| self.handle(event))
+    }
+
+    fn visible_rows(&self) -> usize {
+        self.page_rows
+            .saturating_sub(usize::from(self.input.is_some()))
+            .max(1)
+    }
+
     pub(crate) fn handle(&mut self, event: Event) -> Action {
         let key = match event {
             Event::Resize { height, .. } => {
@@ -174,6 +223,17 @@ impl<'a> App<'a> {
             }
             Event::Key(key) => key,
         };
+        if self.input.is_some() {
+            match key {
+                Key::Escape => {
+                    self.input = None;
+                    self.resize(self.page_rows);
+                }
+                Key::Enter => self.confirm_input(),
+                _ => {}
+            }
+            return Action::Continue;
+        }
         match key {
             Key::Quit => return Action::Quit,
             Key::Escape if !self.help => return Action::Quit,
@@ -182,25 +242,48 @@ impl<'a> App<'a> {
             Key::NextTab => self.tab = self.tab.next(),
             Key::SelectTab(tab) => self.tab = tab,
             Key::Bytes => self.raw_bytes = !self.raw_bytes,
+            Key::Scope => self.toggle_scope(),
+            Key::Filter if self.tab == Tab::TopFiles => self.open_input(Prompt::Filter),
+            Key::Search => {
+                self.tab = Tab::Search;
+                self.open_input(Prompt::Search);
+            }
+            Key::Group if self.tab == Tab::Extensions => {
+                let result = self.queries.toggle_groups(&self.output.snapshot);
+                if self.query_result(result) {
+                    self.extensions = Cursor::default();
+                }
+            }
+            Key::Enter if self.tab == Tab::Extensions => self.select_group(),
             Key::Enter | Key::Open if self.tab == Tab::Tree => self.enter(),
-            Key::Enter if self.tab == Tab::TopFiles => self.jump_to_file(),
+            Key::Enter if self.tab == Tab::TopFiles || self.tab == Tab::Search => {
+                let id = if self.tab == Tab::TopFiles {
+                    self.queries.top.get(self.top_files.selected)
+                } else {
+                    self.queries.search_items().get(self.search.selected)
+                }
+                .copied();
+                if let Some(id) = id {
+                    self.jump_to(id);
+                }
+            }
             Key::Parent if self.tab == Tab::Tree => self.parent(),
             _ => {
+                let page_rows = self.visible_rows();
                 let (cursor, count) = match self.tab {
                     Tab::Tree => {
                         let count = self.children().len();
                         (&mut self.tree.cursor, count)
                     }
-                    Tab::TopFiles => (&mut self.top_files, self.output.snapshot.top_files().len()),
-                    Tab::Extensions => {
-                        (&mut self.extensions, self.output.snapshot.ext_stats().len())
-                    }
+                    Tab::TopFiles => (&mut self.top_files, self.queries.top.len()),
+                    Tab::Extensions => (&mut self.extensions, self.queries.group_count()),
                     Tab::Info => {
                         let count = self.info_fields().len();
                         (&mut self.info, count)
                     }
+                    Tab::Search => (&mut self.search, self.queries.search_items().len()),
                 };
-                cursor.handle(key, count, self.page_rows);
+                cursor.handle(key, count, page_rows);
             }
         }
         Action::Continue
@@ -208,22 +291,22 @@ impl<'a> App<'a> {
 
     fn resize(&mut self, page_rows: usize) {
         self.page_rows = page_rows.max(1);
-        self.tree.clamp(&self.output.snapshot, self.page_rows);
+        let rows = self.visible_rows();
+        self.tree.clamp(&self.output.snapshot, rows);
         for parent in &mut self.parents {
-            parent.clamp(&self.output.snapshot, self.page_rows);
+            parent.clamp(&self.output.snapshot, rows);
         }
-        self.top_files.move_to(
-            self.top_files.selected,
-            self.snapshot().top_files().len(),
-            self.page_rows,
-        );
-        self.extensions.move_to(
-            self.extensions.selected,
-            self.snapshot().ext_stats().len(),
-            self.page_rows,
-        );
+        self.top_files
+            .move_to(self.top_files.selected, self.queries.top.len(), rows);
+        self.extensions
+            .move_to(self.extensions.selected, self.queries.group_count(), rows);
         self.info
-            .move_to(self.info.selected, self.info_fields().len(), self.page_rows);
+            .move_to(self.info.selected, self.info_fields().len(), rows);
+        self.search.move_to(
+            self.search.selected,
+            self.queries.search_items().len(),
+            rows,
+        );
     }
 
     fn enter(&mut self) {
@@ -248,11 +331,99 @@ impl<'a> App<'a> {
         }
     }
 
-    fn jump_to_file(&mut self) {
-        let Some(&file) = self.snapshot().top_files().get(self.top_files.selected) else {
+    fn query_result(&mut self, result: Result<(), QueryError>) -> bool {
+        match result {
+            Ok(()) => {
+                self.status = None;
+                true
+            }
+            Err(error) => {
+                self.status = Some(error.to_string());
+                false
+            }
+        }
+    }
+
+    fn toggle_scope(&mut self) {
+        let scope = if self.queries.scope == NodeId::ROOT {
+            self.tree.directory
+        } else {
+            NodeId::ROOT
+        };
+        if scope == self.queries.scope {
+            return;
+        }
+        let result = self.queries.set_scope(&self.output.snapshot, scope);
+        if self.query_result(result) {
+            self.top_files = Cursor::default();
+            self.extensions = Cursor::default();
+            self.search = Cursor::default();
+        }
+    }
+
+    fn open_input(&mut self, prompt: Prompt) {
+        let value = match prompt {
+            Prompt::Filter => self.queries.filter_input(),
+            Prompt::Search => self
+                .queries
+                .pattern
+                .as_ref()
+                .map_or_else(String::new, |pattern| pattern.as_str().to_owned()),
+        };
+        self.input = Some(InputLine::new(prompt, value));
+        self.status = None;
+        self.resize(self.page_rows);
+    }
+
+    fn confirm_input(&mut self) {
+        let Some(input) = self.input.take() else {
             return;
         };
-        let mut child = file;
+        let value = input.editor.value();
+        let result = match input.prompt {
+            Prompt::Filter => {
+                let value = value.trim();
+                let filter = if value.is_empty() {
+                    Ok(FileFilter::All)
+                } else if let Some(kind) = value.strip_prefix("kind:") {
+                    kind.parse::<FileKind>().map(FileFilter::Kind)
+                } else {
+                    FileFilter::extensions(value.split(',').map(str::trim))
+                };
+                filter.and_then(|filter| self.queries.set_filter(&self.output.snapshot, filter))
+            }
+            Prompt::Search => self.queries.search(&self.output.snapshot, value),
+        };
+        if self.query_result(result) {
+            match input.prompt {
+                Prompt::Filter => self.top_files = Cursor::default(),
+                Prompt::Search => self.search = Cursor::default(),
+            }
+        }
+        self.resize(self.page_rows);
+    }
+
+    fn select_group(&mut self) {
+        let filter = match &self.queries.groups {
+            Groups::Extensions(stats) => stats
+                .get(self.extensions.selected)
+                .map(|stat| FileFilter::extensions([stat.extension()])),
+            Groups::Kinds(stats) => stats
+                .get(self.extensions.selected)
+                .map(|stat| Ok(FileFilter::Kind(stat.kind()))),
+        };
+        if let Some(filter) = filter {
+            let result =
+                filter.and_then(|filter| self.queries.set_filter(&self.output.snapshot, filter));
+            if self.query_result(result) {
+                self.top_files = Cursor::default();
+                self.tab = Tab::TopFiles;
+            }
+        }
+    }
+
+    fn jump_to(&mut self, node: NodeId) {
+        let mut child = node;
         let mut lineage = Vec::new();
         // Snapshot validation guarantees a rooted tree; keep traversal bounded as well.
         for _ in 0..self.snapshot().len() {

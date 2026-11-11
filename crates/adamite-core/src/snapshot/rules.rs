@@ -69,6 +69,13 @@ impl Ranking<'_> {
         id: NodeId,
         limit: usize,
     ) -> Result<(), SnapshotError> {
+        if top.len() == limit
+            && top
+                .last()
+                .is_some_and(|last| !self.compare(id, *last, Metric::SelfAlloc).is_lt())
+        {
+            return Ok(());
+        }
         let position = top
             .binary_search_by(|other| self.compare(*other, id, Metric::SelfAlloc))
             .unwrap_or_else(|position| position);

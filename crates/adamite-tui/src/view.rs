@@ -1,4 +1,7 @@
-use crate::app::{App, Cursor, Tab};
+use crate::{
+    app::{App, Cursor, Tab},
+    queries::Groups,
+};
 use adamite_core::snapshot::{NodeFlags, NodeId, NodeView};
 use adamite_format::{ByteSize, Escaped, ExtensionLabel, ScanTime};
 use ratatui::{
@@ -41,14 +44,15 @@ impl<'a> View<'a> {
             );
             return;
         }
-        let [header, tabs, content, footer] = Layout::vertical([
+        let [header, tabs, content, prompt, footer] = Layout::vertical([
             Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Fill(1),
+            Constraint::Length(u16::from(self.app.input.is_some())),
             Constraint::Length(1),
         ])
         .areas(frame.area());
-        let heading = if self.app.tab == Tab::Tree {
+        let mut heading = if self.app.tab == Tab::Tree {
             self.path(self.app.tree.directory)
         } else {
             format!(
@@ -57,6 +61,16 @@ impl<'a> View<'a> {
                 ScanTime(self.app.snapshot().volume().context().scanned_at_filetime)
             )
         };
+        if self.app.tab == Tab::TopFiles
+            && let Some(filter) = self.app.queries.filter_label()
+        {
+            heading.push_str(&format!(" · filter: {}", Escaped(&filter)));
+        }
+        if self.app.tab == Tab::Search
+            && let Some(pattern) = &self.app.queries.pattern
+        {
+            heading.push_str(&format!(" · {}", Escaped(pattern.as_str())));
+        }
         frame.render_widget(
             Paragraph::new(DisplayText::truncate(
                 &heading,
@@ -65,22 +79,92 @@ impl<'a> View<'a> {
             )),
             header,
         );
+        let scope = if self.app.queries.scope != NodeId::ROOT {
+            format!("under {}", self.path(self.app.queries.scope))
+        } else {
+            String::new()
+        };
+        let scope_width = u16::try_from(scope.width())
+            .unwrap_or(u16::MAX)
+            .min(tabs.width.saturating_div(2));
+        let [tab_area, scope_area] =
+            Layout::horizontal([Constraint::Fill(1), Constraint::Length(scope_width)]).areas(tabs);
         frame.render_widget(
             Tabs::new(Tab::ALL.map(Tab::title))
                 .select(self.app.tab.index())
                 .highlight_style(Style::new().fg(Color::Cyan)),
-            tabs,
+            tab_area,
+        );
+        frame.render_widget(
+            Paragraph::new(DisplayText::truncate(
+                &scope,
+                usize::from(scope_area.width),
+                Truncation::Middle,
+            )),
+            scope_area,
         );
         match self.app.tab {
             Tab::Tree => self.tree(frame, content),
-            Tab::TopFiles => self.top_files(frame, content),
+            Tab::TopFiles => self.files(frame, content, self.app.top_files, &self.app.queries.top),
             Tab::Extensions => self.extensions(frame, content),
             Tab::Info => self.info(frame, content),
+            Tab::Search => self.files(
+                frame,
+                content,
+                self.app.search,
+                self.app.queries.search_items(),
+            ),
         }
-        frame.render_widget(
-            Paragraph::new("Tab/1–4: tabs  b: bytes  ?: help  q: quit"),
-            footer,
-        );
+        if let Some(input) = &self.app.input {
+            let label = input.prompt.label();
+            let label_width = u16::try_from(label.width())
+                .unwrap_or(u16::MAX)
+                .min(prompt.width);
+            let [label_area, editor_area] =
+                Layout::horizontal([Constraint::Length(label_width), Constraint::Fill(1)])
+                    .areas(prompt);
+            frame.render_widget(Paragraph::new(label), label_area);
+            let width = usize::from(editor_area.width.saturating_sub(1));
+            let scroll = input.editor.visual_scroll(width);
+            frame.render_widget(
+                Paragraph::new(input.editor.value())
+                    .scroll((0, u16::try_from(scroll).unwrap_or(u16::MAX))),
+                editor_area,
+            );
+            let cursor = input
+                .editor
+                .visual_cursor()
+                .saturating_sub(scroll)
+                .min(width);
+            frame.set_cursor_position((
+                editor_area
+                    .x
+                    .saturating_add(u16::try_from(cursor).unwrap_or_default()),
+                editor_area.y,
+            ));
+        }
+        let status = if let Some(status) = &self.app.status {
+            Escaped(status).to_string()
+        } else if self.app.input.is_some() {
+            "Enter: apply  Esc: cancel  ←/→ Home/End: edit".to_owned()
+        } else if self.app.tab == Tab::Search {
+            match &self.app.queries.search {
+                Some(page)
+                    if page.total_matches()
+                        > u64::try_from(page.items().len()).unwrap_or(u64::MAX) =>
+                {
+                    let more = page
+                        .total_matches()
+                        .saturating_sub(u64::try_from(page.items().len()).unwrap_or(u64::MAX));
+                    format!("{more} more, refine the pattern")
+                }
+                Some(page) if page.items().is_empty() => "no matches".to_owned(),
+                _ => "Tab/1–5: tabs  /: search  ?: help  q: quit".to_owned(),
+            }
+        } else {
+            "Tab/1–5: tabs  u: scope  b: bytes  ?: help  q: quit".to_owned()
+        };
+        frame.render_widget(Paragraph::new(status), footer);
         if self.app.help {
             self.help(frame);
         }
@@ -119,35 +203,41 @@ impl<'a> View<'a> {
         }
     }
 
-    fn top_files(&self, frame: &mut Frame<'_>, area: Rect) {
+    fn files(&self, frame: &mut Frame<'_>, area: Rect, cursor: Cursor, items: &[NodeId]) {
         let widths = [
             Constraint::Fill(1),
             Constraint::Length(self.size_width()),
             Constraint::Length(self.size_width()),
         ];
         let table = Rows {
-            cursor: self.app.top_files,
+            cursor,
             widths: &widths,
             headings: &["Path", "Allocated", "Logical"],
         };
         let path_width = table.name_width(area);
-        let rows = table
-            .visible(area, self.app.snapshot().top_files())
-            .filter_map(|(index, &id)| {
-                let node = self.app.snapshot().node(id)?;
-                Some(
-                    Row::new([
-                        DisplayText::truncate(
-                            &self.path(id),
-                            usize::from(path_width),
-                            Truncation::Middle,
-                        ),
-                        self.size(node.alloc()),
-                        self.size(node.size()),
-                    ])
-                    .style(Self::row_style(index == table.cursor.selected)),
-                )
-            });
+        let rows = table.visible(area, items).filter_map(|(index, &id)| {
+            let node = self.app.snapshot().node(id)?;
+            let mut path = self.path(id);
+            if node.is_dir() {
+                path.push('/');
+            }
+            Some(
+                Row::new([
+                    DisplayText::truncate(&path, usize::from(path_width), Truncation::Middle),
+                    self.size(if node.is_dir() {
+                        node.total_alloc()
+                    } else {
+                        node.alloc()
+                    }),
+                    self.size(if node.is_dir() {
+                        node.total_size()
+                    } else {
+                        node.size()
+                    }),
+                ])
+                .style(Self::row_style(index == table.cursor.selected)),
+            )
+        });
         table.render(frame, area, rows);
     }
 
@@ -158,28 +248,55 @@ impl<'a> View<'a> {
             Constraint::Length(self.size_width()),
             Constraint::Length(self.size_width()),
         ];
+        let kinds = matches!(self.app.queries.groups, Groups::Kinds(_));
         let table = Rows {
             cursor: self.app.extensions,
             widths: &widths,
-            headings: &["Extension", "Count", "Logical", "Allocated"],
+            headings: &[
+                if kinds { "Kind" } else { "Extension" },
+                "Count",
+                "Logical",
+                "Allocated",
+            ],
         };
         let name_width = table.name_width(area);
-        let rows = table
-            .visible(area, self.app.snapshot().ext_stats())
-            .map(|(index, stat)| {
-                Row::new([
-                    DisplayText::truncate(
-                        &ExtensionLabel(stat.extension()).to_string(),
-                        usize::from(name_width),
-                        Truncation::End,
-                    ),
-                    stat.count().to_string(),
-                    self.size(stat.total_size()),
-                    self.size(stat.total_alloc()),
-                ])
-                .style(Self::row_style(index == table.cursor.selected))
-            });
-        table.render(frame, area, rows);
+        let row = |index, label: String, count: u64, logical: u64, allocated: u64| {
+            Row::new([
+                DisplayText::truncate(&label, usize::from(name_width), Truncation::End),
+                count.to_string(),
+                self.size(logical),
+                self.size(allocated),
+            ])
+            .style(Self::row_style(index == table.cursor.selected))
+        };
+        match &self.app.queries.groups {
+            Groups::Extensions(stats) => table.render(
+                frame,
+                area,
+                table.visible(area, stats.iter()).map(|(index, stat)| {
+                    row(
+                        index,
+                        ExtensionLabel(stat.extension()).to_string(),
+                        stat.count(),
+                        stat.total_size(),
+                        stat.total_alloc(),
+                    )
+                }),
+            ),
+            Groups::Kinds(stats) => table.render(
+                frame,
+                area,
+                table.visible(area, stats.iter()).map(|(index, stat)| {
+                    row(
+                        index,
+                        stat.kind().name().to_owned(),
+                        stat.count(),
+                        stat.total_size(),
+                        stat.total_alloc(),
+                    )
+                }),
+            ),
+        }
     }
 
     fn info(&self, frame: &mut Frame<'_>, area: Rect) {
@@ -204,12 +321,12 @@ impl<'a> View<'a> {
         frame.render_widget(Clear, area);
         frame.render_widget(
             Paragraph::new(concat!(
-                "↑/↓ k/j: move; PgUp/PgDn: page\n",
-                "Home/End: first/last; Tab/1–4: tabs\n",
-                "Enter/→/l: open; ←/h/Backspace: parent\n",
-                "Top Enter: show file; b: raw bytes\n",
-                "?/Esc: close help; q/Ctrl-C: quit\n",
-                "Esc (help closed): quit",
+                "↑/↓ k/j; PgUp/PgDn; Home/End\n",
+                "Tab/1–5: tabs; Enter/→/l: open\n",
+                "←/h/Backspace: parent; b: raw bytes\n",
+                "Enter: jump; u: scope; f: filter\n",
+                "Ext g: kind; /: search; q/Ctrl-C: quit\n",
+                "?/Esc: close help; Esc: quit",
             ))
             .block(Block::bordered().title("Help")),
             area,

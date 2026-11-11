@@ -491,6 +491,7 @@ fn quit_keys_release_and_repeat_filtering() -> TestResult {
             Key::SelectTab(Tab::Info),
         ),
         (KeyCode::Char('b'), KeyModifiers::NONE, Key::Bytes),
+        (KeyCode::Char('g'), KeyModifiers::NONE, Key::Group),
         (KeyCode::Char('?'), KeyModifiers::SHIFT, Key::Help),
     ];
     for (code, modifiers, key) in bindings {
@@ -542,15 +543,18 @@ fn tabs_cycle_and_digits_preserve_independent_cursors_and_scroll() -> TestResult
             Tab::TopFiles => app.top_files,
             Tab::Extensions => app.extensions,
             Tab::Info => app.info,
+            Tab::Search => app.search,
         };
-        assert!(cursor.selected > 0, "{tab:?}: {cursor:?}");
+        if tab != Tab::Search {
+            assert!(cursor.selected > 0, "{tab:?}: {cursor:?}");
+        }
         let text = Case::text(&app, 120, 8)?;
         assert!(text.contains(tab.title()), "{text}");
         saved.push((tab, cursor));
         Case::press(&mut app, KeyCode::Tab)?;
     }
-    assert_eq!(app.tab, Tab::Tree, "Tab wraps after Info");
-    for (code, (tab, cursor)) in ['4', '3', '2', '1']
+    assert_eq!(app.tab, Tab::Tree, "Tab wraps after Search");
+    for (code, (tab, cursor)) in ['5', '4', '3', '2', '1']
         .into_iter()
         .zip(saved.into_iter().rev())
     {
@@ -561,9 +565,12 @@ fn tabs_cycle_and_digits_preserve_independent_cursors_and_scroll() -> TestResult
             Tab::TopFiles => app.top_files,
             Tab::Extensions => app.extensions,
             Tab::Info => app.info,
+            Tab::Search => app.search,
         };
         assert_eq!(retained, cursor, "{tab:?}");
-        assert!(!Case::selected_row(&app, 120, 8)?.trim().is_empty());
+        if tab != Tab::Search {
+            assert!(!Case::selected_row(&app, 120, 8)?.trim().is_empty());
+        }
     }
     Ok(())
 }
@@ -756,6 +763,7 @@ fn bytes_toggle_updates_every_size_cell_across_tabs() -> TestResult {
                         .ok_or("ext")?
                         .total_alloc(),
                     Tab::Info => app.snapshot().volume().geometry().total_bytes(),
+                    Tab::Search => 0,
                 };
                 assert!(text.contains(&value.to_string()), "{text}");
             } else {
@@ -777,7 +785,7 @@ fn help_overlay_captures_keys_and_escape_closes_before_quitting() -> TestResult 
         "Help",
         "PgUp/PgDn",
         "Home/End",
-        "Tab/1–4",
+        "Tab/1–5",
         "Enter/→/l",
         "←/h/Backspace",
         "b: raw bytes",
@@ -852,6 +860,7 @@ fn resize_clamps_all_cursors_and_saved_tree_ancestors() -> TestResult {
             Tab::TopFiles => (app.top_files, app.snapshot().top_files().len()),
             Tab::Extensions => (app.extensions, app.snapshot().ext_stats().len()),
             Tab::Info => (app.info, app.info_fields().len()),
+            Tab::Search => (app.search, app.queries.search_items().len()),
         };
         assert_eq!(cursor.selected, 4.min(count.saturating_sub(1)));
     }
@@ -945,5 +954,368 @@ fn minimum_terminal_dimensions_replace_every_view_and_recover_after_resize() -> 
         assert!(!text.contains("terminal too small"), "{text}");
         assert!(text.contains(app.tab.title()), "{text}");
     }
+    Ok(())
+}
+
+fn terminal_key(app: &mut App<'_>, code: KeyCode) -> Action {
+    app.handle_terminal(event::Event::Key(KeyEvent::new(code, KeyModifiers::NONE)))
+}
+
+fn input_text(app: &mut App<'_>, text: &str) {
+    for character in text.chars() {
+        assert_eq!(
+            terminal_key(app, KeyCode::Char(character)),
+            Action::Continue
+        );
+    }
+}
+
+fn confirm_text(app: &mut App<'_>, text: &str) {
+    app.handle_terminal(event::Event::Key(KeyEvent::new(
+        KeyCode::Char('u'),
+        KeyModifiers::CONTROL,
+    )));
+    input_text(app, text);
+    terminal_key(app, KeyCode::Enter);
+}
+
+#[test]
+fn query_scope_refreshes_results_resets_cursors_and_displays_under_path() -> TestResult {
+    use crate::queries::Groups;
+    use std::borrow::Cow;
+    let case = Case::fixture("basic-4k")?;
+    let mut app = case.app("/bigdir", 4)?;
+    assert!(matches!(app.queries.top, Cow::Borrowed(_)));
+    assert!(matches!(
+        app.queries.groups,
+        Groups::Extensions(Cow::Borrowed(_))
+    ));
+    terminal_key(&mut app, KeyCode::Char('/'));
+    confirm_text(&mut app, "f*");
+    app.handle(Event::Key(Key::End));
+    terminal_key(&mut app, KeyCode::Char('u'));
+    assert_eq!(app.queries.scope, case.id("/bigdir")?);
+    assert_eq!(app.search, Cursor::default());
+    assert_eq!(
+        app.queries.search.as_ref().ok_or("page")?.total_matches(),
+        200
+    );
+    assert!(Case::text(&app, 120, 8)?.contains("under /bigdir"));
+    terminal_key(&mut app, KeyCode::Char('2'));
+    assert_eq!(app.queries.top.len(), 100);
+    let bigdir = case.id("/bigdir")?;
+    assert!(app.queries.top.iter().all(|id| {
+        app.snapshot()
+            .node(*id)
+            .is_some_and(|node| node.parent() == bigdir)
+    }));
+    let top_ptr = app.queries.top.as_ptr();
+    let search_ptr = app.queries.search_items().as_ptr();
+    app.handle(Event::Key(Key::End));
+    terminal_key(&mut app, KeyCode::Char('b'));
+    let _ = Case::text(&app, 120, 8)?;
+    terminal_key(&mut app, KeyCode::Char('3'));
+    assert_eq!(app.queries.top.as_ptr(), top_ptr);
+    assert_eq!(app.queries.search_items().as_ptr(), search_ptr);
+    assert_eq!(app.queries.group_count(), 1);
+    terminal_key(&mut app, KeyCode::Char('u'));
+    assert_eq!(app.queries.scope, NodeId::ROOT);
+    for cursor in [app.top_files, app.extensions, app.search] {
+        assert_eq!(cursor, Cursor::default());
+    }
+    assert!(matches!(app.queries.top, Cow::Borrowed(_)));
+    assert!(!Case::text(&app, 120, 8)?.contains("under /bigdir"));
+    Ok(())
+}
+
+#[test]
+fn top_filter_input_commits_valid_filters_preserves_errors_and_clears() -> TestResult {
+    use adamite_core::snapshot::{FileFilter, FileKind};
+    use std::borrow::Cow;
+    let case = Case::fixture("basic-4k")?;
+    let mut app = case.app("/", 4)?;
+    terminal_key(&mut app, KeyCode::Char('2'));
+    terminal_key(&mut app, KeyCode::Char('f'));
+    assert!(Case::text(&app, 120, 8)?.contains("Filter:"));
+    confirm_text(&mut app, ".mp4,mkv");
+    assert_eq!(app.queries.filter, FileFilter::extensions(["mp4", "mkv"])?);
+    assert!(app.queries.top.is_empty());
+    assert!(Case::text(&app, 120, 8)?.contains("filter: mkv,mp4"));
+    terminal_key(&mut app, KeyCode::Char('f'));
+    confirm_text(&mut app, "kind:document");
+    assert_eq!(app.queries.filter, FileFilter::Kind(FileKind::Document));
+    let expected = app
+        .snapshot()
+        .rank_files(NodeId::ROOT, &app.queries.filter, 100)?;
+    assert_eq!(app.queries.top.as_ref(), expected);
+    assert!(Case::text(&app, 120, 8)?.contains("filter: kind:document"));
+    let cached = app.queries.top.as_ptr();
+    terminal_key(&mut app, KeyCode::Char('f'));
+    confirm_text(&mut app, "kind:unknown");
+    assert_eq!(app.queries.filter, FileFilter::Kind(FileKind::Document));
+    assert_eq!(app.queries.top.as_ptr(), cached);
+    assert!(Case::text(&app, 120, 8)?.contains("unknown file kind"));
+    terminal_key(&mut app, KeyCode::Char('f'));
+    confirm_text(&mut app, "");
+    assert_eq!(app.queries.filter, FileFilter::All);
+    assert!(matches!(app.queries.top, Cow::Borrowed(_)));
+    assert!(app.status.is_none());
+    assert!(!Case::text(&app, 120, 8)?.contains("filter:"));
+    Ok(())
+}
+
+#[test]
+fn extension_and_kind_rows_open_filtered_top_files_in_the_same_scope() -> TestResult {
+    use crate::queries::Groups;
+    use adamite_core::snapshot::{FileFilter, FileKind};
+    let case = Case::fixture("basic-4k")?;
+    let mut app = case.app("/compressed", 4)?;
+    terminal_key(&mut app, KeyCode::Char('u'));
+    terminal_key(&mut app, KeyCode::Char('3'));
+    assert!(Case::text(&app, 120, 8)?.contains("txt"));
+    terminal_key(&mut app, KeyCode::Enter);
+    assert_eq!(app.tab, Tab::TopFiles);
+    assert_eq!(app.queries.filter, FileFilter::extensions(["txt"])?);
+    assert_eq!(app.queries.top.as_ref(), [case.id("/compressed/c.txt")?]);
+    terminal_key(&mut app, KeyCode::Enter);
+    assert_eq!(app.tab, Tab::Tree);
+    assert_eq!(app.tree.directory, case.id("/compressed")?);
+    assert_eq!(
+        app.children().get(app.tree.cursor.selected),
+        Some(&case.id("/compressed/c.txt")?)
+    );
+    terminal_key(&mut app, KeyCode::Char('3'));
+    terminal_key(&mut app, KeyCode::Char('g'));
+    assert!(matches!(app.queries.groups, Groups::Kinds(_)));
+    let text = Case::text(&app, 120, 8)?;
+    for column in ["Kind", "Count", "Logical", "Allocated", "document"] {
+        assert!(text.contains(column), "{text}");
+    }
+    terminal_key(&mut app, KeyCode::Enter);
+    assert_eq!(app.tab, Tab::TopFiles);
+    assert_eq!(app.queries.filter, FileFilter::Kind(FileKind::Document));
+    assert_eq!(app.queries.scope, case.id("/compressed")?);
+    terminal_key(&mut app, KeyCode::Char('u'));
+    assert_eq!(app.queries.scope, NodeId::ROOT);
+    assert!(app.queries.top.len() > 1);
+    assert!(matches!(&app.queries.groups, Groups::Kinds(stats) if stats.len() > 1));
+    terminal_key(&mut app, KeyCode::Char('u'));
+    assert_eq!(app.queries.top.len(), 1);
+    terminal_key(&mut app, KeyCode::Char('3'));
+    terminal_key(&mut app, KeyCode::Char('g'));
+    assert!(matches!(app.queries.groups, Groups::Extensions(_)));
+    terminal_key(&mut app, KeyCode::Char('u'));
+    app.handle(Event::Key(Key::Home));
+    terminal_key(&mut app, KeyCode::Enter);
+    assert_eq!(app.queries.filter, FileFilter::extensions([""])?);
+    assert!(Case::text(&app, 120, 8)?.contains("filter: (none)"));
+    Ok(())
+}
+
+#[test]
+fn search_from_every_tab_handles_results_errors_and_directory_or_file_jumps() -> TestResult {
+    let case = Case::synthetic()?;
+    let mut app = case.app("/", 4)?;
+    for tab in Tab::ALL {
+        app.handle(Event::Key(Key::SelectTab(tab)));
+        terminal_key(&mut app, KeyCode::Char('/'));
+        assert_eq!(app.tab, Tab::Search);
+        assert!(app.input.is_some());
+        confirm_text(&mut app, "leaf");
+        assert_eq!(
+            app.queries.search_items(),
+            [case.id("/nested/child/leaf.txt")?]
+        );
+        assert!(Case::text(&app, 120, 8)?.contains("/nested/child/leaf.txt"));
+    }
+    terminal_key(&mut app, KeyCode::Enter);
+    assert_eq!(app.tab, Tab::Tree);
+    assert_eq!(app.tree.directory, case.id("/nested/child")?);
+    assert_eq!(
+        app.children().get(app.tree.cursor.selected),
+        Some(&case.id("/nested/child/leaf.txt")?)
+    );
+    terminal_key(&mut app, KeyCode::Char('/'));
+    confirm_text(&mut app, "nested");
+    assert!(Case::text(&app, 120, 8)?.contains("/nested/"));
+    terminal_key(&mut app, KeyCode::Enter);
+    assert_eq!(app.tab, Tab::Tree);
+    assert_eq!(app.tree.directory, NodeId::ROOT);
+    assert_eq!(
+        app.children().get(app.tree.cursor.selected),
+        Some(&case.id("/nested")?)
+    );
+    terminal_key(&mut app, KeyCode::Char('/'));
+    confirm_text(&mut app, "not-present");
+    assert!(app.queries.search_items().is_empty());
+    assert!(Case::text(&app, 120, 8)?.contains("no matches"));
+    terminal_key(&mut app, KeyCode::Char('/'));
+    confirm_text(&mut app, "[");
+    assert!(Case::text(&app, 120, 8)?.contains("invalid name glob"));
+    assert_eq!(
+        app.queries.pattern.as_ref().ok_or("pattern")?.as_str(),
+        "not-present"
+    );
+    assert!(app.queries.search_items().is_empty());
+    Ok(())
+}
+
+#[test]
+fn input_routes_text_and_editing_keys_before_browser_shortcuts() -> TestResult {
+    let case = Case::synthetic()?;
+    let mut app = case.app("/", 4)?;
+    terminal_key(&mut app, KeyCode::Char('2'));
+    terminal_key(&mut app, KeyCode::Char('f'));
+    input_text(&mut app, "q12");
+    assert_eq!(app.tab, Tab::TopFiles);
+    assert_eq!(app.input.as_ref().ok_or("input")?.editor.value(), "q12");
+    for code in [
+        KeyCode::Home,
+        KeyCode::Right,
+        KeyCode::Char('界'),
+        KeyCode::Right,
+        KeyCode::Backspace,
+        KeyCode::End,
+        KeyCode::Char('x'),
+        KeyCode::Left,
+        KeyCode::Backspace,
+        KeyCode::Home,
+        KeyCode::Backspace,
+        KeyCode::End,
+        KeyCode::Backspace,
+    ] {
+        assert_eq!(terminal_key(&mut app, code), Action::Continue);
+    }
+    assert_eq!(app.input.as_ref().ok_or("input")?.editor.value(), "q界");
+    input_text(&mut app, "bf?/5");
+    assert!(!app.raw_bytes && !app.help);
+    assert_eq!(app.tab, Tab::TopFiles);
+    let text = Case::text(&app, 80, 8)?;
+    assert!(
+        text.contains("Filter: q界") && text.contains("bf?/5"),
+        "{text}"
+    );
+    assert_eq!(
+        app.input.as_ref().ok_or("input")?.editor.value(),
+        "q界bf?/5"
+    );
+    input_text(&mut app, &"a".repeat(100));
+    let text = Case::text(&app, 40, 8)?;
+    assert!(text.contains("Filter:") && text.contains("aaaa"), "{text}");
+    assert_eq!(terminal_key(&mut app, KeyCode::Esc), Action::Continue);
+    assert!(app.input.is_none());
+    assert_eq!(app.queries.top.as_ref(), app.snapshot().top_files());
+    terminal_key(&mut app, KeyCode::Char('/'));
+    input_text(&mut app, "q");
+    assert_eq!(app.tab, Tab::Search);
+    assert_eq!(terminal_key(&mut app, KeyCode::Esc), Action::Continue);
+    assert_eq!(terminal_key(&mut app, KeyCode::Char('q')), Action::Quit);
+    Ok(())
+}
+
+#[test]
+fn search_caps_cached_matches_reports_remaining_and_keeps_the_cursor_visible() -> TestResult {
+    let case = Case::fixture("frag-512")?;
+    let mut app = case.app("/growth", 4)?;
+    terminal_key(&mut app, KeyCode::Char('u'));
+    terminal_key(&mut app, KeyCode::Char('/'));
+    confirm_text(&mut app, "*");
+    let page = app.queries.search.as_ref().ok_or("page")?;
+    assert_eq!(page.items().len(), 1000);
+    assert_eq!(page.total_matches(), 1500);
+    assert!(Case::text(&app, 120, 8)?.contains("500 more, refine the pattern"));
+    let cached = page.items().as_ptr();
+    app.handle(Event::Key(Key::End));
+    assert!(!Case::selected_row(&app, 120, 8)?.trim().is_empty());
+    terminal_key(&mut app, KeyCode::Char('/'));
+    assert_eq!(app.queries.search_items().as_ptr(), cached);
+    assert!(!Case::selected_row(&app, 120, 8)?.trim().is_empty());
+    app.handle(Event::Resize {
+        width: 120,
+        height: 12,
+    });
+    assert!(!Case::selected_row(&app, 120, 12)?.trim().is_empty());
+    terminal_key(&mut app, KeyCode::Esc);
+    terminal_key(&mut app, KeyCode::Enter);
+    assert_eq!(app.tab, Tab::Tree);
+    assert_eq!(app.tree.directory, case.id("/growth")?);
+    assert_eq!(
+        app.children().get(app.tree.cursor.selected),
+        Some(&case.id("/growth/f0999")?)
+    );
+    Ok(())
+}
+
+#[test]
+fn query_help_search_bytes_and_input_repeat_events_render_correctly() -> TestResult {
+    let case = Case::synthetic()?;
+    let mut app = case.app("/", 4)?;
+    terminal_key(&mut app, KeyCode::Char('?'));
+    let help = Case::text(&app, 40, 8)?;
+    for binding in [
+        "Tab/1–5",
+        "u: scope",
+        "f: filter",
+        "Ext g: kind",
+        "/: search",
+    ] {
+        assert!(help.contains(binding), "{binding}: {help}");
+    }
+    terminal_key(&mut app, KeyCode::Esc);
+    terminal_key(&mut app, KeyCode::Char('/'));
+    input_text(&mut app, "q");
+    for (kind, expected) in [(KeyEventKind::Release, "q"), (KeyEventKind::Repeat, "qx")] {
+        app.handle_terminal(event::Event::Key(KeyEvent::new_with_kind(
+            KeyCode::Char('x'),
+            KeyModifiers::NONE,
+            kind,
+        )));
+        assert_eq!(app.input.as_ref().ok_or("input")?.editor.value(), expected);
+    }
+    confirm_text(&mut app, "leaf");
+    terminal_key(&mut app, KeyCode::Char('b'));
+    let row = Case::selected_row(&app, 120, 8)?;
+    assert!(row.contains("/nested/child/leaf.txt"), "{row}");
+    assert!(!row.contains(" B"), "{row}");
+    let cached = app.queries.search_items().as_ptr();
+    terminal_key(&mut app, KeyCode::Char('/'));
+    confirm_text(&mut app, "leaf");
+    assert_eq!(app.queries.search_items().as_ptr(), cached);
+    terminal_key(&mut app, KeyCode::Char('/'));
+    confirm_text(&mut app, &"x".repeat(257));
+    assert!(Case::text(&app, 120, 8)?.contains("256-byte limit"));
+    assert_eq!(
+        app.queries.pattern.as_ref().ok_or("pattern")?.as_str(),
+        "leaf"
+    );
+    Ok(())
+}
+
+#[test]
+fn vim_up_remains_up_in_extensions_and_grouping_uses_g() -> TestResult {
+    use crate::queries::Groups;
+    let case = Case::fixture("basic-4k")?;
+    let mut app = case.app("/", 4)?;
+    terminal_key(&mut app, KeyCode::Char('3'));
+    app.handle(Event::Key(Key::End));
+    let selected = app.extensions.selected;
+    assert!(selected > 0);
+    terminal_key(&mut app, KeyCode::Char('k'));
+    assert_eq!(app.extensions.selected, selected.saturating_sub(1));
+    assert!(matches!(app.queries.groups, Groups::Extensions(_)));
+    terminal_key(&mut app, KeyCode::Char('g'));
+    assert!(matches!(app.queries.groups, Groups::Kinds(_)));
+    app.handle(Event::Key(Key::End));
+    let selected = app.extensions.selected;
+    assert!(selected > 0);
+    terminal_key(&mut app, KeyCode::Char('k'));
+    assert_eq!(app.extensions.selected, selected.saturating_sub(1));
+    assert!(matches!(app.queries.groups, Groups::Kinds(_)));
+    terminal_key(&mut app, KeyCode::Char('2'));
+    terminal_key(&mut app, KeyCode::Char('g'));
+    assert!(matches!(app.queries.groups, Groups::Kinds(_)));
+    terminal_key(&mut app, KeyCode::Char('f'));
+    input_text(&mut app, "gk");
+    assert_eq!(app.input.as_ref().ok_or("input")?.editor.value(), "gk");
     Ok(())
 }

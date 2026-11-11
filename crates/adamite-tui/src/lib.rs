@@ -10,6 +10,7 @@
 
 mod app;
 mod input;
+mod queries;
 mod view;
 
 #[cfg(test)]
@@ -17,7 +18,6 @@ mod tests;
 
 use adamite_core::{scan::ScanOutput, snapshot::NodeId};
 use app::{Action, App};
-use input::Event;
 use ratatui::{DefaultTerminal, crossterm::event};
 use snafu::Snafu;
 use std::io;
@@ -96,9 +96,7 @@ impl<'a> Browser<'a> {
                 operation: "read input from",
                 source,
             })?;
-            if let Some(event) = Event::from_terminal(event)
-                && app.handle(event) == Action::Quit
-            {
+            if app.handle_terminal(event) == Action::Quit {
                 return Ok(());
             }
         }

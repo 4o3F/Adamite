@@ -18,6 +18,10 @@ pub(crate) enum Key {
     Help,
     Escape,
     Quit,
+    Scope,
+    Filter,
+    Group,
+    Search,
 }
 
 impl Key {
@@ -67,6 +71,11 @@ impl Event {
                 KeyCode::Char('2') => Key::SelectTab(Tab::TopFiles),
                 KeyCode::Char('3') => Key::SelectTab(Tab::Extensions),
                 KeyCode::Char('4') => Key::SelectTab(Tab::Info),
+                KeyCode::Char('5') => Key::SelectTab(Tab::Search),
+                KeyCode::Char('u') => Key::Scope,
+                KeyCode::Char('f') => Key::Filter,
+                KeyCode::Char('g') => Key::Group,
+                KeyCode::Char('/') => Key::Search,
                 KeyCode::Char('b') => Key::Bytes,
                 KeyCode::Char('?') => Key::Help,
                 KeyCode::Esc => Key::Escape,
@@ -80,5 +89,40 @@ impl Event {
             return None;
         }
         Some(Self::Key(key))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Prompt {
+    Filter,
+    Search,
+}
+
+impl Prompt {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Filter => "Filter: ",
+            Self::Search => "Search: ",
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct InputLine {
+    pub(crate) prompt: Prompt,
+    pub(crate) editor: tui_input::Input,
+}
+
+impl InputLine {
+    pub(crate) fn new(prompt: Prompt, value: String) -> Self {
+        Self {
+            prompt,
+            editor: tui_input::Input::new(value),
+        }
+    }
+
+    pub(crate) fn handle(&mut self, event: &event::Event) {
+        use tui_input::backend::crossterm::EventHandler;
+        self.editor.handle_event(event);
     }
 }
