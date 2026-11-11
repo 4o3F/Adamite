@@ -1,7 +1,8 @@
-use crate::CountingAllocator;
+use crate::{CountingAllocator, SpanRecorder, SpanSummary};
 use std::{
     collections::HashMap,
     sync::{Mutex, PoisonError},
+    time::Instant,
 };
 use tracing::{
     Subscriber,
@@ -18,10 +19,13 @@ use tracing_subscriber::{Layer, layer::Context, registry::LookupSpan};
 pub struct HeapLayer {
     allocator: &'static CountingAllocator,
     state: Mutex<HeapState>,
+    recorder: Option<SpanRecorder>,
 }
 
 #[derive(Debug)]
 struct SpanHeap {
+    name: &'static str,
+    started: Instant,
     start_current: usize,
     running_max: usize,
 }
@@ -52,6 +56,14 @@ impl HeapLayer {
         Self {
             allocator,
             state: Mutex::new(HeapState::default()),
+            recorder: None,
+        }
+    }
+
+    pub(crate) fn recording(allocator: &'static CountingAllocator, recorder: SpanRecorder) -> Self {
+        Self {
+            recorder: Some(recorder),
+            ..Self::new(allocator)
         }
     }
 }
@@ -60,12 +72,14 @@ impl<S> Layer<S> for HeapLayer
 where
     S: Subscriber + for<'lookup> LookupSpan<'lookup>,
 {
-    fn on_new_span(&self, _attributes: &Attributes<'_>, id: &Id, _context: Context<'_, S>) {
+    fn on_new_span(&self, attributes: &Attributes<'_>, id: &Id, _context: Context<'_, S>) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let current = state.boundary(self.allocator);
         state.open.insert(
             id.clone(),
             SpanHeap {
+                name: attributes.metadata().name(),
+                started: Instant::now(),
                 start_current: current,
                 running_max: current,
             },
@@ -88,6 +102,16 @@ where
             return;
         };
         let delta = current as i128 - heap.start_current as i128;
+        if let Some(recorder) = &self.recorder {
+            recorder.record(SpanSummary {
+                name: heap.name,
+                duration: heap.started.elapsed(),
+                heap_peak: heap.running_max,
+                heap_delta: delta,
+                heap_current: current,
+                process_peak,
+            });
+        }
         tracing::event!(
             name: "heap_usage",
             parent: &id,

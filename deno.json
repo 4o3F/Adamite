@@ -1,6 +1,7 @@
 {
   "deno": "2.9.8",
   "tasks": {
+    "bench": "cargo run --release -p adamite-bench --locked --",
     "check": "deno run --frozen --allow-read=Cargo.toml,rust-toolchain.toml,crates/adamite-ntfs/fuzz/Cargo.toml,crates/adamite-ntfs/fuzz/corpus,crates/adamite-core/fuzz/Cargo.toml,crates/adamite-core/fuzz/corpus --allow-write=target/fuzz-smoke --allow-run=cargo,deno scripts/check.ts",
     "fixtures": "deno run --frozen --allow-run=mkntfs,sudo,ntfsinfo,getfattr,setfattr,zstd,mountpoint --allow-read=tests/fixtures/ntfs,/tmp --allow-write=tests/fixtures/ntfs,/tmp scripts/fixtures/generate.ts",
     "fuzz-corpus": "deno run --frozen --allow-run=cargo,zstd --allow-read=tests/fixtures/ntfs,crates/adamite-ntfs/fuzz/fuzz_targets/typed_values/selectors.rs,crates/adamite-core/fuzz/corpus/persist --allow-write=crates/adamite-ntfs/fuzz/corpus,crates/adamite-core/fuzz/corpus scripts/fuzz_corpus.ts",

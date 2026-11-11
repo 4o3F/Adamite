@@ -16,7 +16,7 @@ adamite-core = { version = "0.1.0", path = "../adamite-core" }
 adamite-format = { version = "0.1.0", path = "../adamite-format" }
 adamite-io = { version = "0.1.0", path = "../adamite-io" }
 adamite-tui = { version = "0.1.0", path = "../adamite-tui" }
-clap = { version = "4", default-features = false, features = ["std", "derive", "help", "usage", "error-context", "suggestions"] }
+clap.workspace = true
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 snafu.workspace = true

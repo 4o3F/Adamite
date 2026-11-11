@@ -1,4 +1,4 @@
-use crate::{CountingAllocator, HeapLayer};
+use crate::{CountingAllocator, HeapLayer, SpanRecorder};
 use snafu::Snafu;
 use std::{fmt, fs::File, io, path::Path};
 use tracing::subscriber::SetGlobalDefaultError;
@@ -53,6 +53,23 @@ impl ChromeProfile {
         path: impl AsRef<Path>,
         allocator: &'static CountingAllocator,
     ) -> Result<Self, ProfileError> {
+        Self::install_layer(path.as_ref(), HeapLayer::new(allocator))
+    }
+
+    /// Installs Chrome tracing and an in-memory recorder using the same heap bookkeeping.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProfileError`] if file creation or subscriber installation fails.
+    pub fn install_with_recorder(
+        path: impl AsRef<Path>,
+        allocator: &'static CountingAllocator,
+        recorder: &SpanRecorder,
+    ) -> Result<Self, ProfileError> {
+        Self::install_layer(path.as_ref(), recorder.layer(allocator))
+    }
+
+    fn install_layer(path: &Path, heap: HeapLayer) -> Result<Self, ProfileError> {
         let file = File::create(path).map_err(|source| ProfileError::Create { source })?;
         let (chrome, flush) = ChromeLayerBuilder::new()
             .writer(file)
@@ -60,9 +77,7 @@ impl ChromeProfile {
             .trace_style(TraceStyle::Async)
             .build();
         // Inner layers close first: emit the heap event before Chrome ends the span.
-        let subscriber = Registry::default()
-            .with(HeapLayer::new(allocator))
-            .with(chrome);
+        let subscriber = Registry::default().with(heap).with(chrome);
         tracing::subscriber::set_global_default(subscriber)
             .map_err(|source| ProfileError::Install { source })?;
         Ok(Self { _flush: flush })
@@ -72,7 +87,7 @@ impl ChromeProfile {
 #[cfg(test)]
 mod tests {
     use super::ChromeProfile;
-    use crate::CountingAllocator;
+    use crate::{CountingAllocator, SpanRecorder};
     use std::{error::Error, fs};
 
     #[test]
@@ -80,9 +95,15 @@ mod tests {
         static ALLOCATOR: CountingAllocator = CountingAllocator::new();
         let path =
             std::env::temp_dir().join(format!("adamite-profile-{}.json", std::process::id()));
-        let guard = ChromeProfile::install(&path, &ALLOCATOR)?;
+        let recorder = SpanRecorder::new(&["profile_test"]);
+        let guard = ChromeProfile::install_with_recorder(&path, &ALLOCATOR, &recorder)?;
         tracing::info_span!("profile_test").in_scope(|| {});
         drop(guard);
+        let summaries = recorder.take();
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].name, "profile_test");
+        assert!(!summaries[0].duration.is_zero());
+        assert_eq!(summaries[0].heap_peak, 0);
         let trace: serde_json::Value = serde_json::from_slice(&fs::read(&path)?)?;
         fs::remove_file(path)?;
         let events = trace.as_array().ok_or("trace is not an array")?;

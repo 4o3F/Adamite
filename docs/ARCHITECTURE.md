@@ -46,7 +46,8 @@ crates/
   adamite-format/   # implemented: shared sizes, escaping, time and info fields
   adamite-tui/      # implemented: read-only terminal browser
   adamite-cli/      # implemented: adamite binary, reports and snapshot file I/O
-  adamite-profile/  # implemented: requested heap counters and Chrome trace subscriber
+  adamite-profile/  # implemented: requested heap counters, span recorder and Chrome traces
+  adamite-bench/    # implemented: synthetic scan/persistence resource measurements
   adamite-service/  # planned: snapshots, jobs, privilege and resource scheduling
   adamite-mcp/      # planned
 ```
@@ -59,8 +60,9 @@ crates/
 | `adamite-format`   | Shared byte sizes, escaped terminal text, extension labels, scan timestamps, volume serials and ordered info fields                                                          |
 | `adamite-tui`      | `Browser` and `TuiError`; read-only Tree, Top files, Extensions and Info tabs over a borrowed `ScanOutput`                                                                   |
 | `adamite-cli`      | The `adamite` binary: source classification, scan/save, text/JSON reports, path resolution and browser startup                                                               |
-| `adamite-profile`  | Unpublished executable support: counting System allocator, span heap events and an opt-in Chrome trace guard                                                                 |
-| `adamite-fixtures` | Unpublished development support: image loading, independent manifests/reference MFT reconstruction and synthetic builders                                                    |
+| `adamite-profile`  | Unpublished executable support: counting System allocator, span heap events, in-memory span summaries and an opt-in Chrome trace guard                                       |
+| `adamite-fixtures` | Unpublished development support: image loading, independent manifests/reference MFT reconstruction, synthetic builders and streaming volumes                                 |
+| `adamite-bench`    | Unpublished binary: cached sparse synthetic volumes, isolated production scan/encode/decode measurements and optional Chrome traces                                          |
 
 Parser operations belong to their types: `boot::VolumeGeometry::from_boot_sector` decodes volume geometry, `record::FileRecord::parse` validates headers and restores protected trailers in place, and `record::RecordClass::classify` applies streaming classification precedence. Parsing errors leave record bytes unchanged. Typed attribute decoders live under `value`; record references and system record numbers live under `record::reference` and `record::system`. Every public parser item has one module path.
 
@@ -352,4 +354,4 @@ Library errors use snafu with source chains and documented `# Errors` sections. 
 
 Crates that log use workspace tracing: core emits per-call phase spans and bootstrap/ingest/merge/link/build/aggregate/finalize stage spans; persistence emits encode/decode/validate spans; I/O emits batch and reader spans; the CLI emits source/load/scan/save/render spans; the TUI emits startup and frame-render spans. Stage handles may span driver calls, but entered guards never survive a driver call. The parser does not log. The `adamite` binary installs a tracing subscriber through `adamite-profile` only when `--trace-chrome <FILE>` is given. Its counting allocator tracks requested heap bytes; each span closes with a `heap_usage` event containing `heap_current` (current live bytes), `heap_peak` (the maximum live bytes while that span was open), `heap_delta` (the signed change since span creation) and `process_peak` (the process-wide maximum). At each span open/close boundary, the heap layer folds the allocator interval peak into every open span before adding or removing that span, preserving peaks for nested and overlapping lifetimes. The trace guard finishes the JSON file when the command returns, including errors. Adapters read the clock and supply timestamps through caller context; core reads no clocks.
 
-Task automation and fixture generation use Deno TypeScript through root `deno.json`. `deno task check` includes `adamite-io`, `adamite-cli`, `adamite-tui` and `adamite-profile` Clippy for `x86_64-pc-windows-gnu`; native Windows CI also runs the ignored elevated I/O and CLI raw-volume tests after workspace tests. Do not add bash, Python or just scripts; CI steps invoke only `cargo` or `deno` one-liners. Plans live in `docs/plans/`, one file per change.
+Task automation and fixture generation use Deno TypeScript through root `deno.json`. `deno task check` includes `adamite-io`, `adamite-cli`, `adamite-tui`, `adamite-profile` and `adamite-bench` Clippy for `x86_64-pc-windows-gnu`; native Windows CI also runs the ignored elevated I/O and CLI raw-volume tests after workspace tests. Do not add bash, Python or just scripts; CI steps invoke only `cargo` or `deno` one-liners. The separate `deno task bench` runs release resource measurements for 300k and 1M in-use records through the shared profiling recorder. Plans live in `docs/plans/`, one file per change.

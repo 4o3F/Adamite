@@ -10,7 +10,7 @@ publish = false
 snafu.workspace = true
 tracing.workspace = true
 tracing-chrome = "0.7.2"
-tracing-subscriber = { version = "0.3.23", default-features = false, features = ["registry", "std"] }
+tracing-subscriber.workspace = true
 
 [dev-dependencies]
 serde_json = "1"

@@ -136,6 +136,8 @@ export function checkSteps(options: { packages: readonly FuzzPackage[]; fuzz: bo
         "adamite-tui",
         "-p",
         "adamite-profile",
+        "-p",
+        "adamite-bench",
         "--target",
         "x86_64-pc-windows-gnu",
         "--all-targets",

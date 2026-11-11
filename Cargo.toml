@@ -11,6 +11,8 @@ license = "MIT OR Apache-2.0"
 [workspace.dependencies]
 snafu = { version = "0.9", default-features = false, features = ["rust_1_81"] }
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }
+clap = { version = "4", default-features = false, features = ["std", "derive", "help", "usage", "error-context", "suggestions"] }
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["registry", "std"] }
 
 [workspace.lints.rust]
 unsafe_code = "deny"

@@ -44,7 +44,7 @@ Each milestone ends with one reviewed commit, `deno task check` green and CI gre
 
 ### M1 — Instrumentation, profiling and baseline
 
-- [ ] Add the D2 spans across core, io, persistence, CLI and TUI; add `adamite-profile`, the CLI `--trace-chrome` option and counting allocator, `adamite-bench` and `deno task bench`; record the baseline for 300k and 1M in-use records in the commit message.
+- [x] Add the D2 spans across core, io, persistence, CLI and TUI; add `adamite-profile`, the CLI `--trace-chrome` option and counting allocator, `adamite-bench` and `deno task bench`; record the baseline for 300k and 1M in-use records in the commit message.
 
 ### M2 — Compact ingest state
 

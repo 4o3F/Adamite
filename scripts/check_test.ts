@@ -156,6 +156,8 @@ Deno.test("normal checks run once without feature flags and keep the no_std buil
         "adamite-tui",
         "-p",
         "adamite-profile",
+        "-p",
+        "adamite-bench",
         "--target",
         "x86_64-pc-windows-gnu",
         "--all-targets",
@@ -772,4 +774,18 @@ Deno.test("packaging tasks limit file access and pin the tar dependency exactly"
     /^jsr:@std\/tar@\d+\.\d+\.\d+$/.test(config.imports["@std/tar"]),
     "tar dependency must use an exact version",
   );
+});
+
+Deno.test("benchmark task passes arguments to a separate locked release binary", async () => {
+  const config = JSON.parse(await Deno.readTextFile("deno.json")) as {
+    tasks: Record<string, string>;
+  };
+  equal(
+    config.tasks.bench,
+    "cargo run --release -p adamite-bench --locked --",
+    "benchmark command",
+  );
+  for (const step of checkSteps({ packages: fuzzPackages, fuzz: false })) {
+    assert(!step.args.includes("bench"), `${step.name} must not run large benchmark cases`);
+  }
 });

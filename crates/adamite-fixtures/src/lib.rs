@@ -30,9 +30,13 @@ mod fixture;
 mod manifest;
 mod mapped_allocation;
 pub mod runlist_encoder;
+mod synthetic_volume;
+mod volume_image;
 
 pub use fixture::{Fixture, FixtureError, ReferenceMft};
 pub use manifest::{
     Deleted, Entry, EntryKind, Extent, Fill, Geometry, Manifest, Mft, Name, Stream,
 };
 pub use mapped_allocation::MappedAllocation;
+pub use synthetic_volume::{SyntheticConfig, SyntheticVolume};
+pub use volume_image::VolumeImage;

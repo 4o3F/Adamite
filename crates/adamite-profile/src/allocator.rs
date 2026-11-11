@@ -107,7 +107,7 @@ unsafe impl GlobalAlloc for CountingAllocator {
 #[cfg(test)]
 mod tests {
     use super::CountingAllocator;
-    use crate::HeapLayer;
+    use crate::SpanRecorder;
     use std::{
         alloc::{GlobalAlloc, Layout},
         collections::HashMap,
@@ -230,8 +230,9 @@ mod tests {
     fn nested_spans_have_exact_peaks_without_earlier_process_peak() {
         static ALLOCATOR: CountingAllocator = CountingAllocator::new();
         let events = HeapEvents::default();
+        let recorder = SpanRecorder::new(&[]);
         let subscriber = Registry::default()
-            .with(HeapLayer::new(&ALLOCATOR))
+            .with(recorder.layer(&ALLOCATOR))
             .with(events.clone());
         // A historical peak must reach process_peak without inflating later spans.
         drop(Allocation::new(&ALLOCATOR, 1000));
@@ -252,14 +253,32 @@ mod tests {
             ("nested_outer", [0, 192, 0, 1000]),
             ("later_low", [0, 32, 0, 1000]),
         ]);
+        let summaries = recorder.take();
+        assert_eq!(
+            summaries
+                .iter()
+                .map(|span| (
+                    span.name,
+                    span.heap_peak,
+                    span.heap_delta,
+                    span.process_peak
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                ("nested_inner", 192, 0, 1000),
+                ("nested_outer", 192, 0, 1000),
+                ("later_low", 32, 0, 1000)
+            ]
+        );
     }
 
     #[test]
     fn overlapping_spans_have_exact_peaks_with_non_lifo_close_order() {
         static ALLOCATOR: CountingAllocator = CountingAllocator::new();
         let events = HeapEvents::default();
+        let recorder = SpanRecorder::new(&[]);
         let subscriber = Registry::default()
-            .with(HeapLayer::new(&ALLOCATOR))
+            .with(recorder.layer(&ALLOCATOR))
             .with(events.clone());
         tracing::subscriber::with_default(subscriber, || {
             let first = tracing::info_span!(parent: None, "overlap_first");
@@ -279,5 +298,17 @@ mod tests {
             ("overlap_second", [0, 120, -40, 240]),
             ("overlap_third", [0, 16, 0, 240]),
         ]);
+        let summaries = recorder.take();
+        assert_eq!(
+            summaries
+                .iter()
+                .map(|span| (span.name, span.heap_peak, span.heap_delta))
+                .collect::<Vec<_>>(),
+            vec![
+                ("overlap_first", 240, 40),
+                ("overlap_second", 120, -40),
+                ("overlap_third", 16, 0)
+            ]
+        );
     }
 }

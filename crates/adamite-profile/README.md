@@ -40,3 +40,9 @@ cargo clippy -p adamite-profile --all-targets --target x86_64-pc-windows-gnu -- 
 ```
 
 Unit tests allocate directly through the allocator type to verify live counts, growth, shrinkage, zeroed allocation and interval-peak consumption. Nested and non-LIFO overlapping spans use known allocation sizes to check exact span peaks, signed deltas and the separate process maximum. A separate test installs the guard and parses the finished trace, checking a named span and heap arguments.
+
+## In-memory stage summaries
+
+`SpanRecorder::new(&["ingest", "persist_encode"])` retains closed spans with the selected static names; an empty selection retains every span. Install `Registry::default().with(recorder.layer(&ALLOC))` as the subscriber, or use `ChromeProfile::install_with_recorder("trace.json", &ALLOC, &recorder)` to collect summaries and Chrome events together. The recorder configures the existing `HeapLayer`; both outputs use one `HeapState` and one consumer of allocator interval peaks. Install one measuring layer per allocator.
+
+`recorder.take()` drains completed `SpanSummary` values containing `name`, `duration`, `heap_peak`, `heap_delta`, `heap_current` and `process_peak`. Duration uses `Instant` from span creation to closure, including time when the span is not entered. Peak and delta have the same semantics as the heap events. Open spans are returned only after their handles close. Filtering the retained names bounds recorder storage for stage-level benchmarks while the shared state still tracks peaks at every span boundary. Recorder storage is included in measured requested heap. Tests verify selected-name filtering, draining, positive durations and exact heap summaries for nested and overlapping spans.

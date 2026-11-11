@@ -2,12 +2,13 @@
 
 use crate::error::ScanError;
 use crate::scan::{ReadRequest, ScanPhase, ScanStep, Scanner};
+use adamite_fixtures::VolumeImage;
 use adamite_fixtures::builders::{
-    AttrBody, AttrBuilder, BootSectorBuilder, FileNameBuilder, NonResidentModel, RecordBuilder,
+    AttrBuilder, BootSectorBuilder, FileNameBuilder, NonResidentModel, RecordBuilder,
 };
 use adamite_fixtures::runlist_encoder::{RunModel, RunlistEncoder};
-use adamite_ntfs::boot::VolumeGeometry;
 use std::error::Error;
+use std::io::Cursor;
 
 pub(super) type TestResult = Result<(), Box<dyn Error>>;
 pub(super) type ObservedDriveOutcome = (Vec<ReadRequest>, Result<(), ScanError>, usize);
@@ -42,24 +43,11 @@ pub(super) fn record() -> RecordBuilder {
 }
 
 pub(super) fn image(boot: &BootSectorBuilder, record: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
-    let mut image = vec![0; 131_072];
-    image
-        .get_mut(..512)
-        .ok_or("boot image slice")?
-        .copy_from_slice(&boot.build());
-    let geometry = VolumeGeometry::from_boot_sector(&boot.build())?;
-    let offset = geometry
-        .mft_lcn()
-        .checked_mul(u64::from(geometry.cluster_size()))
-        .ok_or("record offset overflow")?;
-    let start = usize::try_from(offset)?;
-    let end = start
-        .checked_add(record.len())
-        .ok_or("record end overflow")?;
-    image
-        .get_mut(start..end)
-        .ok_or("record image slice")?
-        .copy_from_slice(record);
+    let layout = VolumeImage::new(boot.clone(), 131_072)?;
+    let mut writer = Cursor::new(Vec::new());
+    layout.write(&mut writer)?;
+    layout.write_record(&mut writer, 0, record)?;
+    let image = writer.into_inner();
     Ok(image)
 }
 
@@ -229,31 +217,23 @@ pub(super) fn ingest_volume(
         ..boot()
     };
     let size = count.checked_mul(1024).ok_or("synthetic MFT length")?;
+    let layout = VolumeImage::new(boot.clone(), 1_048_576)?;
     let clusters = size.checked_div(512).ok_or("synthetic MFT clusters")?;
-    let highest = i64::try_from(clusters.checked_sub(1).ok_or("last synthetic MFT VCN")?)?;
-    let mut first = segment(0, 0, highest, 8, clusters);
-    let AttrBody::NonResident(model) = &mut first.body else {
-        return Err("MFT descriptor".into());
-    };
-    let size_i64 = i64::try_from(size)?;
-    model.sizes = [size_i64, size_i64, size_i64, 0];
+    let first = layout.non_resident(0x80, 8, clusters, size)?;
     let base = RecordBuilder {
         attributes: vec![first.build()],
         ..record()
     };
-    let mut volume = image(&boot, &base.build())?;
-    volume.resize(1_048_576, 0);
+    let mut writer = Cursor::new(Vec::new());
+    layout.write(&mut writer)?;
+    layout.write_record(&mut writer, 0, &base.build())?;
     let root = RecordBuilder {
         flags: 3,
         ..named_record(5, vec![46])
     };
-    put(&mut volume, 9216, &root.build())?;
+    layout.write_record(&mut writer, 5, &root.build())?;
     for (ordinal, bytes) in records {
-        let offset = ordinal
-            .checked_mul(1024)
-            .and_then(|n| n.checked_add(4096))
-            .ok_or("synthetic record position")?;
-        put(&mut volume, offset, &bytes)?;
+        layout.write_record(&mut writer, u64::try_from(ordinal)?, &bytes)?;
     }
-    Ok(volume)
+    Ok(writer.into_inner())
 }
