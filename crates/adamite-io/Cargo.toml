@@ -11,9 +11,11 @@ adamite-core = { version = "0.1.0", path = "../adamite-core" }
 nt-time = { version = "0.15", default-features = false, features = ["std"] }
 snafu.workspace = true
 tracing.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Ioctl", "Win32_System_IO"] }
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Ioctl", "Win32_System_IO", "Win32_UI_Shell", "Win32_System_Threading", "Win32_Security", "Win32_System_Registry", "Win32_UI_WindowsAndMessaging"] }
 
 [dev-dependencies]
 adamite-fixtures = { version = "0.1.0", path = "../adamite-fixtures" }

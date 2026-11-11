@@ -2,7 +2,7 @@
 
 `adamite-io` reads NTFS volume bytes and drives `adamite-core` scans to an immutable snapshot and statistics. It provides borrowed slices, read-only image files and Windows raw volumes through `reader::VolumeReader`, with exact positional reads into caller-owned buffers. `driver::SyncDriver` runs on the calling thread and serves queued requests in issue order when core waits for input.
 
-The public API lives under `reader::`, `driver::`, `limits::` and `error::`; the crate root exports modules only. Reader implementation modules are private and their types are exported directly under `reader::`.
+The public API lives under `reader::`, `driver::`, `limits::`, `error::`, `snapshot::`, `elevation::` and `status::`; the crate root exports modules only. Reader implementation modules are private and their types are exported directly under `reader::`.
 
 ```text
 src/
@@ -67,7 +67,20 @@ Live volumes can change during scanning. Core counts torn ordinary records as co
 
 ## Unsafe policy
 
-The crate denies unsafe code and forbids it on non-Windows targets. The sole exception is private `reader/windows/ffi.rs`, which wraps `DeviceIoControl`, `GetVolumeInformationW` and `GetDiskFreeSpaceExW` from the `windows` crate behind safe, typed operations. That module denies undocumented unsafe blocks and multiple unsafe operations per block. Device opening, positional reads and aligned-buffer storage use safe Rust.
+The crate denies unsafe code and forbids it on non-Windows targets. Private `reader/windows/ffi.rs` wraps volume queries, and Windows-only `elevation/ffi.rs` wraps process-token queries, shell launching, process waiting and handle cleanup. Both use the `windows` crate behind safe, typed operations and deny undocumented unsafe blocks and multiple unsafe operations per block. Device opening, positional reads and aligned-buffer storage use safe Rust.
+
+## Elevation and scan status
+
+On Windows, `elevation::ElevatedProcess::is_current()` queries the current process token. `launch(args)` runs the current executable through the UAC prompt with `runas` and a hidden window. `try_wait()` polls for an exit code, `wait()` blocks for it, and dropping the process closes its handle. A cancelled prompt returns `ElevationError::Declined`. Portable `elevation::CommandLine` quotes every argument and doubles trailing backslashes; quotes and NUL characters are rejected.
+
+`status::ScanStatusWriter::create(path)` exclusively creates an append-only JSON-lines file. `write(&ScanStatus)` appends and flushes one line. `progress(&DriverProgress, Instant)` writes the first report, every phase change and otherwise at most one report every 500 ms. `ScanStatus::from_progress` maps core phases to stable snake_case names, and `driver_progress()` maps a progress line with a known phase back to `DriverProgress`. `ScanStatusReader::open(path)` and `poll()` return new complete lines while retaining an incomplete trailing line; a malformed complete line returns `StatusError::Json`. The caller writes the final success or failure outcome and manages file cleanup.
+
+```json
+{"progress":{"phase":"stream","records":10,"planned":20,"bytes":4096}}
+{"done":{"saved":"scan.adm","bytes":1024}}
+```
+
+A failure outcome is `{"failed":{"message":"scan failed","exit_code":1}}`; unknown record totals use `"planned":null`.
 
 ## Local checks and fixtures
 

@@ -76,6 +76,8 @@ dependencies = [
  "adamite-fixtures",
  "nt-time",
  "proptest",
+ "serde",
+ "serde_json",
  "snafu",
  "tracing",
  "windows",

@@ -4,6 +4,8 @@
 //!
 //! Sources start at volume byte zero. The caller supplies scan configuration and optional context.
 //!
+//! [`elevation`] provides Windows administrator-process launching and portable argument quoting; [`status`] reads and writes scan status as JSON lines.
+//!
 //! [`reader::ImageReader::context()`] supplies the current scan timestamp with no label or free bytes. On Windows, `RawVolumeReader::context()` queries the label, free bytes and scan timestamp. See the [crate README](https://github.com/4o3F/Adamite/blob/main/crates/adamite-io/README.md) for elevation, alignment, unsafe policy and development commands.
 //!
 //! # Examples
@@ -36,9 +38,11 @@
 #[cfg(any(windows, test))]
 mod align;
 pub mod driver;
+pub mod elevation;
 pub mod error;
 pub mod limits;
 mod pacer;
 pub mod reader;
 
 pub mod snapshot;
+pub mod status;
