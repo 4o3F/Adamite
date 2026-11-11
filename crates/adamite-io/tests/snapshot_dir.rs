@@ -1,11 +1,21 @@
 //! Snapshot directory discovery, metadata and per-entry failures.
 
 use adamite_io::snapshot_dir::{SnapshotDir, SnapshotDirError};
-use etcetera::BaseStrategy;
 use std::{error::Error, ffi::OsStr, fs};
 
+#[cfg(windows)]
+#[test]
+fn default_path_is_next_to_the_executable() -> Result<(), Box<dyn Error>> {
+    let executable = std::env::current_exe()?;
+    let directory = executable.parent().ok_or("executable has no parent")?;
+    assert_eq!(SnapshotDir::default_path()?, directory.join("snapshots"));
+    Ok(())
+}
+
+#[cfg(not(windows))]
 #[test]
 fn default_path_uses_platform_data_directory() -> Result<(), Box<dyn Error>> {
+    use etcetera::BaseStrategy;
     assert_eq!(
         SnapshotDir::default_path()?,
         etcetera::choose_base_strategy()?

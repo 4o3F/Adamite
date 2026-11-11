@@ -32,11 +32,11 @@ adamite search C.adm steam --offset 50
 
 Run `adamite` or `adamite browse` to select a source in the terminal. Home lists NTFS drives on Windows, saved snapshots on either platform, and a final `Open file…` row for image or snapshot paths. Enter opens a drive's saved snapshot or scans it when none exists; `r` rescans the selected drive. A typed drive such as `D:` opens its saved snapshot when listed, or starts a drive scan when none is available. Images opened from Home are scanned without saving. In the browser, `o` returns to refreshed Home; `q` quits outside input lines. See the [TUI controls](../adamite-tui/README.md).
 
-Drive scans save to `<snapshot directory>/<LETTER>.adm`, replacing the previous snapshot through the same synchronized temporary-file publication as `scan --force`. The directory is created before the first drive save. `adamite-io` locates it with `etcetera::choose_base_strategy()`:
+Drive scans save to `<snapshot directory>/<LETTER>.adm`, replacing the previous snapshot through the same synchronized temporary-file publication as `scan --force`. The directory is created before the first drive save:
 
 | Platform | Snapshot directory |
 | --- | --- |
-| Windows | `%APPDATA%\adamite\snapshots` (the user's roaming application-data directory). |
+| Windows | `snapshots\` next to `adamite.exe`, so deleting the program folder removes every saved scan. The folder must be writable by the current user. |
 | Linux / macOS | `$XDG_DATA_HOME/adamite/snapshots`, or `~/.local/share/adamite/snapshots` when XDG_DATA_HOME is unset or relative. |
 
 Snapshot loads, image scans and saves run on background threads. Unelevated Windows drive scans request UAC through the existing elevated child, then load its published snapshot on a worker. The progress page displays phase, records, bytes and rate without writing progress to standard error. Failures return to Home with their message. Quitting drops the job: an elevated child continues and publishes its saved result, while in-process work ends with the parent process.

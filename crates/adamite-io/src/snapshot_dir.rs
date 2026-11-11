@@ -1,5 +1,6 @@
 //! Snapshot directory discovery and direct file listings with per-entry errors.
 
+#[cfg(not(windows))]
 use etcetera::BaseStrategy;
 use snafu::Snafu;
 use std::{
@@ -14,7 +15,15 @@ use std::{
 #[derive(Debug, Snafu)]
 #[non_exhaustive]
 pub enum SnapshotDirError {
+    /// The running executable's directory could not be located.
+    #[cfg(windows)]
+    #[snafu(display("cannot locate the adamite executable directory: {source}"))]
+    Executable {
+        /// Executable path lookup failure.
+        source: io::Error,
+    },
     /// The platform's base directory could not be located.
+    #[cfg(not(windows))]
     #[snafu(display("cannot locate snapshot data directory: {source}"))]
     Base {
         /// Base-directory discovery failure.
@@ -59,10 +68,27 @@ impl SnapshotDir {
         Self { path: path.into() }
     }
 
+    /// Returns `snapshots` next to the running executable, so a portable install keeps its data.
+    ///
+    /// # Errors
+    /// Returns [`SnapshotDirError::Executable`] if the executable path cannot be located.
+    #[cfg(windows)]
+    pub fn default_path() -> Result<PathBuf, SnapshotDirError> {
+        let executable =
+            std::env::current_exe().map_err(|source| SnapshotDirError::Executable { source })?;
+        let directory = executable
+            .parent()
+            .ok_or_else(|| SnapshotDirError::Executable {
+                source: io::Error::other("executable path has no parent directory"),
+            })?;
+        Ok(directory.join("snapshots"))
+    }
+
     /// Returns the platform data directory followed by `adamite/snapshots`.
     ///
     /// # Errors
     /// Returns [`SnapshotDirError::Base`] if the base directory cannot be located.
+    #[cfg(not(windows))]
     pub fn default_path() -> Result<PathBuf, SnapshotDirError> {
         let base =
             etcetera::choose_base_strategy().map_err(|source| SnapshotDirError::Base { source })?;

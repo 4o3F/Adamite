@@ -189,7 +189,7 @@ Core exposes subtree file ranking, extension and file-kind totals, and paginated
 
 `adamite-tui` owns rendering, navigation and the 100 ms event loop. Its `Sources` and `ScanJob` traits describe rows and nonblocking `Running`/`Done`/`Failed` results using TUI-owned progress data. CLI `CliSources` implements source I/O and jobs. Snapshot loads, image scans and in-process drive scans run on detached workers; channels move the completed `ScanOutput` back and coalesce progress to the latest report. The shared scan observer feeds either the CLI progress display or a job channel. Launcher owns the completed output while App borrows it, then drops it on return to Home.
 
-`adamite-io::SnapshotDir` uses the platform data directory from `etcetera::choose_base_strategy()` plus `adamite/snapshots`. Windows uses roaming application data; Unix uses XDG_DATA_HOME or `~/.local/share`. The directory is created before the first drive save. Each drive owns `<LETTER>.adm`; saves reuse CLI atomic replacement. Image jobs are not saved. See the [CLI README](../crates/adamite-cli/README.md#home-and-saved-scans) for paths and controls.
+`adamite-io::SnapshotDir` uses `snapshots` next to the executable on Windows, keeping a portable install self-contained. Elsewhere it uses the platform data directory from `etcetera::choose_base_strategy()` plus `adamite/snapshots` (XDG_DATA_HOME or `~/.local/share`). The directory is created before the first drive save. Each drive owns `<LETTER>.adm`; saves reuse CLI atomic replacement. Image jobs are not saved. See the [CLI README](../crates/adamite-cli/README.md#home-and-saved-scans) for paths and controls.
 
 ### 4.1 Privilege model
 

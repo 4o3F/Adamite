@@ -65,7 +65,7 @@ Out of scope:
 4. D4. Home screen.
    - `browse [SOURCE [PATH]]`: without a source it opens the home screen.
    - `adamite` with no subcommand runs `browse` without a source when stdout is a terminal. Otherwise it prints the long help as today, and `--help` is unchanged.
-   - The snapshot directory is `etcetera::choose_base_strategy()` data dir + `adamite/snapshots`, owned by `adamite-io`. It is created on first save. [mcp.md](mcp.md) D6 discovers the same directory.
+   - The snapshot directory, owned by `adamite-io`, is `snapshots` next to the executable on Windows, and `etcetera::choose_base_strategy()` data dir + `adamite/snapshots` elsewhere. It is created on first save. [mcp.md](mcp.md) D6 discovers the same directory.
    - The home screen rows:
      - On Windows, one row per NTFS volume. `adamite-io` adds `Volume::list()` (`GetLogicalDriveStringsW`, `GetDriveTypeW` fixed or removable, `GetVolumeInformationW` file system `NTFS`). Each row shows the letter, label and capacity, plus the age of `<dir>/<LETTER>.adm` when that file exists.
      - Saved `*.adm` files in the directory that no drive row claimed, with their modified time.
