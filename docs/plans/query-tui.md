@@ -114,4 +114,4 @@ Each task ends with one reviewed commit, `deno task check` green and CI green. E
 - [ ] `adamite search C.adm '*.iso'` and `adamite search C.adm steam` page through `next offset` to the end.
 - [ ] In the TUI, `u`, `f kind:video`, `g` and `/` work as described, Enter jumps to the file in Tree, and each query answers in under 200 ms on the bench synthetic volume.
 - [ ] In an unelevated Windows terminal, `adamite` opens the home screen with the NTFS drives. Enter on `C:` shows the UAC prompt, then the progress screen, then Tree; next time `C:` opens the saved snapshot, and `r` rescans.
-- [ ] `adamite | cat` and `adamite --help` print help as today; existing CLI exact-text and JSON tests are unchanged; `deno task check` and CI pass on Linux and Windows.
+- [x] `adamite | cat` and `adamite --help` print help as today; existing CLI exact-text and JSON tests are unchanged; `deno task check` and CI pass on Linux and Windows.
