@@ -75,7 +75,7 @@ impl Finalizer {
     fn collect(&mut self, data: &mut SnapshotStorage) -> Result<(), SnapshotError> {
         let Some(node) = data.nodes.get(self.cursor) else {
             let count = self.groups.len();
-            self.heap.try_reserve(count)?;
+            self.heap.try_reserve_exact(count)?;
             data.ext_stats.try_reserve_exact(count)?;
             self.pending = std::mem::take(&mut self.groups).into_iter();
             self.stage = Stage::HeapBuild;
@@ -162,6 +162,7 @@ impl Finalizer {
                             size: group.total_size,
                         });
                     } else {
+                        self.pending = Vec::new().into_iter();
                         self.stage = Stage::HeapDrain;
                     }
                 }

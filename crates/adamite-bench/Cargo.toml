@@ -13,6 +13,7 @@ adamite-io = { version = "0.1.0", path = "../adamite-io" }
 adamite-profile = { version = "0.1.0", path = "../adamite-profile" }
 clap.workspace = true
 tempfile = "3"
+serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 

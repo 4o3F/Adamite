@@ -102,7 +102,7 @@ fn stage_number(stage: &Stage) -> usize {
         Stage::Cycles => 3,
         Stage::Convert => 4,
         Stage::Emit => 5,
-        Stage::Done => 6,
+        Stage::Reorder | Stage::Done => 6,
     }
 }
 
@@ -129,9 +129,7 @@ fn observed_work(
             total
         }
     };
-    let prepared = input_count
-        .checked_sub(linker.entries.len())
-        .ok_or("entry iterator moved backwards")?;
+    let prepared = cursor_work(0, input_count);
     let record_nodes = sum_work(linker.records.iter().map(|record| record.len))?;
     let metadata_nodes = usize::from(linker.metadata.is_some());
     let resolved_orphan = usize::from(stats.orphans > stats.cycle_nodes);
@@ -143,6 +141,13 @@ fn observed_work(
     ])?;
     let cycles = if stage < 3 {
         0
+    } else if stage > 3 {
+        let automatic_orphan = linker.orphaned.is_some() && stats.orphans == stats.cycle_nodes;
+        total_nodes
+            .checked_mul(3)
+            .and_then(|n| n.checked_sub(if automatic_orphan { 5 } else { 3 }))
+            .and_then(|n| n.checked_add(usize::try_from(stats.cycle_nodes).ok()?))
+            .ok_or("cycle work overflow")?
     } else {
         let marks = sum_work(linker.marks.iter().copied().map(usize::from))?;
         // Root and an orphan directory created during cycle repair start already finished.
@@ -168,7 +173,7 @@ fn observed_work(
         cursor_work(2, resolved),
         cycles,
         cursor_work(4, total_nodes),
-        linker.result.nodes.len(),
+        cursor_work(5, total_nodes),
     ])
 }
 
@@ -580,4 +585,49 @@ fn linking_invalid_surrogates_count_only_surviving_name_conversions() -> TestRes
     assert_eq!(stats.invalid_utf16, 2);
     assert_eq!(stats.hardlink_duplicates, 0);
     Ok(())
+}
+
+#[test]
+fn node_permutation_yields_during_a_long_cycle() -> TestResult {
+    let count = 1_025usize;
+    let mut linker = Linker::new(Vec::new())?;
+    linker.nodes = (0..count)
+        .map(|index| {
+            let mut node = super::ResolvedNode::synthetic();
+            node.file_ref = Some(reference(u64::try_from(index)?));
+            Ok(node)
+        })
+        .collect::<Result<_, Box<dyn Error>>>()?;
+    linker.remap = (1..count)
+        .chain(std::iter::once(0))
+        .map(u32::try_from)
+        .collect::<Result<_, _>>()?;
+    linker.stage = Stage::Reorder;
+    let mut stats = ScanStats::default();
+    assert!(
+        !linker.step(&mut stats)?,
+        "the cycle must span multiple calls"
+    );
+    let fixed = linker
+        .remap
+        .iter()
+        .enumerate()
+        .filter(|(index, destination)| u32::try_from(*index).ok().as_ref() == Some(*destination))
+        .count();
+    assert_eq!(fixed, 256, "one call may perform at most 256 swaps");
+    for _ in 0..16 {
+        if linker.step(&mut stats)? {
+            assert_eq!(linker.result.nodes.len(), count);
+            for (index, node) in linker.result.nodes.iter().enumerate() {
+                let old = if index == 0 {
+                    count.checked_sub(1).ok_or("last node")?
+                } else {
+                    index.checked_sub(1).ok_or("previous node")?
+                };
+                assert_eq!(node.file_ref, Some(reference(u64::try_from(old)?)));
+            }
+            return Ok(());
+        }
+    }
+    Err("node permutation did not terminate".into())
 }

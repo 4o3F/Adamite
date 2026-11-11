@@ -11,6 +11,7 @@ dependencies = [
  "adamite-io",
  "adamite-profile",
  "clap",
+ "serde_json",
  "tempfile",
  "tracing",
  "tracing-subscriber",

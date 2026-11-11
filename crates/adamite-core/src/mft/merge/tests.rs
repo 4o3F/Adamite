@@ -57,6 +57,12 @@ fn contribution(record: u64) -> RecordContribution {
     }
 }
 fn slots(base: RecordContribution) -> Result<RecordSlots, Box<dyn Error>> {
+    slots_with_missing_base(base, None)
+}
+fn slots_with_missing_base(
+    base: RecordContribution,
+    missing: Option<usize>,
+) -> Result<RecordSlots, Box<dyn Error>> {
     let index = usize::try_from(base.reference.record())?;
     let count = index.checked_add(1).ok_or("slot count")?.max(6);
     let mut slots = RecordSlots::new(count)?;
@@ -69,14 +75,17 @@ fn slots(base: RecordContribution) -> Result<RecordSlots, Box<dyn Error>> {
         } else {
             None
         };
-        slots.push(
-            if contribution.is_some() {
-                RecordKind::Base
-            } else {
-                RecordKind::Unused
-            },
-            contribution,
-        )?;
+        let kind = if contribution.is_some() {
+            RecordKind::Base
+        } else {
+            RecordKind::Unused
+        };
+        let contribution = if missing == Some(ordinal) {
+            None
+        } else {
+            contribution
+        };
+        slots.push(kind, contribution)?;
     }
     Ok(slots)
 }
@@ -192,19 +201,17 @@ fn finish(
     let mut merge = Merge::new(slots, patches, 512);
     let mut stats = ScanStats::default();
     for _ in 0..4096 {
-        let before = (merge.patches.len(), merge.cursor);
+        let before = (merge.patches.len(), merge.bases.len());
         let done = merge.step(&mut stats)?;
         let patches = before
             .0
             .checked_sub(merge.patches.len())
             .ok_or_else(|| ScanError::overflow("test patch progress"))?;
-        let slots = merge
-            .cursor
-            .checked_sub(before.1)
-            .ok_or_else(|| ScanError::overflow("test slot progress"))?;
+        // The handoff installs the base iterator without consuming it.
+        let bases = before.1.saturating_sub(merge.bases.len());
         assert!(
             patches
-                .checked_add(slots)
+                .checked_add(bases)
                 .ok_or_else(|| ScanError::overflow("test batch size"))?
                 <= 256
         );
@@ -263,7 +270,7 @@ fn merge_missing_stale_and_discarded_bases_reject_patch_without_mutation() -> Te
             }
             3 => record_slots.base_mut(6).ok_or("slot")?.flags = RecordFlags::from_raw(0),
             _ => {
-                record_slots.take_base(6);
+                record_slots = slots_with_missing_base(contribution(6), Some(6))?;
             }
         }
         let mut stats = ScanStats::default();
@@ -555,8 +562,7 @@ fn merge_reparse_directory_and_si_flags_are_retained() -> TestResult {
 
 #[test]
 fn merge_missing_root_is_fatal() -> TestResult {
-    let mut without_root = slots(contribution(6))?;
-    without_root.take_base(5);
+    let without_root = slots_with_missing_base(contribution(6), Some(5))?;
     for slots in [RecordSlots::default(), without_root] {
         assert!(matches!(
             finish(slots, vec![]),

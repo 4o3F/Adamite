@@ -79,11 +79,7 @@ impl SnapshotBuilder {
         VecExt::try_reserve_exact(&mut snapshot.attrs, len)?;
         VecExt::try_reserve_exact(&mut snapshot.nlink, len)?;
         VecExt::try_reserve_exact(&mut snapshot.reparse_tags, len)?;
-        let child_len = len
-            .checked_sub(1)
-            .ok_or_else(|| SnapshotError::invalid("missing root"))?;
-        VecExt::try_reserve_exact(&mut snapshot.children, child_len)?;
-        snapshot.children.resize(child_len, NodeId::ROOT);
+
         let mut cursors = Vec::new();
         VecExt::try_reserve_exact(&mut cursors, len)?;
         cursors.resize(len, 0);
@@ -145,6 +141,14 @@ impl SnapshotBuilder {
                         snapshot.nlink.push(source.nlink);
                         snapshot.reparse_tags.push(source.reparse_tag);
                     } else {
+                        self.source = Vec::new().into_iter();
+                        let child_len = snapshot
+                            .nodes
+                            .len()
+                            .checked_sub(1)
+                            .ok_or_else(|| SnapshotError::invalid("missing root"))?;
+                        VecExt::try_reserve_exact(&mut snapshot.children, child_len)?;
+                        snapshot.children.resize(child_len, NodeId::ROOT);
                         self.stage = Stage::Counts;
                         self.cursor = 1;
                     }

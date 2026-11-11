@@ -155,7 +155,8 @@ impl Ingest {
     }
 
     fn record(&mut self, mapping: &MftMapping) -> Result<(), ScanError> {
-        let ordinal = self.stats.records_total;
+        let ordinal =
+            u64::try_from(self.slots.len()).map_err(|_| ScanError::overflow("record ordinal"))?;
         self.stats.records_total.try_bump()?;
         let class = RecordClass::classify(&mut self.raw);
         let mut classification = RecordKind::Corrupt;

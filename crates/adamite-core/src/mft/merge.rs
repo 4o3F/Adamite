@@ -33,8 +33,8 @@ enum Stage {
 pub(crate) struct Merge {
     slots: RecordSlots,
     patches: IntoIter<Patch>,
+    bases: IntoIter<RecordContribution>,
     cluster_size: u32,
-    cursor: usize,
     stage: Stage,
     root_emitted: bool,
     pub entries: Vec<EntryRecord>,
@@ -54,8 +54,8 @@ impl Merge {
         Self {
             slots,
             patches: patches.into_iter(),
+            bases: Vec::new().into_iter(),
             cluster_size,
-            cursor: 0,
             stage: Stage::Patches,
             root_emitted: false,
             entries: Vec::new(),
@@ -68,33 +68,27 @@ impl Merge {
             match self.stage {
                 Stage::Patches => {
                     let Some(patch) = self.patches.next() else {
+                        self.patches = Vec::new().into_iter();
+                        self.bases = std::mem::take(&mut self.slots).into_bases();
                         self.stage = Stage::Entries;
                         return Ok(false);
                     };
                     self.apply_patch(patch, stats)?;
                 }
                 Stage::Entries => {
-                    if self.cursor >= self.slots.len() {
+                    let Some(base) = self.bases.next() else {
+                        self.bases = Vec::new().into_iter();
                         if !self.root_emitted {
                             return Err(ScanError::RequiredRecord { record: ROOT });
                         }
                         return Ok(true);
-                    }
-                    let index = self.cursor;
-                    let ordinal = u64::try_from(index)
-                        .map_err(|_| ScanError::overflow("merge record ordinal"))?;
-                    self.cursor = self
-                        .cursor
-                        .checked_add(1)
-                        .ok_or_else(|| ScanError::overflow("merge slot cursor"))?;
-                    if let Some(base) = self.slots.take_base(index) {
-                        if let Some(entry) = base.into_entry(self.cluster_size, stats)? {
-                            let is_root = entry.file_ref.record() == ROOT;
-                            self.entries.try_push(entry)?;
-                            self.root_emitted |= is_root;
-                        } else if ordinal == ROOT {
-                            return Err(ScanError::RequiredRecord { record: ROOT });
-                        }
+                    };
+                    let is_root = base.reference.record() == ROOT;
+                    if let Some(entry) = base.into_entry(self.cluster_size, stats)? {
+                        self.entries.try_push(entry)?;
+                        self.root_emitted |= is_root;
+                    } else if is_root {
+                        return Err(ScanError::RequiredRecord { record: ROOT });
                     }
                 }
             }

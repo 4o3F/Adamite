@@ -12,7 +12,7 @@ snafu.workspace = true
 [dev-dependencies]
 adamite-fixtures = { version = "0.1.0", path = "../adamite-fixtures" }
 proptest = { version = "1.12", default-features = false, features = ["std"] }
-serde_json = "1"
+serde_json.workspace = true
 
 [lints]
 workspace = true

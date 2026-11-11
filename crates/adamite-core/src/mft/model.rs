@@ -29,7 +29,7 @@ pub(crate) struct RecordSlot {
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct RecordSlots {
     slots: Vec<RecordSlot>,
-    bases: Vec<Option<RecordContribution>>,
+    bases: Vec<RecordContribution>,
 }
 
 impl RecordSlots {
@@ -64,7 +64,7 @@ impl RecordSlots {
                 .and_then(|index| u32::try_from(index).ok())
                 .and_then(NonZeroU32::new)
                 .ok_or_else(|| ScanError::overflow("base contribution index"))?;
-            self.bases.try_push(Some(base))?;
+            self.bases.try_push(base)?;
             Some(index)
         } else {
             None
@@ -85,17 +85,17 @@ impl RecordSlots {
     }
 
     pub(crate) fn base(&self, ordinal: usize) -> Option<&RecordContribution> {
-        self.bases.get(self.base_index(ordinal)?)?.as_ref()
+        self.bases.get(self.base_index(ordinal)?)
     }
 
     pub(crate) fn base_mut(&mut self, ordinal: usize) -> Option<&mut RecordContribution> {
         let index = self.base_index(ordinal)?;
-        self.bases.get_mut(index)?.as_mut()
+        self.bases.get_mut(index)
     }
 
-    pub(crate) fn take_base(&mut self, ordinal: usize) -> Option<RecordContribution> {
-        let index = self.base_index(ordinal)?;
-        self.bases.get_mut(index)?.take()
+    /// Patches are resolved; ordinal slots are no longer needed during entry conversion.
+    pub(crate) fn into_bases(self) -> std::vec::IntoIter<RecordContribution> {
+        self.bases.into_iter()
     }
 }
 
@@ -201,7 +201,6 @@ mod tests {
             slots.push(RecordKind::Unused, None)?;
             assert!(slots.base(ordinal).is_none());
             assert!(slots.base_mut(ordinal).is_none());
-            assert!(slots.take_base(ordinal).is_none());
         }
         assert_eq!(slots.slots.capacity(), 257);
         assert_eq!(slots.bases.capacity(), 0);
@@ -226,11 +225,11 @@ mod tests {
         slots.push(RecordKind::Base, Some(contribution(6)?))?;
         assert_eq!(slots.bases.len(), 2);
         slots.base_mut(6).ok_or("base 6")?.hard_links = 3;
-        assert_eq!(slots.take_base(5).ok_or("base 5")?.reference.record(), 5);
-        assert!(slots.take_base(5).is_none());
-        let base = slots.take_base(6).ok_or("base 6")?;
+        let mut bases = slots.into_bases();
+        assert_eq!(bases.next().ok_or("base 5")?.reference.record(), 5);
+        let base = bases.next().ok_or("base 6")?;
         assert_eq!((base.reference.record(), base.hard_links), (6, 3));
-        assert!(slots.base(6).is_none());
+        assert!(bases.next().is_none());
         Ok(())
     }
 }

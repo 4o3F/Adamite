@@ -52,7 +52,7 @@ Each milestone ends with one reviewed commit, `deno task check` green and CI gre
 
 ### M3 — Stage overlap
 
-- [ ] Implement D5; add the D3 budget test with budgets from the measured result; report D2 numbers.
+- [x] Implement D5; add the D3 budget test with budgets from the measured result; report D2 numbers.
 
 ### M4 — Self-imposed limits
 
@@ -69,3 +69,4 @@ Each milestone ends with one reviewed commit, `deno task check` green and CI gre
 - [ ] Snapshot contents, the golden `.adm`, corpora and all oracles are unchanged.
 - [ ] `adamite --trace-chrome trace.json scan <source>` writes a trace showing every D2 stage with duration and heap, on Linux images and a Windows drive.
 - [ ] `deno task check` (with the budget test) and CI pass; ARCHITECTURE §5/§7 and READMEs describe the self-imposed limits and profiling.
+

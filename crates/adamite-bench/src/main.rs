@@ -52,6 +52,11 @@ struct Bench {
     trace_chrome: Option<PathBuf>,
     #[arg(long, hide = true)]
     case: Option<u32>,
+    #[arg(long, hide = true)]
+    json: bool,
+    /// Save canonical snapshots for byte comparisons, outside the measured interval.
+    #[arg(long, hide = true)]
+    snapshot_dir: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -111,6 +116,12 @@ impl Bench {
                 let path = self.trace_path(path, used);
                 child.arg("--trace-chrome").arg(path);
             }
+            if self.json {
+                child.arg("--json");
+            }
+            if let Some(path) = &self.snapshot_dir {
+                child.arg("--snapshot-dir").arg(path);
+            }
             let status = child.status()?;
             if !status.success() {
                 return Err(io::Error::other(format!("case {used} failed: {status}")).into());
@@ -139,7 +150,8 @@ impl Bench {
             inner: ImageReader::open(&path)?,
             bytes: 0,
         };
-        let recorder = SpanRecorder::new(&[STAGES.as_slice(), &["bench_case"]].concat());
+        let recorder =
+            SpanRecorder::new(&[STAGES.as_slice(), &["bench_case", "bench_scan"]].concat());
         let profile = if let Some(path) = &self.trace_chrome {
             Some(ChromeProfile::install_with_recorder(
                 path, &ALLOCATOR, &recorder,
@@ -152,8 +164,11 @@ impl Bench {
         };
         let case = tracing::info_span!("bench_case");
         let started = Instant::now();
+        let scan = tracing::info_span!("bench_scan");
         let output = SyncDriver::new(ScanConfig::default())?.run(&mut reader)?;
         let snapshot_heap = ALLOCATOR.current();
+        let nodes = output.snapshot.len();
+        drop(scan);
         let bytes = output.to_bytes()?;
         // Match save followed by load: the original scan output is released before decoding.
         drop(output);
@@ -166,6 +181,25 @@ impl Bench {
             .iter()
             .find(|summary| summary.name == "bench_case")
             .ok_or("missing overall span")?;
+        if let Some(path) = &self.snapshot_dir {
+            fs::create_dir_all(path)?;
+            fs::write(path.join(format!("{used}.adm")), &bytes)?;
+        }
+        if self.json {
+            let scan = Self::stage(&summaries, "bench_scan")?;
+            println!(
+                "{}",
+                serde_json::json!({
+                    "slots": config.slot_count,
+                    "in_use": used,
+                    "nodes": nodes,
+                    "scan_peak_heap_bytes": scan.heap_peak,
+                    "snapshot_heap_bytes": snapshot_heap,
+                })
+            );
+            drop(profile);
+            return Ok(());
+        }
         println!(
             "\n| slots | in-use | MFT bytes | bytes read | elapsed ms | overall peak heap bytes | final snapshot heap bytes |"
         );
@@ -235,6 +269,8 @@ mod tests {
             output_dir: directory.path().to_owned(),
             trace_chrome: None,
             case: None,
+            json: false,
+            snapshot_dir: None,
         };
         let path = bench.image(202)?;
         let modified = fs::metadata(&path)?.modified()?;
@@ -280,6 +316,8 @@ mod tests {
             output_dir: directory.path().to_owned(),
             trace_chrome: None,
             case: None,
+            json: false,
+            snapshot_dir: None,
         };
         let barrier = std::sync::Barrier::new(2);
         let paths = std::thread::scope(|scope| {

@@ -11,7 +11,6 @@ use adamite_ntfs::record::{
     reference::FileRef,
     system::{EXTEND, FIRST_NON_RESERVED, ROOT},
 };
-use std::vec::IntoIter;
 
 /// Maximum graph operations performed before yielding to the caller.
 const ITEMS_PER_STEP: usize = 256;
@@ -34,6 +33,7 @@ enum Stage {
     Cycles,
     Convert,
     Emit,
+    Reorder,
     Done,
 }
 #[derive(Debug)]
@@ -46,7 +46,6 @@ enum CycleWork {
 
 #[derive(Debug)]
 pub(crate) struct Linker {
-    entries: IntoIter<EntryRecord>,
     records: Vec<RecordInfo>,
     sources: Vec<EntryRecord>,
     order: Vec<usize>,
@@ -108,11 +107,17 @@ impl Linker {
 
     pub(crate) fn new(entries: Vec<EntryRecord>) -> Result<Self, ScanError> {
         let mut nodes = Vec::new();
+        let capacity = entries
+            .len()
+            .checked_add(3)
+            .ok_or_else(ScanError::link_overflow)?;
+        nodes.try_reserve_exact(capacity)?;
+        let mut records = Vec::new();
+        records.try_reserve_exact(entries.len())?;
         Self::push_bounded(&mut nodes, ResolvedNode::synthetic())?;
         Ok(Self {
-            entries: entries.into_iter(),
-            records: Vec::new(),
-            sources: Vec::new(),
+            records,
+            sources: entries,
             order: Vec::new(),
             remap: Vec::new(),
             order_record: 0,
@@ -139,7 +144,11 @@ impl Linker {
         self.records.get(index).copied()
     }
 
-    fn prepare(&mut self, mut entry: EntryRecord, stats: &mut ScanStats) -> Result<(), ScanError> {
+    fn prepare(&mut self, stats: &mut ScanStats) -> Result<(), ScanError> {
+        let entry = self
+            .sources
+            .get_mut(self.cursor)
+            .ok_or_else(ScanError::link_overflow)?;
         let ordinal = entry.file_ref.record();
         let index = match self
             .records
@@ -194,10 +203,13 @@ impl Linker {
                 primary,
                 len,
                 metadata: false,
-                source: self.sources.len(),
+                source: self.cursor,
             },
         );
-        Self::push_bounded(&mut self.sources, entry)?;
+        self.cursor = self
+            .cursor
+            .checked_add(1)
+            .ok_or_else(ScanError::link_overflow)?;
         Ok(())
     }
 
@@ -332,6 +344,10 @@ impl Linker {
         match self.cycle_work {
             CycleWork::Start => {
                 if self.cursor == self.marks.len() {
+                    self.marks = Vec::new();
+                    self.positions = Vec::new();
+                    self.path = Vec::new();
+                    self.order.try_reserve_exact(self.nodes.len())?;
                     self.remap.try_reserve_exact(self.nodes.len())?;
                     self.remap.resize(self.nodes.len(), 0);
                     self.stage = Stage::Convert;
@@ -552,7 +568,10 @@ impl Linker {
                 .ok_or_else(ScanError::link_overflow)?,
         )
         .map_err(|_| ScanError::link_overflow())?;
-        Self::push_bounded(&mut self.result.nodes, node)?;
+        *self
+            .nodes
+            .get_mut(old)
+            .ok_or_else(ScanError::link_overflow)? = node;
         self.cursor = self
             .cursor
             .checked_add(1)
@@ -564,8 +583,8 @@ impl Linker {
         for _ in 0..ITEMS_PER_STEP {
             match self.stage {
                 Stage::Prepare => {
-                    if let Some(entry) = self.entries.next() {
-                        self.prepare(entry, stats)?;
+                    if self.cursor < self.sources.len() {
+                        self.prepare(stats)?;
                     } else {
                         if !self.root_seen {
                             return Err(ScanError::RequiredRecord { record: ROOT });
@@ -611,8 +630,36 @@ impl Linker {
                         self.emit(stats)?;
                     } else {
                         self.sources = Vec::new();
+                        self.order = Vec::new();
+                        self.stage = Stage::Reorder;
+                        self.cursor = 0;
+                    }
+                }
+                Stage::Reorder => {
+                    // All parents now use final ids; reuse the old-to-new map for in-place swaps.
+                    if self.cursor == self.nodes.len() {
+                        self.result.nodes = std::mem::take(&mut self.nodes);
                         self.stage = Stage::Done;
                         return Ok(true);
+                    }
+                    let destination = usize::try_from(
+                        *self
+                            .remap
+                            .get(self.cursor)
+                            .ok_or_else(ScanError::link_overflow)?,
+                    )
+                    .map_err(|_| ScanError::link_overflow())?;
+                    if destination == self.cursor {
+                        self.cursor = self
+                            .cursor
+                            .checked_add(1)
+                            .ok_or_else(ScanError::link_overflow)?;
+                    } else {
+                        if destination >= self.nodes.len() || destination >= self.remap.len() {
+                            return Err(ScanError::link("node permutation outside arena"));
+                        }
+                        self.nodes.swap(self.cursor, destination);
+                        self.remap.swap(self.cursor, destination);
                     }
                 }
                 Stage::Done => return Ok(true),
