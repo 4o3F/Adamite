@@ -1,5 +1,6 @@
-use super::VolumeReader;
+use super::{VolumeReader, scan_clock::ScanClock};
 use crate::error::VolumeError;
+use adamite_core::scan::ScanContext;
 use std::{fs::File, io, path::Path};
 
 #[cfg(unix)]
@@ -33,6 +34,20 @@ impl ImageReader {
             })?
             .len();
         Ok(Self { file, len })
+    }
+
+    /// Returns the current scan timestamp with no volume label or free-space information.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VolumeError::Overflow`] when the clock cannot be represented as FILETIME ticks.
+    pub fn context(&self) -> Result<ScanContext, VolumeError> {
+        let scanned_at_filetime = ScanClock::now_filetime()?;
+        Ok(ScanContext {
+            label: None,
+            scanned_at_filetime: Some(scanned_at_filetime),
+            free_bytes: None,
+        })
     }
 }
 

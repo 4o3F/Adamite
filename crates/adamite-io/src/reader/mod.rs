@@ -1,6 +1,7 @@
 //! Exact positional reads from a source of known length.
 
 mod image;
+mod scan_clock;
 mod slice;
 #[cfg(windows)]
 mod windows;

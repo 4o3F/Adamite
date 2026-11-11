@@ -4,7 +4,7 @@
 //!
 //! Sources start at volume byte zero. The caller supplies scan configuration and optional context.
 //!
-//! On Windows, `RawVolumeReader::context()` queries the label, free bytes and scan timestamp. See the [crate README](https://github.com/4o3F/Adamite/blob/main/crates/adamite-io/README.md) for elevation, alignment, unsafe policy and development commands.
+//! [`reader::ImageReader::context()`] supplies the current scan timestamp with no label or free bytes. On Windows, `RawVolumeReader::context()` queries the label, free bytes and scan timestamp. See the [crate README](https://github.com/4o3F/Adamite/blob/main/crates/adamite-io/README.md) for elevation, alignment, unsafe policy and development commands.
 //!
 //! # Examples
 //!

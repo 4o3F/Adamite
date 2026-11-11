@@ -1,6 +1,6 @@
 mod ffi;
 
-use super::VolumeReader;
+use super::{VolumeReader, scan_clock::ScanClock};
 use crate::{
     align::{AlignedBuf, Span},
     error::VolumeError,
@@ -10,7 +10,6 @@ use std::{
     fs::{File, OpenOptions},
     os::windows::fs::{FileExt, OpenOptionsExt},
     path::PathBuf,
-    time::SystemTime,
 };
 use windows::Win32::{
     Foundation::ERROR_ACCESS_DENIED,
@@ -108,11 +107,7 @@ impl RawVolumeReader {
                 operation: "volume free bytes",
                 source,
             })?;
-        let scanned_at_filetime = nt_time::FileTime::try_from(SystemTime::now())
-            .map_err(|_| VolumeError::Overflow {
-                operation: "scan timestamp as FILETIME",
-            })?
-            .to_raw();
+        let scanned_at_filetime = ScanClock::now_filetime()?;
         Ok(ScanContext {
             label: (!label.is_empty()).then_some(label),
             scanned_at_filetime: Some(scanned_at_filetime),

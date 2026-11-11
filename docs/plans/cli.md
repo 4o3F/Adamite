@@ -103,7 +103,7 @@ Each milestone ends with one reviewed commit and `deno task check` green. A mile
 
 ### C1 — Image scan timestamp
 
-- [ ] Add `ImageReader::context()` per D9 with tests (timestamp present, no label or free bytes); move `nt-time` to all targets.
+- [x] Add `ImageReader::context()` per D9 with tests (timestamp present, no label or free bytes); move `nt-time` to all targets.
 
 ### C2 — CLI skeleton, sources and info
 

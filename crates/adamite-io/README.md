@@ -28,7 +28,10 @@ use std::{error::Error, path::Path};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let mut reader = ImageReader::open(Path::new("target/basic-4k.img"))?;
-    let driver = SyncDriver::new(ScanConfig::default())?;
+    let driver = SyncDriver::new(ScanConfig {
+        context: reader.context()?,
+        ..ScanConfig::default()
+    })?;
     let output = driver.run(&mut reader)?;
     println!("{:?}", output.stats);
     println!("{:?}", output.snapshot.volume());
@@ -38,7 +41,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 Sources start at volume byte zero. Decompress fixture images before opening them; partitioned disks and VHD/VHDX containers require extraction of the volume image first. `ImageReader` caches the opened file's length, retries interrupted reads and completes partial reads; truncation after opening returns `ShortRead`.
 
-`ScanConfig::default()` selects one outstanding request and 1 MiB chunks. The driver validates configuration at construction and starts a fresh scanner on each `run`. Increasing `max_outstanding` batches logical requests; native reads remain synchronous with depth 1. The driver reuses its response buffer within a run. The caller supplies optional `ScanContext`; on Windows, obtain it through `RawVolumeReader::context()` before constructing the driver.
+`ScanConfig::default()` selects one outstanding request and 1 MiB chunks. The driver validates configuration at construction and starts a fresh scanner on each `run`. Increasing `max_outstanding` batches logical requests; native reads remain synchronous with depth 1. The driver reuses its response buffer within a run. The caller supplies optional `ScanContext` before constructing the driver. `ImageReader::context()` supplies the current FILETIME scan timestamp, with `label` and `free_bytes` set to `None`; it returns `VolumeError::Overflow` if the clock cannot be converted. On Windows, `RawVolumeReader::context()` also supplies the volume label and free bytes.
 
 The [scan example](examples/scan.rs) prints `ScanStats`, `VolumeInfo` and up to ten root children in descending subtree allocation order. Child output includes names, allocated bytes and logical bytes. Errors print their complete source chain.
 
