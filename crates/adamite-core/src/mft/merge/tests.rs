@@ -122,8 +122,14 @@ fn nonresident(
     let attr = record.attributes().next().ok_or("test attribute")??;
     let segment = attr.non_resident().ok_or("test segment")?;
     let mut run_count = 0u64;
+    let mut mapped_clusters = 0u64;
     for run in segment.runs() {
-        run?;
+        let run = run?;
+        if run.lcn().is_some() {
+            mapped_clusters = mapped_clusters
+                .checked_add(run.length())
+                .ok_or("mapped clusters")?;
+        }
         run_count.try_bump().map_err(ScanError::from)?;
     }
     Ok(StreamSegment {
@@ -138,6 +144,7 @@ fn nonresident(
             compression_unit: segment.compression_unit(),
             sizes: segment.sizes(),
             run_count,
+            mapped_clusters,
         },
     })
 }
@@ -317,6 +324,132 @@ fn merge_overlap_gap_missing_first_and_truncated_coverage_discard_stream() -> Te
 }
 
 #[test]
+fn merge_unflagged_allocation_counts_mapped_runs_and_ignores_header_allocation() -> TestResult {
+    for allocated in [512, 8192] {
+        let mut base = contribution(6);
+        let descriptor = NonResidentModel {
+            mapping_pairs: RunlistEncoder {
+                runs: vec![
+                    RunModel {
+                        lcn: Some(0),
+                        len: 2,
+                    },
+                    RunModel { lcn: None, len: 3 },
+                    RunModel {
+                        lcn: Some(100),
+                        len: 1,
+                    },
+                ],
+            }
+            .encode(0),
+            ..model(0, 5, [allocated, 100, 50, 0])
+        };
+        base.streams.push(nonresident(6, 0, descriptor, 0)?);
+        let (entries, stats) = finish(slots(base)?, vec![])?;
+        let entry = find(&entries, 6)?;
+        assert_eq!(
+            (entry.size, entry.alloc),
+            (100, 1536),
+            "header allocated {allocated}"
+        );
+        assert_eq!(stats.corrupt_streams, 0);
+    }
+    Ok(())
+}
+
+#[test]
+fn merge_unflagged_hole_only_and_empty_streams_allocate_zero() -> TestResult {
+    for descriptor in [
+        NonResidentModel {
+            mapping_pairs: RunlistEncoder {
+                runs: vec![RunModel { lcn: None, len: 8 }],
+            }
+            .encode(0),
+            ..model(0, 7, [4096, 4096, 0, 0])
+        },
+        model(0, -1, [0; 4]),
+    ] {
+        let size = u64::try_from(descriptor.sizes[1])?;
+        let mut base = contribution(6);
+        base.streams.push(nonresident(6, 0, descriptor, 0)?);
+        let (entries, stats) = finish(slots(base)?, vec![])?;
+        assert_eq!(
+            (find(&entries, 6)?.size, find(&entries, 6)?.alloc),
+            (size, 0)
+        );
+        assert_eq!(stats.corrupt_streams, 0);
+    }
+    Ok(())
+}
+
+#[test]
+fn merge_multiextent_holes_with_extension_segment_before_base() -> TestResult {
+    let first = NonResidentModel {
+        mapping_pairs: RunlistEncoder {
+            runs: vec![
+                RunModel {
+                    lcn: Some(0),
+                    len: 1,
+                },
+                RunModel { lcn: None, len: 2 },
+            ],
+        }
+        .encode(0),
+        ..model(0, 2, [4096, 3072, 0, 0])
+    };
+    let second = NonResidentModel {
+        mapping_pairs: RunlistEncoder {
+            runs: vec![
+                RunModel { lcn: None, len: 1 },
+                RunModel {
+                    lcn: Some(100),
+                    len: 2,
+                },
+            ],
+        }
+        .encode(0),
+        ..model(3, 5, [-1; 4])
+    };
+    let mut base = contribution(6);
+    // Deliberately put the continuation first in the unsorted stream list.
+    base.streams.push(nonresident(1, 9, second, 0)?);
+    base.streams.push(nonresident(6, 0, first, 0)?);
+    let (entries, stats) = finish(slots(base)?, vec![])?;
+    assert_eq!(
+        (find(&entries, 6)?.size, find(&entries, 6)?.alloc),
+        (3072, 1536)
+    );
+    assert_eq!(stats.corrupt_streams, 0);
+    Ok(())
+}
+
+#[test]
+fn merge_compressed_padding_runs_keep_compressed_header_allocation() -> TestResult {
+    let descriptor = NonResidentModel {
+        compression_unit: 4,
+        mapping_pairs: RunlistEncoder {
+            runs: vec![
+                RunModel {
+                    lcn: Some(100),
+                    len: 3,
+                },
+                RunModel { lcn: None, len: 13 },
+            ],
+        }
+        .encode(0),
+        ..model(0, 15, [8192, 8000, 8000, 1536])
+    };
+    let mut base = contribution(6);
+    base.streams.push(nonresident(6, 0, descriptor, 1)?);
+    let (entries, stats) = finish(slots(base)?, vec![])?;
+    let entry = find(&entries, 6)?;
+    assert_eq!((entry.size, entry.alloc), (8000, 1536));
+    assert!(entry.flags.contains(NodeFlags::COMPRESSED));
+    assert_eq!(stats.corrupt_streams, 0);
+    Ok(())
+}
+
+#[test]
 fn merge_sparse_and_compressed_use_first_segment_compressed_size() -> TestResult {
     for flags in [0x8000, 1] {
         let mut base = contribution(6);
@@ -455,14 +588,32 @@ fn merge_conflicting_si_and_corrupt_root_are_fatal_or_discarded() -> TestResult 
 #[test]
 fn merge_allocation_overflow_is_fatal() -> TestResult {
     let mut base = contribution(6);
-    for id in 0..3 {
-        let mut segment = nonresident(6, id, model(0, 0, [i64::MAX, 1, 1, 0]), 0)?;
+    let clusters = 1i64 << 55;
+    base.streams.push(nonresident(
+        6,
+        0,
+        model(0, clusters - 1, [512, 1, 1, 0]),
+        0,
+    )?);
+    assert!(matches!(
+        finish(slots(base)?, vec![]),
+        Err(ScanError::Overflow {
+            operation: "merged stream mapped bytes"
+        })
+    ));
+
+    let mut base = contribution(6);
+    let clusters = 1i64 << 54;
+    for id in 0..2 {
+        let mut segment = nonresident(6, id, model(0, clusters - 1, [512, 1, 1, 0]), 0)?;
         segment.name = vec![id];
         base.streams.push(segment);
     }
     assert!(matches!(
         finish(slots(base)?, vec![]),
-        Err(ScanError::Overflow { .. })
+        Err(ScanError::Overflow {
+            operation: "entry allocation"
+        })
     ));
     Ok(())
 }

@@ -52,6 +52,7 @@ pub(crate) enum StreamStorage {
         compression_unit: u8,
         sizes: Option<StreamSizes>,
         run_count: u64,
+        mapped_clusters: u64,
     },
 }
 

@@ -560,15 +560,15 @@ fn basic_query_text_has_aligned_columns_and_directory_markers() -> TestResult {
     let case = Case::new("query-text", "basic-4k")?;
     let top = concat!(
         "        Size        Alloc Path\n",
-        "         0 B     16.0 MiB /<NTFS metadata>/$BadClus\n",
         "     2.0 MiB      2.0 MiB /<NTFS metadata>/$LogFile\n",
         "   323.0 KiB    336.0 KiB /<NTFS metadata>/$MFT\n",
         "         0 B    260.0 KiB /<NTFS metadata>/$Secure\n",
         "   128.0 KiB    128.0 KiB /<NTFS metadata>/$UpCase\n",
+        "    64.0 KiB     64.0 KiB /medium.bin\n",
     );
     let ext = concat!(
         "        Size        Alloc      Count Extension\n",
-        "     2.5 MiB     18.7 MiB        217 (none)\n",
+        "     2.5 MiB      2.7 MiB        217 (none)\n",
         "     1.1 MiB     72.0 KiB          3 bin\n",
         "   256.2 KiB     52.0 KiB         11 txt\n",
     );
@@ -576,7 +576,7 @@ fn basic_query_text_has_aligned_columns_and_directory_markers() -> TestResult {
     let ls = format!(
         concat!(
             "  Total size  Total alloc      Files Name\n",
-            "     2.5 MiB     18.7 MiB         17 <NTFS metadata>/\n",
+            "     2.5 MiB      2.7 MiB         17 <NTFS metadata>/\n",
             "    64.0 KiB     64.0 KiB          1 medium.bin\n",
             "         0 B     40.0 KiB        200 bigdir/\n",
             "   256.0 KiB     32.0 KiB          1 compressed/\n",
@@ -598,22 +598,22 @@ fn basic_query_text_has_aligned_columns_and_directory_markers() -> TestResult {
     );
     let top_bytes = concat!(
         "                Size                Alloc Path\n",
-        "                   0             16773120 /<NTFS metadata>/$BadClus\n",
         "             2097152              2097152 /<NTFS metadata>/$LogFile\n",
         "              330752               344064 /<NTFS metadata>/$MFT\n",
         "                   0               266240 /<NTFS metadata>/$Secure\n",
         "              131072               131072 /<NTFS metadata>/$UpCase\n",
+        "               65536                65536 /medium.bin\n",
     );
     let ext_bytes = concat!(
         "                Size                Alloc      Count Extension\n",
-        "             2574336             19632128        217 (none)\n",
+        "             2574336              2859008        217 (none)\n",
         "             1114112                73728          3 bin\n",
         "              262350                53248         11 txt\n",
     );
     let ls_bytes = format!(
         concat!(
             "          Total size          Total alloc      Files Name\n",
-            "             2574336             19632128         17 <NTFS metadata>/\n",
+            "             2574336              2859008         17 <NTFS metadata>/\n",
             "               65536                65536          1 medium.bin\n",
             "                   0                40960        200 bigdir/\n",
             "              262144                32768          1 compressed/\n",
@@ -1116,7 +1116,7 @@ fn basic_info_text_has_stable_totals_and_nonzero_counters() -> TestResult {
         "  Nodes                    280\n",
         "  Files                    231\n",
         "  Logical size             3.8 MiB\n",
-        "  Allocated size           18.9 MiB\n",
+        "  Allocated size           2.9 MiB\n",
         "  records_total            323\n",
         "  records_in_use           277\n",
         "  base_records             277\n",
@@ -1139,7 +1139,7 @@ fn basic_info_text_has_stable_totals_and_nonzero_counters() -> TestResult {
         "  Nodes                    280\n",
         "  Files                    231\n",
         "  Logical size             3950798\n",
-        "  Allocated size           19812352\n",
+        "  Allocated size           3039232\n",
         "  records_total            323\n",
         "  records_in_use           277\n",
         "  base_records             277\n",

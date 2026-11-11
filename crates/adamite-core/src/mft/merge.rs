@@ -213,6 +213,7 @@ impl StreamTotals {
             return Err(StreamError::Invalid);
         };
         let mut expected = 0u64;
+        let mut mapped_clusters = 0u64;
         for (index, segment) in segments.iter().enumerate() {
             let StreamStorage::NonResident {
                 lowest_vcn,
@@ -220,6 +221,7 @@ impl StreamTotals {
                 sizes,
                 compression_unit: unit,
                 run_count,
+                mapped_clusters: mapped,
             } = segment.storage
             else {
                 return Err(StreamError::Invalid);
@@ -249,7 +251,13 @@ impl StreamTotals {
                     return Err(StreamError::Invalid);
                 }
             }
+            mapped_clusters = mapped_clusters
+                .checked_add(mapped)
+                .ok_or_else(|| ScanError::overflow("merged stream mapped clusters"))?;
         }
+        let mapped_bytes = mapped_clusters
+            .checked_mul(u64::from(cluster_size))
+            .ok_or_else(|| ScanError::overflow("merged stream mapped bytes"))?;
         let coverage = expected
             .checked_mul(u64::from(cluster_size))
             .ok_or_else(|| ScanError::overflow("merged stream coverage"))?;
@@ -259,7 +267,7 @@ impl StreamTotals {
         let alloc = if sparse || compressed {
             sizes.compressed().ok_or(StreamError::Invalid)?
         } else {
-            sizes.allocated()
+            mapped_bytes
         };
         Ok(StreamTotals {
             logical: sizes.data(),

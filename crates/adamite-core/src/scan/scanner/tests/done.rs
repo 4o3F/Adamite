@@ -3,7 +3,7 @@
 use super::support::{TestResult, drive_to};
 use crate::error::ScanError;
 use crate::scan::{FeedError, RequestId, ScanConfig, ScanPhase, ScanStep, Scanner};
-use adamite_fixtures::Fixture;
+use adamite_fixtures::{Fixture, MappedAllocation, ReferenceMft};
 use std::error::Error;
 use std::path::Path;
 
@@ -46,6 +46,7 @@ fn aggregation_fixture(name: &str) -> TestResult {
         step => return Err(format!("expected Done, received {step:?}").into()),
     };
     let manifest = fixture.manifest();
+    let allocation = MappedAllocation::from_reference(&ReferenceMft::from_fixture(&fixture)?)?;
     // Each base record appears once in the oracle sum, regardless of its hard-link paths.
     let unique: std::collections::BTreeMap<_, _> = manifest
         .entries
@@ -63,16 +64,9 @@ fn aggregation_fixture(name: &str) -> TestResult {
                     .checked_add(stream.size)
                     .ok_or("manifest logical total")?;
             }
-            if !stream.resident {
-                alloc = alloc
-                    .checked_add(
-                        stream
-                            .compressed_size
-                            .or(stream.allocated_size)
-                            .ok_or("manifest allocation")?,
-                    )
-                    .ok_or("manifest allocation total")?;
-            }
+            alloc = alloc
+                .checked_add(allocation.expected_stream_bytes(expected.record, stream)?)
+                .ok_or("manifest allocation total")?;
         }
         if !matches!(expected.kind, adamite_fixtures::EntryKind::Directory)
             && expected.attributes & 0x10 == 0

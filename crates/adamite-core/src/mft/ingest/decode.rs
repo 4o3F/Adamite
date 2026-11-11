@@ -128,10 +128,16 @@ impl RecordContribution {
             {
                 let storage = if let Some(segment) = attribute.non_resident() {
                     let mut run_count = 0u64;
+                    let mut mapped_clusters = 0u64;
                     for run in segment.runs() {
                         let run = run.map_err(|_| DecodeError::Runlist)?;
                         run.validate_geometry(&geometry)
                             .map_err(|_| DecodeError::Extent)?;
+                        if run.lcn().is_some() {
+                            mapped_clusters = mapped_clusters
+                                .checked_add(run.length())
+                                .ok_or_else(|| ScanError::overflow("stream mapped clusters"))?;
+                        }
                         run_count.try_bump().map_err(ScanError::from)?;
                     }
                     StreamStorage::NonResident {
@@ -140,6 +146,7 @@ impl RecordContribution {
                         compression_unit: segment.compression_unit(),
                         sizes: segment.sizes(),
                         run_count,
+                        mapped_clusters,
                     }
                 } else {
                     let value = attribute

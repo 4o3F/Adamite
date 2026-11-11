@@ -43,7 +43,7 @@ Each milestone ends with one reviewed commit and `deno task check` green; each C
 
 ### S2 — Count mapped clusters in core
 
-- [ ] Implement D1/D2; migrate the core oracles to the S1 reference; add the D5 merge and fixture tests; update CLI and TUI expectations (D4/D5) in the same commit so the gate stays green.
+- [x] Implement D1/D2; migrate the core oracles to the S1 reference; add the D5 merge and fixture tests; update CLI and TUI expectations (D4/D5) in the same commit so the gate stays green.
 
 ### S3 — Persist seeds and documentation
 

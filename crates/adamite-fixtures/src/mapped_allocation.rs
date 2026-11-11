@@ -1,7 +1,7 @@
 //! Independent mapped-run allocation totals for reconstructed fixture streams.
 
 use crate::fixture::{AddressSnafu, AttributeSnafu, InvalidSnafu, RunlistSnafu};
-use crate::{FixtureError, ReferenceMft};
+use crate::{FixtureError, ReferenceMft, Stream};
 use adamite_ntfs::{
     boot::VolumeGeometry,
     record::{FileRecord, RecordClass},
@@ -84,6 +84,33 @@ impl MappedAllocation {
             .get(&(base_record, attribute_type))?
             .get(name)
             .copied()
+    }
+
+    /// Computes expected allocation using manifest storage flags and independently mapped bytes.
+    ///
+    /// Resident streams occupy zero clusters. Sparse or compressed streams use the manifest's compressed size; ordinary non-resident streams use [`Self::stream_bytes`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FixtureError`] if a flagged stream lacks its compressed size or an ordinary non-resident stream is absent from the reference.
+    pub fn expected_stream_bytes(
+        &self,
+        base_record: u64,
+        stream: &Stream,
+    ) -> Result<u64, FixtureError> {
+        if stream.resident {
+            return Ok(0);
+        }
+        if stream.sparse || stream.compressed {
+            stream.compressed_size.context(InvalidSnafu {
+                message: "flagged manifest stream has no compressed size",
+            })
+        } else {
+            self.stream_bytes(base_record, stream.attribute_type, &stream.name)
+                .context(InvalidSnafu {
+                    message: "manifest stream missing from mapped allocation reference",
+                })
+        }
     }
 
     fn add_record(

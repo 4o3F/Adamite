@@ -4,8 +4,8 @@ use super::support::{DriverOutcome, TestResult, drive_to, ingest_volume, named_r
 use crate::graph::entry::EntryRecord;
 use crate::scan::{ScanConfig, ScanPhase, Scanner};
 use crate::snapshot::NodeFlags;
-use adamite_fixtures::Fixture;
 use adamite_fixtures::builders::{AttrBuilder, NonResidentModel, RecordBuilder};
+use adamite_fixtures::{Fixture, MappedAllocation, ReferenceMft};
 use std::error::Error;
 use std::path::Path;
 
@@ -38,16 +38,19 @@ fn merge_driver_extension_before_base_ignores_cached_filename_sizes() -> TestRes
     let first = AttrBuilder::non_resident(
         0x80,
         NonResidentModel {
-            sizes: [1024, 1024, 1024, 0],
+            highest: 1,
+            sizes: [4096, 2048, 1024, 0],
+            mapping_pairs: vec![0x11, 1, 0, 0x01, 1, 0],
             ..NonResidentModel::default()
         },
     );
     let mut continuation = AttrBuilder::non_resident(
         0x80,
         NonResidentModel {
-            lowest: 1,
-            highest: 1,
+            lowest: 2,
+            highest: 3,
             sizes: [-1; 4],
+            mapping_pairs: vec![0x01, 1, 0x11, 1, 4, 0],
             ..NonResidentModel::default()
         },
     );
@@ -64,7 +67,7 @@ fn merge_driver_extension_before_base_ignores_cached_filename_sizes() -> TestRes
     let (scanner, _, outcome) = merge_image(&volume, 4, 512)?;
     outcome?;
     let entry = merged_entry(&scanner, 6)?;
-    assert_eq!((entry.size, entry.ads_size, entry.alloc), (1024, 0, 1024));
+    assert_eq!((entry.size, entry.ads_size, entry.alloc), (2048, 0, 1024));
     assert_eq!(entry.nlink, 2);
     assert_eq!(entry.names.len(), 2);
     assert!(entry.names.iter().any(|name| name.name == vec![66]));
@@ -87,6 +90,7 @@ fn merge_fixture(name: &str) -> TestResult {
     let (scanner, _, outcome) = merge_image(fixture.image(), 4, 512)?;
     outcome?;
     let manifest = fixture.manifest();
+    let allocation = MappedAllocation::from_reference(&ReferenceMft::from_fixture(&fixture)?)?;
     let mut expected_records = std::collections::BTreeSet::new();
     for expected in manifest.entries.iter().chain(&manifest.metafiles) {
         expected_records.insert(expected.record);
@@ -104,15 +108,9 @@ fn merge_fixture(name: &str) -> TestResult {
                         .ok_or("manifest ADS total")?;
                 }
             }
-            if !stream.resident {
-                let measured = stream
-                    .compressed_size
-                    .or(stream.allocated_size)
-                    .ok_or("v3 stream allocation")?;
-                alloc = alloc
-                    .checked_add(measured)
-                    .ok_or("manifest allocation total")?;
-            }
+            alloc = alloc
+                .checked_add(allocation.expected_stream_bytes(expected.record, stream)?)
+                .ok_or("manifest allocation total")?;
         }
         assert_eq!(
             (actual.size, actual.ads_size, actual.alloc),

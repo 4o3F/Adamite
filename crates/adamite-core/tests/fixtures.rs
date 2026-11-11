@@ -5,7 +5,7 @@ use adamite_core::{
     scan::{FeedError, ReadRequest, RequestId, ScanConfig, ScanOutput, ScanStep, Scanner},
     snapshot::{NodeFlags, NodeId, NodeView, Snapshot},
 };
-use adamite_fixtures::{Entry, EntryKind, Fixture, Manifest, Name};
+use adamite_fixtures::{Entry, EntryKind, Fixture, Manifest, MappedAllocation, Name, ReferenceMft};
 use std::{
     collections::{BTreeMap, BTreeSet},
     error::Error,
@@ -135,7 +135,7 @@ impl Totals {
         self.files += other.files;
     }
 }
-fn measurements(entry: &Entry) -> TestResult<Sizes> {
+fn measurements(entry: &Entry, allocation: &MappedAllocation) -> TestResult<Sizes> {
     let mut result = Sizes::default();
     let mut unnamed = 0;
     for stream in &entry.streams {
@@ -147,12 +147,7 @@ fn measurements(entry: &Entry) -> TestResult<Sizes> {
                 result.ads += stream.size;
             }
         }
-        if !stream.resident {
-            result.alloc += stream
-                .compressed_size
-                .or(stream.allocated_size)
-                .ok_or("missing v3 allocation")?;
-        }
+        result.alloc += allocation.expected_stream_bytes(entry.record, stream)?;
     }
     assert!(
         unnamed <= 1,
@@ -267,7 +262,10 @@ struct Oracle<'a> {
     rows: BTreeMap<String, Expected<'a>>,
     totals: BTreeMap<String, Totals>,
 }
-fn explicit_rows(manifest: &Manifest) -> TestResult<BTreeMap<String, Expected<'_>>> {
+fn explicit_rows<'a>(
+    manifest: &'a Manifest,
+    allocation: &MappedAllocation,
+) -> TestResult<BTreeMap<String, Expected<'a>>> {
     let mut records = BTreeMap::<u64, (&Entry, bool)>::new();
     for entry in &manifest.entries {
         if let Some((previous, _)) = records.get(&entry.record) {
@@ -290,7 +288,10 @@ fn explicit_rows(manifest: &Manifest) -> TestResult<BTreeMap<String, Expected<'_
                 ),
                 "shared inode metadata must agree for all manifest hard-link paths"
             );
-            assert_eq!(measurements(previous)?, measurements(entry)?);
+            assert_eq!(
+                measurements(previous, allocation)?,
+                measurements(entry, allocation)?
+            );
             assert_eq!(name_keys(previous), name_keys(entry));
             assert_eq!(
                 (
@@ -350,7 +351,7 @@ fn explicit_rows(manifest: &Manifest) -> TestResult<BTreeMap<String, Expected<'_
             reference: Some((link.entry.record, link.entry.seq)),
             parent: parent_path(&path)?.into(),
             name: link.name.clone(),
-            sizes: measurements(link.entry)?,
+            sizes: measurements(link.entry, allocation)?,
             directory: directory(link.entry),
             duplicate: link.duplicate,
             synthetic: false,
@@ -500,10 +501,11 @@ fn add_ancestors(
 impl<'a> Oracle<'a> {
     fn new(
         manifest: &'a Manifest,
+        allocation: &MappedAllocation,
         snapshot: &Snapshot,
         paths: &BTreeMap<String, NodeId>,
     ) -> TestResult<Self> {
-        let mut rows = explicit_rows(manifest)?;
+        let mut rows = explicit_rows(manifest, allocation)?;
         add_fill(manifest, snapshot, paths, &mut rows)?;
         let mut totals: BTreeMap<_, _> = rows
             .iter()
@@ -1146,7 +1148,7 @@ fn same_snapshot(left: &Snapshot, right: &Snapshot) -> TestResult {
     Ok(())
 }
 
-fn fixture_suite(name: &str) -> TestResult {
+fn fixture_suite(name: &str, expected_root_alloc: u64) -> TestResult {
     let fixture = Fixture::load(
         &Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../tests/fixtures/ntfs")
@@ -1155,7 +1157,39 @@ fn fixture_suite(name: &str) -> TestResult {
     assert_eq!(fixture.manifest().schema_version, 3);
     let baseline = scan(fixture.image(), ScanConfig::default(), Arrival::Issued)?;
     let actual_paths = paths(&baseline.output.snapshot)?;
-    let oracle = Oracle::new(fixture.manifest(), &baseline.output.snapshot, &actual_paths)?;
+    let snapshot = &baseline.output.snapshot;
+    let root = node(snapshot, NodeId::ROOT)?;
+    assert_eq!(
+        root.total_alloc(),
+        expected_root_alloc,
+        "{name}: root allocation"
+    );
+    assert!(
+        root.total_alloc() <= snapshot.volume().geometry().total_bytes(),
+        "{name}: root exceeds volume"
+    );
+    let badclus: Vec<_> = actual_paths
+        .values()
+        .filter_map(|&id| snapshot.node(id))
+        .filter(|node| {
+            node.file_ref()
+                .is_some_and(|reference| reference.record() == 8)
+        })
+        .collect();
+    assert_eq!(badclus.len(), 1, "{name}: $BadClus node count");
+    assert_eq!(
+        badclus.first().ok_or("$BadClus node")?.alloc(),
+        0,
+        "{name}: $BadClus allocation"
+    );
+
+    let allocation = MappedAllocation::from_reference(&ReferenceMft::from_fixture(&fixture)?)?;
+    let oracle = Oracle::new(
+        fixture.manifest(),
+        &allocation,
+        &baseline.output.snapshot,
+        &actual_paths,
+    )?;
     compare_rows(
         &oracle,
         fixture.manifest(),
@@ -1198,13 +1232,13 @@ fn fixture_suite(name: &str) -> TestResult {
 
 #[test]
 fn fixtures_basic_4k_public_oracle() -> TestResult {
-    fixture_suite("basic-4k")
+    fixture_suite("basic-4k", 3_039_232)
 }
 #[test]
 fn fixtures_fragmented_512_public_oracle() -> TestResult {
-    fixture_suite("frag-512")
+    fixture_suite("frag-512", 31_450_112)
 }
 #[test]
 fn fixtures_native_4kn_64k_public_oracle() -> TestResult {
-    fixture_suite("4kn-64k")
+    fixture_suite("4kn-64k", 3_538_944)
 }

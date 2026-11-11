@@ -263,7 +263,7 @@ fn basic_tree_renders_totals_and_only_visible_rows() -> TestResult {
     assert!(text.contains("Allocated"), "{text}");
     assert!(text.contains("Share of parent"), "{text}");
     assert!(text.contains("<NTFS metadata>/"), "{text}");
-    assert!(text.contains("18.7 MiB"), "{text}");
+    assert!(text.contains("2.7 MiB"), "{text}");
     assert!(text.contains('‰') && text.contains('█'), "{text}");
     let metadata_row = Case::lines(&backend)
         .iter()
