@@ -260,6 +260,8 @@ mod tests {
         );
         let bytes = output.to_bytes()?;
         assert_eq!(ScanOutput::from_bytes(&bytes)?, output);
+        // Windows cannot replace a file that is still open.
+        drop(reader);
         // A truncated cache must be rebuilt rather than reused.
         fs::OpenOptions::new()
             .write(true)
