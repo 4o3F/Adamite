@@ -293,3 +293,5 @@ fn snapshot_deterministic_ids_under_shuffled_input() -> TestResult {
     }
     Ok(())
 }
+
+mod query;

@@ -1,10 +1,9 @@
 //! Bounded child sorting, top-file selection and extension summary ordering.
 
-use crate::snapshot::rules::{Extension, Metric, Ranking};
+use crate::snapshot::rules::{Extension, Metric, Ranking, TOP_FILES};
 use crate::snapshot::{
-    ExtensionStat, NodeFlags, NodeId, Snapshot, SnapshotError, storage::SnapshotStorage,
+    NodeFlags, NodeId, Snapshot, SnapshotError, indexes::ExtensionGroups, storage::SnapshotStorage,
 };
-use std::{cmp::Reverse, collections::BinaryHeap, vec::IntoIter};
 
 /// Maximum nodes or extension groups per call; each directory sort yields immediately.
 const ITEMS_PER_STEP: usize = 256;
@@ -18,20 +17,11 @@ enum Stage {
     HeapDrain,
     Done,
 }
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct RankedExtension {
-    alloc: u64,
-    extension: Reverse<String>,
-    count: u64,
-    size: u64,
-}
 #[derive(Debug, Default)]
 pub(crate) struct Finalizer {
     stage: Stage,
     cursor: usize,
-    groups: Vec<ExtensionStat>,
-    pending: IntoIter<ExtensionStat>,
-    heap: BinaryHeap<RankedExtension>,
+    groups: ExtensionGroups,
 }
 
 impl Finalizer {
@@ -75,9 +65,8 @@ impl Finalizer {
     fn collect(&mut self, data: &mut SnapshotStorage) -> Result<(), SnapshotError> {
         let Some(node) = data.nodes.get(self.cursor) else {
             let count = self.groups.len();
-            self.heap.try_reserve_exact(count)?;
             data.ext_stats.try_reserve_exact(count)?;
-            self.pending = std::mem::take(&mut self.groups).into_iter();
+            self.groups.prepare_ordering()?;
             self.stage = Stage::HeapBuild;
             return Ok(());
         };
@@ -96,51 +85,13 @@ impl Finalizer {
             names: &data.names,
             refs: &data.file_refs,
         };
-        ranking.select_top(&mut data.top_files, id)?;
+        ranking.select_top(&mut data.top_files, id, TOP_FILES)?;
         let suffix = Extension::from_name(
             ranking
                 .name(id)
                 .ok_or_else(|| SnapshotError::invalid("missing file name"))?,
         );
-        let group = self
-            .groups
-            .binary_search_by(|group| suffix.compare_folded(&group.extension));
-        match group {
-            Ok(position) => {
-                let group = self
-                    .groups
-                    .get_mut(position)
-                    .ok_or_else(|| SnapshotError::invalid("missing extension group"))?;
-                let count = group
-                    .count
-                    .checked_add(1)
-                    .ok_or_else(|| SnapshotError::overflow("extension count"))?;
-                let size = group
-                    .total_size
-                    .checked_add(node.size)
-                    .ok_or_else(|| SnapshotError::overflow("extension logical bytes"))?;
-                let alloc = group
-                    .total_alloc
-                    .checked_add(node.alloc)
-                    .ok_or_else(|| SnapshotError::overflow("extension allocation"))?;
-                group.count = count;
-                group.total_size = size;
-                group.total_alloc = alloc;
-            }
-            Err(position) => {
-                let key = suffix.folded()?;
-                self.groups.try_reserve(1)?;
-                self.groups.insert(
-                    position,
-                    ExtensionStat {
-                        extension: key,
-                        count: 1,
-                        total_size: node.size,
-                        total_alloc: node.alloc,
-                    },
-                );
-            }
-        }
+        self.groups.add(suffix, node.size, node.alloc)?;
         Ok(())
     }
 
@@ -154,26 +105,13 @@ impl Finalizer {
                 }
                 Stage::Collect => self.collect(snapshot.data_mut())?,
                 Stage::HeapBuild => {
-                    if let Some(group) = self.pending.next() {
-                        self.heap.push(RankedExtension {
-                            alloc: group.total_alloc,
-                            extension: Reverse(group.extension),
-                            count: group.count,
-                            size: group.total_size,
-                        });
-                    } else {
-                        self.pending = Vec::new().into_iter();
+                    if !self.groups.build_next() {
                         self.stage = Stage::HeapDrain;
                     }
                 }
                 Stage::HeapDrain => {
-                    if let Some(group) = self.heap.pop() {
-                        snapshot.data_mut().ext_stats.push(ExtensionStat {
-                            extension: group.extension.0,
-                            count: group.count,
-                            total_size: group.size,
-                            total_alloc: group.alloc,
-                        });
+                    if let Some(group) = self.groups.pop_ordered() {
+                        snapshot.data_mut().ext_stats.push(group);
                     } else {
                         self.stage = Stage::Done;
                         return Ok(true);

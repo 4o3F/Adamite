@@ -15,7 +15,7 @@ src/
   snapshot/         immutable nodes, pooled names, indexes, volume and errors
     build/          private input, builder, aggregation and finalization passes
     persist/        private canonical .adm v1 encoder, decoder and validation
-    rules.rs        private ranking and extension rules shared by build/persist
+    rules.rs        private ranking and extension rules shared by build/persist/query
   error.rs          fatal ScanError and explicit domain constructors
   util.rs           private fallible collection and checked-counter traits
 ```
@@ -47,6 +47,10 @@ The [crate docs](src/lib.rs) contain a runnable in-memory driver loop. Bootstrap
 
 Self logical size is unnamed DATA; ADS logical bytes are separate. Allocation includes every non-resident stream: ordinary streams use mapped clusters across all segments × cluster size, including preallocation; sparse/compressed flagged streams use first-segment `compressed_size`. Resident allocation is zero. Holes without an LCN, such as `$BadClus:$Bad`, contribute nothing. Primary links alone contribute to ancestors and file indexes. Output is deterministic across chunk sizes, caps and response orders; final name comparisons use UTF-16 re-encoding of pooled text.
 
+`rank_files(under, &FileFilter, n)` ranks matching primary files within a subtree, including files beyond the stored top 100. `FileFilter::extensions` accepts alternative suffixes, drops one leading dot and lowercases ASCII letters; `""` matches names without a usable extension. `FileFilter::Kind` uses these category names: `video`, `audio`, `image`, `archive`, `disk-image`, `document`, `code`, `executable`, `other`. `FileKind::ALL`, `name()` and string parsing expose these names. The common extension table assigns `ts` to video and unknown suffixes to other.
+
+`extension_stats_under(under)` returns subtree extension totals in the same order as `ext_stats`; the root scope copies the stored index. `kind_stats(under)` combines those totals into `KindStat` rows, ordered by allocation descending and then category order. Query scopes may be directories or individual files. Rankings and totals exclude duplicate hard links. Queries traverse iteratively, reserve storage fallibly and return `QueryError` for an unknown scope or a failed calculation/allocation.
+
 `scan::ConfigError` rejects invalid bounds, `scan::FeedError` rejects responses without changing state, `error::ScanError` terminates a failed scan, and `snapshot::SnapshotError` covers snapshot construction/path failures. Ordinary corrupt records are discarded and counted; a missing/corrupt root or bootstrap is fatal. Errors preserve parser/allocation sources through snafu.
 
 ## Persistence
@@ -75,4 +79,4 @@ The shared `adamite-fixtures` crate loads committed images and independent v3 ma
 
 The [standalone nightly fuzz harnesses](fuzz/README.md) check bounded scan inputs, protocol and aggregation invariants, plus `.adm` decoding and canonical re-encoding. `deno task fuzz-corpus` generates parser seeds and both core corpora; `deno task check --fuzz` runs all seven smoke targets. Smoke mutations go to scratch directories under `target/fuzz-smoke`; committed seed corpora are read without changes.
 
-[`adamite-io`](../adamite-io/README.md) provides `VolumeReader`, slice/image/Windows raw-volume readers and `SyncDriver` for synchronous scans. [`adamite-cli`](../adamite-cli/README.md) scans and saves `.adm` files, prints reports and launches the [`adamite-tui`](../adamite-tui/README.md) browser. Parallelism, buffer pools, `$BITMAP` skipping, general resource limits, query operations (`add-core-query`), MCP, USN and walkdir fallback remain future changes. Mirror fallback, reparse-target traversal and atomic live-volume snapshots are not provided.
+[`adamite-io`](../adamite-io/README.md) provides `VolumeReader`, slice/image/Windows raw-volume readers and `SyncDriver` for synchronous scans. [`adamite-cli`](../adamite-cli/README.md) scans and saves `.adm` files, prints reports and launches the [`adamite-tui`](../adamite-tui/README.md) browser. Parallelism, buffer pools, `$BITMAP` skipping, general resource limits, name search, MCP, USN and walkdir fallback remain future changes. Mirror fallback, reparse-target traversal and atomic live-volume snapshots are not provided.

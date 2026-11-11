@@ -69,7 +69,7 @@ fn observed_work(
     let pushed = match finalizer.stage {
         Stage::SortChildren | Stage::Collect => 0,
         Stage::HeapBuild => groups
-            .checked_sub(finalizer.pending.len())
+            .checked_sub(finalizer.groups.pending.len())
             .ok_or("pending group count")?,
         _ => groups,
     };

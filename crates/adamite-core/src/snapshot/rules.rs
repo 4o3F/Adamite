@@ -4,7 +4,7 @@ use super::{Node, NodeId, SnapshotError};
 use adamite_ntfs::record::reference::FileRef;
 use std::cmp::Ordering;
 
-const TOP_FILES: usize = 100;
+pub(super) const TOP_FILES: usize = 100;
 
 #[derive(Clone, Copy)]
 pub(super) enum Metric {
@@ -67,12 +67,13 @@ impl Ranking<'_> {
         &self,
         top: &mut Vec<NodeId>,
         id: NodeId,
+        limit: usize,
     ) -> Result<(), SnapshotError> {
         let position = top
             .binary_search_by(|other| self.compare(*other, id, Metric::SelfAlloc))
             .unwrap_or_else(|position| position);
-        if position < TOP_FILES {
-            if top.len() == TOP_FILES {
+        if position < limit {
+            if top.len() == limit {
                 top.pop();
             }
             top.try_reserve(1)?;
@@ -90,6 +91,10 @@ impl<'a> Extension<'a> {
             Some((stem, suffix)) if !stem.is_empty() && !suffix.is_empty() => suffix,
             _ => "",
         })
+    }
+
+    pub(super) fn from_suffix(suffix: &'a str) -> Self {
+        Self(suffix)
     }
 
     pub(super) fn compare_folded(&self, folded: &str) -> Ordering {

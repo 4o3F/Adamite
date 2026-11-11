@@ -1,21 +1,14 @@
 use super::PersistError;
 use crate::snapshot::{
     Node, NodeFlags, NodeId,
-    rules::{Extension, Metric, Ranking},
+    indexes::ExtensionGroups,
+    rules::{Extension, Metric, Ranking, TOP_FILES},
     storage::SnapshotStorage,
 };
 use adamite_ntfs::value::standard_information::FileAttributes;
 
 pub(super) struct Validator<'a> {
     data: &'a SnapshotStorage,
-}
-
-struct ExtensionTotal<'a> {
-    extension: &'a str,
-    count: u64,
-    size: u64,
-    alloc: u64,
-    stored: usize,
 }
 
 impl<'a> Validator<'a> {
@@ -420,7 +413,7 @@ impl<'a> Validator<'a> {
         for (index, node) in self.data.nodes.iter().enumerate() {
             if node.is_primary_file() {
                 ranking
-                    .select_top(&mut top, Self::id(index)?)
+                    .select_top(&mut top, Self::id(index)?, TOP_FILES)
                     .map_err(PersistError::from_snapshot)?;
             }
         }
@@ -436,70 +429,48 @@ impl<'a> Validator<'a> {
         let invalid = |reason| PersistError::InvalidIndex { reason };
         for pair in self.data.ext_stats.windows(2) {
             if let [left, right] = pair
-                && (left.total_alloc < right.total_alloc
-                    || (left.total_alloc == right.total_alloc && left.extension >= right.extension))
+                && !left.compare(right).is_lt()
             {
                 return Err(invalid(
                     "extension summaries are not in allocation and name order",
                 ));
             }
         }
-        let mut totals = Vec::new();
-        totals.try_reserve_exact(self.data.ext_stats.len())?;
-        for (index, group) in self.data.ext_stats.iter().enumerate() {
-            totals.push(ExtensionTotal {
-                extension: &group.extension,
-                count: 0,
-                size: 0,
-                alloc: 0,
-                stored: index,
-            });
-        }
-        totals.sort_unstable_by(|left, right| left.extension.cmp(right.extension));
-        if totals
+        let mut stored = Vec::new();
+        stored.try_reserve_exact(self.data.ext_stats.len())?;
+        stored.extend(self.data.ext_stats.iter());
+        stored.sort_unstable_by(|left, right| left.extension.cmp(&right.extension));
+        if stored
             .windows(2)
             .any(|pair| matches!(pair, [left, right] if left.extension == right.extension))
         {
             return Err(invalid("duplicate extension summary"));
         }
+        let mut groups = ExtensionGroups::default();
         for (index, node) in self.data.nodes.iter().enumerate() {
-            if !node.is_primary_file() {
-                continue;
+            if node.is_primary_file() {
+                groups
+                    .add(
+                        Extension::from_name(self.name(index)?),
+                        node.size,
+                        node.alloc,
+                    )
+                    .map_err(PersistError::from_snapshot)?;
             }
-            let suffix = Extension::from_name(self.name(index)?);
-            let position = totals
-                .binary_search_by(|group| suffix.compare_folded(group.extension))
-                .map_err(|_| invalid("missing or noncanonical extension summary"))?;
-            let group = totals
-                .get_mut(position)
-                .ok_or_else(|| invalid("missing extension accumulator"))?;
-            group.count = group
-                .count
-                .checked_add(1)
-                .ok_or_else(|| invalid("extension count overflow"))?;
-            group.size = group
-                .size
-                .checked_add(node.size)
-                .ok_or_else(|| invalid("extension logical bytes overflow"))?;
-            group.alloc = group
-                .alloc
-                .checked_add(node.alloc)
-                .ok_or_else(|| invalid("extension allocation overflow"))?;
         }
-        for total in totals {
-            let stored = self
-                .data
-                .ext_stats
-                .get(total.stored)
-                .ok_or_else(|| invalid("missing stored extension summary"))?;
-            if total.count == 0
-                || (total.count, total.size, total.alloc)
-                    != (stored.count, stored.total_size, stored.total_alloc)
+        let expected = groups.into_sorted().map_err(PersistError::from_snapshot)?;
+        for group in &expected {
+            if stored
+                .binary_search_by(|actual| actual.extension.cmp(&group.extension))
+                .is_err()
             {
-                return Err(invalid(
-                    "extension summary differs from primary-file totals",
-                ));
+                return Err(invalid("missing or noncanonical extension summary"));
             }
+        }
+        if expected != self.data.ext_stats {
+            return Err(invalid(
+                "extension summary differs from primary-file totals",
+            ));
         }
         Ok(())
     }

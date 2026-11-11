@@ -3,8 +3,10 @@
 mod build;
 mod error;
 mod indexes;
+mod kind;
 mod node;
 mod persist;
+mod query;
 mod rules;
 mod storage;
 
@@ -12,9 +14,11 @@ pub(crate) use build::{
     Aggregator, Finalizer, NameRange, ParentTree, ResolvedNode, SnapshotBuilder,
 };
 pub use error::SnapshotError;
-pub use indexes::ExtensionStat;
+pub use indexes::{ExtensionStat, KindStat};
+pub use kind::FileKind;
 pub use node::{Node, NodeFlags, NodeId, NodeView};
 pub use persist::{PersistError, SnapshotDecoder, SnapshotEncoder};
+pub use query::{FileFilter, QueryError};
 pub use storage::{Snapshot, VolumeInfo};
 
 #[cfg(test)]
