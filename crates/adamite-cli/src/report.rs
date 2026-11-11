@@ -3,12 +3,14 @@ use adamite_core::{
     scan::{ScanOutput, ScanStats},
     snapshot::{NodeId, Snapshot},
 };
-use adamite_format::ScanTime;
+use adamite_format::{ScanTime, VolumeSerial};
 use serde::{Serialize, Serializer, ser::SerializeMap};
 use std::{borrow::Cow, path::Path};
 
 #[derive(Debug, Serialize)]
 pub(crate) struct InfoReport<'a> {
+    #[serde(skip)]
+    pub(crate) output: &'a ScanOutput,
     #[serde(flatten)]
     pub(crate) envelope: Envelope<'a>,
     pub(crate) volume: Volume,
@@ -203,7 +205,8 @@ pub(crate) struct Envelope<'a> {
 #[derive(Debug, Serialize)]
 pub(crate) struct SnapshotReport<'a> {
     pub(crate) source: Cow<'a, str>,
-    pub(crate) scanned_at: Option<String>,
+    #[serde(serialize_with = "SnapshotReport::serialize_time")]
+    pub(crate) scanned_at: ScanTime,
     pub(crate) scanned_at_filetime: Option<String>,
     pub(crate) volume_serial: String,
     pub(crate) label: Option<&'a str>,
@@ -212,6 +215,12 @@ pub(crate) struct SnapshotReport<'a> {
 #[derive(Debug, Serialize)]
 pub(crate) struct Units {
     size: &'static str,
+}
+
+impl SnapshotReport<'_> {
+    fn serialize_time<S: Serializer>(time: &ScanTime, serializer: S) -> Result<S::Ok, S::Error> {
+        time.rfc3339().serialize(serializer)
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -249,6 +258,7 @@ impl<'a> InfoReport<'a> {
             })?;
         Ok(Self {
             envelope: Envelope::new(command, source, output),
+            output,
             volume: Volume {
                 bytes_per_sector: geometry.bytes_per_sector(),
                 cluster_size: geometry.cluster_size(),
@@ -275,9 +285,9 @@ impl<'a> Envelope<'a> {
             command,
             snapshot: SnapshotReport {
                 source: source.to_string_lossy(),
-                scanned_at: ScanTime(context.scanned_at_filetime).rfc3339(),
+                scanned_at: ScanTime(context.scanned_at_filetime),
                 scanned_at_filetime: context.scanned_at_filetime.map(|value| value.to_string()),
-                volume_serial: format!("{:016x}", volume.geometry().serial()),
+                volume_serial: VolumeSerial(volume.geometry().serial()).to_string(),
                 label: context.label.as_deref(),
             },
             units: Units { size: "bytes" },

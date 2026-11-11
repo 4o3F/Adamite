@@ -1,10 +1,10 @@
 use crate::{
-    app::{Action, App},
+    app::{Action, App, Cursor, Tab},
     input::{Event, Key},
     view::View,
 };
 use adamite_core::{
-    scan::{ScanConfig, ScanOutput},
+    scan::{ScanConfig, ScanContext, ScanOutput},
     snapshot::{NodeFlags, NodeId},
 };
 use adamite_fixtures::{
@@ -17,7 +17,7 @@ use ratatui::{
     Terminal,
     backend::TestBackend,
     crossterm::event::{self, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
-    style::Modifier,
+    style::{Color, Modifier},
 };
 use std::{error::Error, path::Path};
 
@@ -28,6 +28,8 @@ struct Case {
 }
 
 impl Case {
+    const LONG_NAME: &'static str = "long-漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字-tail";
+
     fn fixture(name: &str) -> TestResult<Self> {
         let fixture = Fixture::load(
             &Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -38,7 +40,15 @@ impl Case {
 
     fn scan(image: &[u8]) -> TestResult<Self> {
         let mut reader = SliceReader::new(image);
-        let output = SyncDriver::new(ScanConfig::default())?.run(&mut reader)?;
+        let output = SyncDriver::new(ScanConfig {
+            context: ScanContext {
+                label: Some("test\nvolume".to_owned()),
+                scanned_at_filetime: Some(116_444_736_012_345_678),
+                free_bytes: Some(4096),
+            },
+            ..ScanConfig::default()
+        })?
+        .run(&mut reader)?;
         Ok(Self { output })
     }
 
@@ -82,6 +92,62 @@ impl Case {
             .chunks(usize::from(backend.buffer().area.width).max(1))
             .map(|cells| cells.iter().map(|cell| cell.symbol()).collect())
             .collect()
+    }
+
+    fn text(app: &App<'_>, width: u16, height: u16) -> TestResult<String> {
+        Ok(Self::lines(&Self::render(app, width, height)?).join("\n"))
+    }
+
+    fn press(app: &mut App<'_>, code: KeyCode) -> TestResult<Action> {
+        let event =
+            Event::from_terminal(event::Event::Key(KeyEvent::new(code, KeyModifiers::NONE)))
+                .ok_or("unmapped test key")?;
+        Ok(app.handle(event))
+    }
+
+    fn select_top(app: &mut App<'_>, id: NodeId) -> TestResult {
+        Self::press(app, KeyCode::Char('2'))?;
+        let index = app
+            .snapshot()
+            .top_files()
+            .iter()
+            .position(|&file| file == id)
+            .ok_or("file missing from top index")?;
+        app.handle(Event::Key(Key::Home));
+        for _ in 0..index {
+            app.handle(Event::Key(Key::Down));
+        }
+        Ok(())
+    }
+
+    fn selected_row(app: &App<'_>, width: u16, height: u16) -> TestResult<String> {
+        let backend = Self::render(app, width, height)?;
+        let lines = Self::lines(&backend);
+        let row = (0..height)
+            .find(|&y| {
+                backend
+                    .buffer()
+                    .cell((0, y))
+                    .is_some_and(|cell| cell.bg == Color::DarkGray)
+            })
+            .ok_or("selected row is not visible")?;
+        lines
+            .get(usize::from(row))
+            .cloned()
+            .ok_or_else(|| "selected row".into())
+    }
+
+    fn assert_cursor(cursor: Cursor, count: usize, page_rows: usize) {
+        assert!(cursor.selected < count.max(1), "{cursor:?}, count {count}");
+        assert!(cursor.scroll <= cursor.selected, "{cursor:?}");
+        assert!(
+            cursor.selected.saturating_sub(cursor.scroll) < page_rows,
+            "{cursor:?}, page {page_rows}"
+        );
+        assert!(
+            cursor.scroll <= count.saturating_sub(page_rows),
+            "{cursor:?}, count {count}, page {page_rows}"
+        );
     }
 
     fn name(parent: u32, text: &str) -> Vec<u8> {
@@ -146,7 +212,7 @@ impl Case {
             (20, 5, "zero", true),
             (21, 20, "resident.txt", false),
             (22, 5, "line\n\t\u{1b}.txt", false),
-            (23, 5, "long-漢字漢字漢字漢字漢字漢字-tail", true),
+            (23, 5, Self::LONG_NAME, true),
             (24, 23, "tail-child", false),
             (25, 5, "reparse", true),
             (26, 5, "a.txt", false),
@@ -360,8 +426,8 @@ fn names_are_escaped_truncated_and_reparse_markers_are_visible() -> TestResult {
     Case::select(&mut app, case.id("/reparse")?)?;
     let text = Case::lines(&Case::render(&app, 120, 8)?).join("\n");
     assert!(text.contains("reparse/↪"), "{text}");
-    let long_path = "/long-漢字漢字漢字漢字漢字漢字-tail";
-    Case::select(&mut app, case.id(long_path)?)?;
+    let long_path = format!("/{}", Case::LONG_NAME);
+    Case::select(&mut app, case.id(&long_path)?)?;
     let text = Case::lines(&Case::render(&app, 80, 8)?).join("\n");
     let row = text
         .lines()
@@ -370,7 +436,7 @@ fn names_are_escaped_truncated_and_reparse_markers_are_visible() -> TestResult {
     assert!(row.contains("…/"), "{row}");
     assert!(!row.contains("-tail"), "{row}");
     app.handle(Event::Key(Key::Enter));
-    let text = Case::lines(&Case::render(&app, 30, 8)?).join("\n");
+    let text = Case::lines(&Case::render(&app, 40, 8)?).join("\n");
     let header = text.lines().next().ok_or("header")?;
     assert!(
         header.starts_with("/long-")
@@ -387,7 +453,7 @@ fn quit_keys_release_and_repeat_filtering() -> TestResult {
     let mut app = case.app("/", 4)?;
     let bindings = [
         (KeyCode::Char('q'), KeyModifiers::NONE, Key::Quit),
-        (KeyCode::Esc, KeyModifiers::NONE, Key::Quit),
+        (KeyCode::Esc, KeyModifiers::NONE, Key::Escape),
         (KeyCode::Char('c'), KeyModifiers::CONTROL, Key::Quit),
         (KeyCode::Up, KeyModifiers::NONE, Key::Up),
         (KeyCode::Char('k'), KeyModifiers::NONE, Key::Up),
@@ -398,11 +464,34 @@ fn quit_keys_release_and_repeat_filtering() -> TestResult {
         (KeyCode::Home, KeyModifiers::NONE, Key::Home),
         (KeyCode::End, KeyModifiers::NONE, Key::End),
         (KeyCode::Enter, KeyModifiers::NONE, Key::Enter),
-        (KeyCode::Right, KeyModifiers::NONE, Key::Enter),
-        (KeyCode::Char('l'), KeyModifiers::NONE, Key::Enter),
+        (KeyCode::Right, KeyModifiers::NONE, Key::Open),
+        (KeyCode::Char('l'), KeyModifiers::NONE, Key::Open),
         (KeyCode::Left, KeyModifiers::NONE, Key::Parent),
         (KeyCode::Backspace, KeyModifiers::NONE, Key::Parent),
         (KeyCode::Char('h'), KeyModifiers::NONE, Key::Parent),
+        (KeyCode::Tab, KeyModifiers::NONE, Key::NextTab),
+        (
+            KeyCode::Char('1'),
+            KeyModifiers::NONE,
+            Key::SelectTab(Tab::Tree),
+        ),
+        (
+            KeyCode::Char('2'),
+            KeyModifiers::NONE,
+            Key::SelectTab(Tab::TopFiles),
+        ),
+        (
+            KeyCode::Char('3'),
+            KeyModifiers::NONE,
+            Key::SelectTab(Tab::Extensions),
+        ),
+        (
+            KeyCode::Char('4'),
+            KeyModifiers::NONE,
+            Key::SelectTab(Tab::Info),
+        ),
+        (KeyCode::Char('b'), KeyModifiers::NONE, Key::Bytes),
+        (KeyCode::Char('?'), KeyModifiers::SHIFT, Key::Help),
     ];
     for (code, modifiers, key) in bindings {
         let terminal_event =
@@ -435,5 +524,426 @@ fn quit_keys_release_and_repeat_filtering() -> TestResult {
         ))),
         None
     );
+    Ok(())
+}
+
+#[test]
+fn tabs_cycle_and_digits_preserve_independent_cursors_and_scroll() -> TestResult {
+    let case = Case::fixture("basic-4k")?;
+    let mut app = case.app("/bigdir", 4)?;
+    let mut saved = Vec::new();
+    for tab in Tab::ALL {
+        assert_eq!(app.tab, tab);
+        for key in [Key::End, Key::Up] {
+            app.handle(Event::Key(key));
+        }
+        let cursor = match tab {
+            Tab::Tree => app.tree.cursor,
+            Tab::TopFiles => app.top_files,
+            Tab::Extensions => app.extensions,
+            Tab::Info => app.info,
+        };
+        assert!(cursor.selected > 0, "{tab:?}: {cursor:?}");
+        let text = Case::text(&app, 120, 8)?;
+        assert!(text.contains(tab.title()), "{text}");
+        saved.push((tab, cursor));
+        Case::press(&mut app, KeyCode::Tab)?;
+    }
+    assert_eq!(app.tab, Tab::Tree, "Tab wraps after Info");
+    for (code, (tab, cursor)) in ['4', '3', '2', '1']
+        .into_iter()
+        .zip(saved.into_iter().rev())
+    {
+        Case::press(&mut app, KeyCode::Char(code))?;
+        assert_eq!(app.tab, tab);
+        let retained = match tab {
+            Tab::Tree => app.tree.cursor,
+            Tab::TopFiles => app.top_files,
+            Tab::Extensions => app.extensions,
+            Tab::Info => app.info,
+        };
+        assert_eq!(retained, cursor, "{tab:?}");
+        assert!(!Case::selected_row(&app, 120, 8)?.trim().is_empty());
+    }
+    Ok(())
+}
+
+#[test]
+fn top_file_jump_rebuilds_each_ancestor_and_selects_visible_file() -> TestResult {
+    for (case, path) in [
+        (Case::synthetic()?, "/nested/child/leaf.txt"),
+        (Case::synthetic()?, "/a.txt"),
+        (Case::fixture("basic-4k")?, "/bigdir/f049"),
+    ] {
+        // Start with an unrelated navigation stack so a jump must replace it.
+        let mut app = case.app("/", 4)?;
+        app.handle(Event::Key(Key::Enter));
+        let file = case.id(path)?;
+        Case::select_top(&mut app, file)?;
+        let top_cursor = app.top_files;
+        let name = app.snapshot().name(file).ok_or("file name")?;
+        assert!(Case::selected_row(&app, 120, 8)?.contains(name));
+        Case::press(&mut app, KeyCode::Right)?;
+        assert_eq!(app.tab, Tab::TopFiles, "only Enter jumps from Top files");
+        Case::press(&mut app, KeyCode::Enter)?;
+        assert_eq!(app.tab, Tab::Tree);
+        let mut child = file;
+        let mut steps = 0usize;
+        while child != NodeId::ROOT {
+            let parent = app.snapshot().node(child).ok_or("child")?.parent();
+            assert_eq!(app.tree.directory, parent);
+            assert_eq!(app.children().get(app.tree.cursor.selected), Some(&child));
+            let name = app.snapshot().name(child).ok_or("child name")?;
+            assert!(Case::selected_row(&app, 120, 8)?.contains(name), "{name}");
+            Case::assert_cursor(app.tree.cursor, app.children().len(), 4);
+            Case::press(
+                &mut app,
+                if steps.is_multiple_of(2) {
+                    KeyCode::Left
+                } else {
+                    KeyCode::Char('h')
+                },
+            )?;
+            child = parent;
+            steps = steps.checked_add(1).ok_or("ancestor steps")?;
+        }
+        Case::press(&mut app, KeyCode::Char('2'))?;
+        assert_eq!(app.top_files, top_cursor);
+    }
+    Ok(())
+}
+
+#[test]
+fn top_rows_follow_stored_order_escape_paths_and_truncate_in_the_middle() -> TestResult {
+    let case = Case::fixture("basic-4k")?;
+    let mut app = case.app("/", 4)?;
+    Case::press(&mut app, KeyCode::Char('2'))?;
+    let text = Case::text(&app, 120, 8)?;
+    let lines: Vec<_> = text.lines().skip(3).take(4).collect();
+    for (line, &id) in lines.into_iter().zip(app.snapshot().top_files()) {
+        let node = app.snapshot().node(id).ok_or("top node")?;
+        let path = app.snapshot().path(id)?.ok_or("top path")?;
+        assert!(line.contains(&path), "{line}");
+        for size in [node.alloc(), node.size()] {
+            let value = adamite_format::ByteSize {
+                value: u128::from(size),
+                raw_bytes: false,
+            }
+            .to_string();
+            assert!(line.contains(&value), "{line}");
+        }
+    }
+    let case = Case::synthetic()?;
+    let mut app = case.app("/", 4)?;
+    Case::select_top(&mut app, case.id("/line\n\t\u{1b}.txt")?)?;
+    let row = Case::selected_row(&app, 120, 8)?;
+    assert!(row.contains("/line\\u{a}\\u{9}\\u{1b}.txt"), "{row}");
+    Case::select_top(
+        &mut app,
+        case.id(&format!("/{}/tail-child", Case::LONG_NAME))?,
+    )?;
+    let row = Case::selected_row(&app, 60, 8)?;
+    assert!(
+        row.starts_with("/long-") && row.contains('…') && row.contains("/tail-child"),
+        "{row}"
+    );
+    Ok(())
+}
+
+#[test]
+fn extensions_render_none_and_totals_in_stored_order() -> TestResult {
+    let case = Case::synthetic()?;
+    let mut app = case.app("/", 20)?;
+    Case::press(&mut app, KeyCode::Char('3'))?;
+    let text = Case::text(&app, 120, 24)?;
+    assert!(text.contains("(none)") && text.contains("txt"), "{text}");
+    for (line, stat) in text.lines().skip(3).zip(app.snapshot().ext_stats()) {
+        let label = if stat.extension().is_empty() {
+            "(none)"
+        } else {
+            stat.extension()
+        };
+        assert!(line.contains(label), "{line}");
+        assert!(line.contains(&stat.count().to_string()), "{line}");
+        for size in [stat.total_size(), stat.total_alloc()] {
+            let value = adamite_format::ByteSize {
+                value: u128::from(size),
+                raw_bytes: false,
+            }
+            .to_string();
+            assert!(line.contains(&value), "{line}");
+        }
+    }
+    let directory = app.tree.directory;
+    for key in [Key::Enter, Key::Parent] {
+        app.handle(Event::Key(key));
+    }
+    assert_eq!(
+        app.tree.directory, directory,
+        "extension navigation does not affect Tree"
+    );
+    Ok(())
+}
+
+#[test]
+fn info_renders_volume_time_tree_and_only_nonzero_counters() -> TestResult {
+    let case = Case::fixture("basic-4k")?;
+    let mut app = case.app("/", 56)?;
+    Case::press(&mut app, KeyCode::Char('4'))?;
+    let text = Case::text(&app, 120, 60)?;
+    assert!(text.contains("1970-01-01T00:00:01Z"), "{text}");
+    for label in [
+        "Volume serial",
+        "Label",
+        "Bytes per sector",
+        "Cluster size",
+        "Volume size",
+        "Free space",
+        "Nodes",
+        "Files",
+        "Logical size",
+        "Allocated size",
+    ] {
+        assert!(text.contains(label), "missing {label}: {text}");
+    }
+    assert!(
+        text.contains("test\\u{a}volume") && text.contains("4.0 KiB"),
+        "{text}"
+    );
+    for (name, value) in case.output.stats.counters() {
+        let row = text.lines().find(|line| line.starts_with(name));
+        if value == 0 {
+            assert!(row.is_none(), "zero counter {name}: {text}");
+        } else {
+            assert!(
+                row.is_some_and(|line| line.contains(&value.to_string())),
+                "{name} = {value}: {text}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn bytes_toggle_updates_every_size_cell_across_tabs() -> TestResult {
+    let case = Case::fixture("basic-4k")?;
+    let mut app = case.app("/", 56)?;
+    for _ in 0..2 {
+        Case::press(&mut app, KeyCode::Char('b'))?;
+        for code in ['1', '2', '3', '4'] {
+            Case::press(&mut app, KeyCode::Char(code))?;
+            let text = Case::text(&app, 180, 60)?;
+            if app.raw_bytes {
+                assert!(
+                    !text.contains(" B") && !text.contains("KiB") && !text.contains("MiB"),
+                    "{text}"
+                );
+                let value = match app.tab {
+                    Tab::Tree => app
+                        .snapshot()
+                        .node(*app.children().first().ok_or("child")?)
+                        .ok_or("node")?
+                        .total_alloc(),
+                    Tab::TopFiles => app
+                        .snapshot()
+                        .node(*app.snapshot().top_files().first().ok_or("top")?)
+                        .ok_or("node")?
+                        .alloc(),
+                    Tab::Extensions => app
+                        .snapshot()
+                        .ext_stats()
+                        .first()
+                        .ok_or("ext")?
+                        .total_alloc(),
+                    Tab::Info => app.snapshot().volume().geometry().total_bytes(),
+                };
+                assert!(text.contains(&value.to_string()), "{text}");
+            } else {
+                assert!(text.contains("KiB") || text.contains("MiB"), "{text}");
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn help_overlay_captures_keys_and_escape_closes_before_quitting() -> TestResult {
+    let case = Case::synthetic()?;
+    let mut app = case.app("/", 4)?;
+    Case::press(&mut app, KeyCode::Char('?'))?;
+    assert!(app.help);
+    let text = Case::text(&app, 40, 8)?;
+    for key in [
+        "Help",
+        "PgUp/PgDn",
+        "Home/End",
+        "Tab/1–4",
+        "Enter/→/l",
+        "←/h/Backspace",
+        "b: raw bytes",
+        "q/Ctrl-C",
+        "?/Esc",
+    ] {
+        assert!(text.contains(key), "missing {key}: {text}");
+    }
+    for code in [
+        KeyCode::Down,
+        KeyCode::Enter,
+        KeyCode::Char('b'),
+        KeyCode::Char('2'),
+        KeyCode::Tab,
+    ] {
+        assert_eq!(Case::press(&mut app, code)?, Action::Continue);
+    }
+    assert_eq!(app.tab, Tab::Tree);
+    assert_eq!(app.tree.directory, NodeId::ROOT);
+    assert_eq!(app.tree.cursor, Cursor::default());
+    assert!(!app.raw_bytes);
+    assert_eq!(Case::press(&mut app, KeyCode::Esc)?, Action::Continue);
+    assert!(!app.help);
+    assert!(!Case::text(&app, 120, 8)?.contains("close help"));
+    assert_eq!(Case::press(&mut app, KeyCode::Esc)?, Action::Quit);
+    for _ in 0..2 {
+        Case::press(&mut app, KeyCode::Char('?'))?;
+    }
+    assert!(!app.help, "? toggles closed");
+    Case::press(&mut app, KeyCode::Char('?'))?;
+    assert_eq!(Case::press(&mut app, KeyCode::Char('q'))?, Action::Quit);
+    let ctrl_c = Event::from_terminal(event::Event::Key(KeyEvent::new(
+        KeyCode::Char('c'),
+        KeyModifiers::CONTROL,
+    )))
+    .ok_or("Ctrl-C")?;
+    assert_eq!(app.handle(ctrl_c), Action::Quit);
+    Ok(())
+}
+
+#[test]
+fn resize_clamps_all_cursors_and_saved_tree_ancestors() -> TestResult {
+    let case = Case::fixture("basic-4k")?;
+    let mut app = case.app("/", 30)?;
+    for code in ['1', '2', '3', '4'] {
+        Case::press(&mut app, KeyCode::Char(code))?;
+        app.handle(Event::Key(Key::End));
+    }
+    // Resize while help is open and a different tab is active.
+    Case::press(&mut app, KeyCode::Char('?'))?;
+    let resize = Event::from_terminal(event::Event::Resize(120, 8)).ok_or("resize event")?;
+    assert_eq!(
+        resize,
+        Event::Resize {
+            width: 120,
+            height: 8
+        }
+    );
+    app.handle(resize);
+    Case::press(&mut app, KeyCode::Esc)?;
+    Case::assert_cursor(app.tree.cursor, app.children().len(), 4);
+    Case::assert_cursor(app.top_files, app.snapshot().top_files().len(), 4);
+    Case::assert_cursor(app.extensions, app.snapshot().ext_stats().len(), 4);
+    Case::assert_cursor(app.info, app.info_fields().len(), 4);
+    for code in ['1', '2', '3', '4'] {
+        Case::press(&mut app, KeyCode::Char(code))?;
+        assert!(!Case::selected_row(&app, 120, 8)?.trim().is_empty());
+        app.handle(Event::Key(Key::Home));
+        app.handle(Event::Key(Key::PageDown));
+        let (cursor, count) = match app.tab {
+            Tab::Tree => (app.tree.cursor, app.children().len()),
+            Tab::TopFiles => (app.top_files, app.snapshot().top_files().len()),
+            Tab::Extensions => (app.extensions, app.snapshot().ext_stats().len()),
+            Tab::Info => (app.info, app.info_fields().len()),
+        };
+        assert_eq!(cursor.selected, 4.min(count.saturating_sub(1)));
+    }
+    Case::press(&mut app, KeyCode::Char('1'))?;
+    Case::select(&mut app, case.id("/bigdir")?)?;
+    app.handle(Event::Key(Key::Enter));
+    app.handle(Event::Resize {
+        width: 120,
+        height: 30,
+    });
+    app.handle(Event::Key(Key::End));
+    let last = app.tree.cursor.selected;
+    app.handle(Event::Resize {
+        width: 120,
+        height: 8,
+    });
+    assert_eq!(
+        app.tree.cursor.selected, last,
+        "shrinking scrolls the selected item into view"
+    );
+    Case::assert_cursor(app.tree.cursor, app.children().len(), 4);
+    assert!(!Case::selected_row(&app, 120, 8)?.trim().is_empty());
+    app.handle(Event::Key(Key::Parent));
+    assert_eq!(
+        app.children().get(app.tree.cursor.selected),
+        Some(&case.id("/bigdir")?)
+    );
+    Case::assert_cursor(app.tree.cursor, app.children().len(), 4);
+    app.handle(Event::Resize {
+        width: 120,
+        height: 60,
+    });
+    assert_eq!(
+        app.tree.cursor.scroll, 0,
+        "growing clamps stale scroll offsets"
+    );
+
+    let case = Case::synthetic()?;
+    let mut app = case.app("/", 30)?;
+    Case::select(&mut app, case.id("/nested")?)?;
+    let selected = app.tree.cursor.selected;
+    assert!(
+        selected >= 4,
+        "ancestor selection must lie below the shrunken page"
+    );
+    assert_eq!(app.tree.cursor.scroll, 0);
+    app.handle(Event::Key(Key::Enter));
+    app.handle(Event::Key(Key::Enter));
+    app.handle(Event::Resize {
+        width: 120,
+        height: 8,
+    });
+    app.handle(Event::Key(Key::Parent));
+    app.handle(Event::Key(Key::Parent));
+    assert_eq!(app.tree.directory, NodeId::ROOT);
+    assert_eq!(app.tree.cursor.selected, selected);
+    assert!(
+        app.tree.cursor.scroll > 0,
+        "saved ancestor viewport is resized while hidden"
+    );
+    assert!(Case::selected_row(&app, 120, 8)?.contains("nested/"));
+    Case::assert_cursor(app.tree.cursor, app.children().len(), 4);
+    Ok(())
+}
+
+#[test]
+fn minimum_terminal_dimensions_replace_every_view_and_recover_after_resize() -> TestResult {
+    let case = Case::synthetic()?;
+    let mut app = case.app("/", 4)?;
+    for code in ['1', '2', '3', '4'] {
+        Case::press(&mut app, KeyCode::Char(code))?;
+        for (width, height) in [(39, 8), (40, 7), (0, 0), (1, 1)] {
+            app.handle(Event::Resize { width, height });
+            let text = Case::text(&app, width, height)?;
+            if width >= 39 {
+                assert!(
+                    text.contains("terminal too small"),
+                    "{width}×{height}: {text}"
+                );
+            }
+            assert!(
+                !text.contains("Field") && !text.contains("Allocated"),
+                "{text}"
+            );
+        }
+        app.handle(Event::Resize {
+            width: 40,
+            height: 8,
+        });
+        let text = Case::text(&app, 40, 8)?;
+        assert!(!text.contains("terminal too small"), "{text}");
+        assert!(text.contains(app.tab.title()), "{text}");
+    }
     Ok(())
 }

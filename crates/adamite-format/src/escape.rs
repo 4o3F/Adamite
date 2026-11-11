@@ -20,9 +20,33 @@ impl fmt::Display for Escaped<'_> {
     }
 }
 
+/// Displays an escaped extension, using `(none)` for files without an extension.
+#[derive(Debug, Clone, Copy)]
+pub struct ExtensionLabel<'a>(
+    /// Extension text, without the separating dot.
+    pub &'a str,
+);
+
+impl fmt::Display for ExtensionLabel<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Escaped(if self.0.is_empty() { "(none)" } else { self.0 }).fmt(f)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::Escaped;
+    use super::{Escaped, ExtensionLabel};
+
+    #[test]
+    fn extension_labels_escape_untrusted_text_and_name_empty_extensions() {
+        for (extension, expected) in [
+            ("", "(none)"),
+            ("txt", "txt"),
+            ("\n\u{1b}", "\\u{a}\\u{1b}"),
+        ] {
+            assert_eq!(ExtensionLabel(extension).to_string(), expected);
+        }
+    }
 
     #[test]
     fn escapes_controls_and_preserves_printable_text() {

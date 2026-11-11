@@ -1,11 +1,11 @@
-use crate::app::App;
-use adamite_core::snapshot::{NodeFlags, NodeView};
-use adamite_format::{ByteSize, Escaped};
+use crate::app::{App, Cursor, Tab};
+use adamite_core::snapshot::{NodeFlags, NodeId, NodeView};
+use adamite_format::{ByteSize, Escaped, ExtensionLabel, ScanTime};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
-    widgets::{Cell, Paragraph, Row, Table, Tabs},
+    widgets::{Block, Cell, Clear, Paragraph, Row, Table, Tabs},
 };
 use std::fmt;
 use unicode_width::UnicodeWidthStr;
@@ -28,77 +28,226 @@ impl<'a> View<'a> {
     }
 
     pub(crate) fn render(&self, frame: &mut Frame<'_>) {
-        let [header, tabs, tree, footer] = Layout::vertical([
+        if frame.area().width < 40 || frame.area().height < 8 {
+            frame.render_widget(
+                Paragraph::new("terminal too small (minimum 40×8)"),
+                frame.area(),
+            );
+            return;
+        }
+        let [header, tabs, content, footer] = Layout::vertical([
             Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Fill(1),
             Constraint::Length(1),
         ])
         .areas(frame.area());
-        let path = self
-            .app
-            .snapshot()
-            .path(self.app.tree.directory)
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| format!("#{}", self.app.tree.directory.raw()));
-        let path = Escaped(&path).to_string();
+        let heading = if self.app.tab == Tab::Tree {
+            self.path(self.app.tree.directory)
+        } else {
+            format!(
+                "{} — scanned {}",
+                self.app.tab.title(),
+                ScanTime(self.app.snapshot().volume().context().scanned_at_filetime)
+            )
+        };
         frame.render_widget(
             Paragraph::new(DisplayText::truncate(
-                &path,
+                &heading,
                 usize::from(header.width),
                 Truncation::Middle,
             )),
             header,
         );
         frame.render_widget(
-            Tabs::new(["Tree"]).highlight_style(Style::new().fg(Color::Cyan)),
+            Tabs::new(Tab::ALL.map(Tab::title))
+                .select(self.app.tab.index())
+                .highlight_style(Style::new().fg(Color::Cyan)),
             tabs,
         );
-        self.tree(frame, tree);
+        match self.app.tab {
+            Tab::Tree => self.tree(frame, content),
+            Tab::TopFiles => self.top_files(frame, content),
+            Tab::Extensions => self.extensions(frame, content),
+            Tab::Info => self.info(frame, content),
+        }
         frame.render_widget(
-            Paragraph::new("↑/↓ j/k  Enter: open  ←/h: parent  q: quit"),
+            Paragraph::new("Tab/1–4: tabs  b: bytes  ?: help  q: quit"),
             footer,
+        );
+        if self.app.help {
+            self.help(frame);
+        }
+    }
+
+    fn path(&self, id: NodeId) -> String {
+        let path = self
+            .app
+            .snapshot()
+            .path(id)
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| format!("#{}", id.raw()));
+        Escaped(&path).to_string()
+    }
+
+    fn size(&self, value: u64) -> String {
+        ByteSize {
+            value: u128::from(value),
+            raw_bytes: self.app.raw_bytes,
+        }
+        .to_string()
+    }
+
+    fn size_width(&self) -> u16 {
+        if self.app.raw_bytes { 20 } else { 11 }
+    }
+
+    fn row_style(selected: bool) -> Style {
+        if selected {
+            Style::new()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        }
+    }
+
+    fn top_files(&self, frame: &mut Frame<'_>, area: Rect) {
+        let widths = [
+            Constraint::Fill(1),
+            Constraint::Length(self.size_width()),
+            Constraint::Length(self.size_width()),
+        ];
+        let table = Rows {
+            cursor: self.app.top_files,
+            widths: &widths,
+            headings: &["Path", "Allocated", "Logical"],
+        };
+        let path_width = table.name_width(area);
+        let rows = table
+            .visible(area, self.app.snapshot().top_files())
+            .filter_map(|(index, &id)| {
+                let node = self.app.snapshot().node(id)?;
+                Some(
+                    Row::new([
+                        DisplayText::truncate(
+                            &self.path(id),
+                            usize::from(path_width),
+                            Truncation::Middle,
+                        ),
+                        self.size(node.alloc()),
+                        self.size(node.size()),
+                    ])
+                    .style(Self::row_style(index == table.cursor.selected)),
+                )
+            });
+        table.render(frame, area, rows);
+    }
+
+    fn extensions(&self, frame: &mut Frame<'_>, area: Rect) {
+        let widths = [
+            Constraint::Fill(1),
+            Constraint::Length(10),
+            Constraint::Length(self.size_width()),
+            Constraint::Length(self.size_width()),
+        ];
+        let table = Rows {
+            cursor: self.app.extensions,
+            widths: &widths,
+            headings: &["Extension", "Count", "Logical", "Allocated"],
+        };
+        let name_width = table.name_width(area);
+        let rows = table
+            .visible(area, self.app.snapshot().ext_stats())
+            .map(|(index, stat)| {
+                Row::new([
+                    DisplayText::truncate(
+                        &ExtensionLabel(stat.extension()).to_string(),
+                        usize::from(name_width),
+                        Truncation::End,
+                    ),
+                    stat.count().to_string(),
+                    self.size(stat.total_size()),
+                    self.size(stat.total_alloc()),
+                ])
+                .style(Self::row_style(index == table.cursor.selected))
+            });
+        table.render(frame, area, rows);
+    }
+
+    fn info(&self, frame: &mut Frame<'_>, area: Rect) {
+        let table = Rows {
+            cursor: self.app.info,
+            widths: &[Constraint::Length(28), Constraint::Fill(1)],
+            headings: &["Field", "Value"],
+        };
+        let rows = table
+            .visible(area, self.app.info_fields())
+            .map(|(index, (label, value))| {
+                Row::new([label.to_owned(), value])
+                    .style(Self::row_style(index == table.cursor.selected))
+            });
+        table.render(frame, area, rows);
+    }
+
+    fn help(&self, frame: &mut Frame<'_>) {
+        let area = frame
+            .area()
+            .centered(Constraint::Length(40), Constraint::Length(8));
+        frame.render_widget(Clear, area);
+        frame.render_widget(
+            Paragraph::new(concat!(
+                "↑/↓ k/j: move; PgUp/PgDn: page\n",
+                "Home/End: first/last; Tab/1–4: tabs\n",
+                "Enter/→/l: open; ←/h/Backspace: parent\n",
+                "Top Enter: show file; b: raw bytes\n",
+                "?/Esc: close help; q/Ctrl-C: quit\n",
+                "Esc (help closed): quit",
+            ))
+            .block(Block::bordered().title("Help")),
+            area,
         );
     }
 
     fn tree(&self, frame: &mut Frame<'_>, area: Rect) {
         let widths = [
             Constraint::Fill(1),
-            Constraint::Length(11),
+            Constraint::Length(self.size_width()),
             Constraint::Length(20),
-            Constraint::Length(11),
+            Constraint::Length(self.size_width()),
             Constraint::Length(10),
         ];
-        let columns = Layout::horizontal(widths).spacing(1).split(area);
-        let name_width = columns.first().map_or(0, |column| column.width);
+        let table = Rows {
+            cursor: self.app.tree.cursor,
+            widths: &widths,
+            headings: &["Name", "Allocated", "Share of parent", "Logical", "Files"],
+        };
+        let name_width = table.name_width(area);
         let parent_alloc = self
             .app
             .snapshot()
             .node(self.app.tree.directory)
             .map_or(0, |node| node.total_alloc());
-        let visible = usize::from(area.height.saturating_sub(1));
-        let rows = self
-            .app
-            .children()
-            .iter()
-            .enumerate()
-            .skip(self.app.tree.cursor.scroll)
-            .take(visible)
+        let rows = table
+            .visible(area, self.app.children())
             .filter_map(|(index, &id)| {
                 let node = self.app.snapshot().node(id)?;
                 let name = self.app.snapshot().name(id)?;
-                Some(TreeRow { node, name }.render(
-                    name_width,
-                    parent_alloc,
-                    index == self.app.tree.cursor.selected,
-                ))
+                Some(
+                    TreeRow {
+                        node,
+                        name,
+                        raw_bytes: self.app.raw_bytes,
+                    }
+                    .render(
+                        name_width,
+                        parent_alloc,
+                        index == self.app.tree.cursor.selected,
+                    ),
+                )
             });
-        let table = Table::new(rows, widths).column_spacing(1).header(
-            Row::new(["Name", "Allocated", "Share of parent", "Logical", "Files"])
-                .style(Style::new().add_modifier(Modifier::BOLD)),
-        );
-        frame.render_widget(table, area);
+        table.render(frame, area, rows);
         if self.app.children().is_empty() {
             let [_, body] =
                 Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(area);
@@ -107,9 +256,53 @@ impl<'a> View<'a> {
     }
 }
 
+struct Rows<'a> {
+    cursor: Cursor,
+    widths: &'a [Constraint],
+    headings: &'a [&'a str],
+}
+
+impl Rows<'_> {
+    fn visible<T>(
+        &self,
+        area: Rect,
+        items: impl IntoIterator<Item = T>,
+    ) -> impl Iterator<Item = (usize, T)> {
+        items
+            .into_iter()
+            .enumerate()
+            .skip(self.cursor.scroll)
+            .take(usize::from(area.height.saturating_sub(1)))
+    }
+
+    fn name_width(&self, area: Rect) -> u16 {
+        Layout::horizontal(self.widths)
+            .spacing(1)
+            .split(area)
+            .first()
+            .map_or(0, |column| column.width)
+    }
+
+    fn render<'a>(
+        &self,
+        frame: &mut Frame<'_>,
+        area: Rect,
+        rows: impl IntoIterator<Item = Row<'a>>,
+    ) {
+        frame.render_widget(
+            Table::new(rows, self.widths).column_spacing(1).header(
+                Row::new(self.headings.iter().copied())
+                    .style(Style::new().add_modifier(Modifier::BOLD)),
+            ),
+            area,
+        );
+    }
+}
+
 struct TreeRow<'a> {
     node: NodeView<'a>,
     name: &'a str,
+    raw_bytes: bool,
 }
 
 impl TreeRow<'_> {
@@ -138,19 +331,16 @@ impl TreeRow<'_> {
         } else {
             share.to_string()
         };
-        let mut style = Style::default();
+        let mut style = View::row_style(selected);
         if flags.contains(NodeFlags::SYNTHETIC) {
             style = style.add_modifier(Modifier::DIM);
-        }
-        if selected {
-            style = style.bg(Color::DarkGray).add_modifier(Modifier::BOLD);
         }
         Row::new([
             Cell::from(name),
             Cell::from(
                 ByteSize {
                     value: u128::from(self.node.total_alloc()),
-                    raw_bytes: false,
+                    raw_bytes: self.raw_bytes,
                 }
                 .to_string(),
             ),
@@ -158,7 +348,7 @@ impl TreeRow<'_> {
             Cell::from(
                 ByteSize {
                     value: u128::from(self.node.total_size()),
-                    raw_bytes: false,
+                    raw_bytes: self.raw_bytes,
                 }
                 .to_string(),
             ),

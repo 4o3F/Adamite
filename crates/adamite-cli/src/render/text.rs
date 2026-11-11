@@ -1,6 +1,6 @@
 use super::Report;
 use crate::report::{Envelope, ExtReport, InfoReport, LsReport, SavedReport, TopReport};
-use adamite_format::{ByteSize, Escaped};
+use adamite_format::{ByteSize, Escaped, ExtensionLabel, InfoFields};
 use std::io::{self, Write};
 
 struct Header<'a>(&'a Envelope<'a>);
@@ -11,7 +11,7 @@ impl Header<'_> {
             stdout,
             "{} — scanned {}",
             Escaped(&self.0.snapshot.source),
-            self.0.snapshot.scanned_at.as_deref().unwrap_or("unknown")
+            self.0.snapshot.scanned_at
         )
     }
 }
@@ -30,10 +30,6 @@ impl SizeColumn {
             value: u128::from(value),
             raw_bytes: self.raw_bytes,
         }
-    }
-
-    fn write_line(&self, stdout: &mut impl Write, label: &str, value: u64) -> io::Result<()> {
-        writeln!(stdout, "  {label:<24} {}", self.value(value))
     }
 }
 
@@ -84,33 +80,13 @@ impl SizeTable<'_> {
 impl Report for InfoReport<'_> {
     fn write_text(&self, stdout: &mut impl Write, raw_bytes: bool) -> io::Result<()> {
         Header(&self.envelope).write(stdout)?;
-        writeln!(
-            stdout,
-            "  {:<24} {}",
-            "Volume serial", self.envelope.snapshot.volume_serial
-        )?;
-        if let Some(label) = self.envelope.snapshot.label {
-            writeln!(stdout, "  {:<24} {}", "Label", Escaped(label))?;
-        }
-        let column = SizeColumn { raw_bytes };
-        for (label, value) in [
-            ("Bytes per sector", u64::from(self.volume.bytes_per_sector)),
-            ("Cluster size", u64::from(self.volume.cluster_size)),
-            ("Volume size", self.volume.total_bytes),
-        ] {
-            column.write_line(stdout, label, value)?;
-        }
-        if let Some(free) = self.volume.free_bytes {
-            column.write_line(stdout, "Free space", free)?;
-        }
-        writeln!(stdout, "  {:<24} {}", "Nodes", self.tree.nodes)?;
-        writeln!(stdout, "  {:<24} {}", "Files", self.tree.files)?;
-        column.write_line(stdout, "Logical size", self.tree.total_size)?;
-        column.write_line(stdout, "Allocated size", self.tree.total_alloc)?;
-        for (key, value) in self.stats.entries() {
-            if value != 0 {
-                writeln!(stdout, "  {key:<24} {value}")?;
-            }
+        for (label, value) in (InfoFields {
+            output: self.output,
+            raw_bytes,
+        })
+        .rows()
+        {
+            writeln!(stdout, "  {label:<24} {value}")?;
         }
         Ok(())
     }
@@ -152,12 +128,7 @@ impl Report for ExtReport<'_> {
                 size: item.total_size,
                 alloc: item.total_alloc,
                 count: Some(item.count),
-                name: Escaped(if item.extension.is_empty() {
-                    "(none)"
-                } else {
-                    item.extension
-                })
-                .to_string(),
+                name: ExtensionLabel(item.extension).to_string(),
             }),
         )
     }

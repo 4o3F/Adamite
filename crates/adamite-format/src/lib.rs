@@ -9,9 +9,11 @@
 )]
 
 mod escape;
+mod info;
 mod time;
 mod units;
 
-pub use escape::Escaped;
+pub use escape::{Escaped, ExtensionLabel};
+pub use info::{InfoFields, VolumeSerial};
 pub use time::ScanTime;
 pub use units::ByteSize;

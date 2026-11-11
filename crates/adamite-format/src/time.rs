@@ -1,4 +1,5 @@
 use nt_time::FileTime;
+use std::fmt;
 use time::{UtcDateTime, format_description::well_known::Rfc3339};
 
 /// An optional FILETIME timestamp rendered as RFC 3339 UTC with seconds precision.
@@ -14,6 +15,12 @@ impl ScanTime {
     pub fn rfc3339(&self) -> Option<String> {
         let datetime = UtcDateTime::try_from(FileTime::new(self.0?)).ok()?;
         datetime.replace_nanosecond(0).ok()?.format(&Rfc3339).ok()
+    }
+}
+
+impl fmt::Display for ScanTime {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.rfc3339().as_deref().unwrap_or("unknown"))
     }
 }
 
@@ -33,5 +40,8 @@ mod tests {
         );
         assert_eq!(ScanTime(Some(u64::MAX)).rfc3339(), None);
         assert_eq!(ScanTime(None).rfc3339(), None);
+        assert_eq!(ScanTime(Some(0)).to_string(), "1601-01-01T00:00:00Z");
+        assert_eq!(ScanTime(Some(u64::MAX)).to_string(), "unknown");
+        assert_eq!(ScanTime(None).to_string(), "unknown");
     }
 }
