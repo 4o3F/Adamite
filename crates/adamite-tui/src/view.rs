@@ -28,6 +28,12 @@ impl<'a> View<'a> {
     }
 
     pub(crate) fn render(&self, frame: &mut Frame<'_>) {
+        let _entered = tracing::info_span!(
+            "tui_frame_render",
+            width = frame.area().width,
+            height = frame.area().height
+        )
+        .entered();
         if frame.area().width < 40 || frame.area().height < 8 {
             frame.render_widget(
                 Paragraph::new("terminal too small (minimum 40×8)"),

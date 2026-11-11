@@ -11,6 +11,10 @@ use std::{
 
 #[derive(Debug, Snafu)]
 pub(crate) enum CliError {
+    #[snafu(display("cannot start profiling"))]
+    Profile {
+        source: adamite_profile::ProfileError,
+    },
     #[snafu(display("cannot browse snapshot"))]
     Terminal { source: TuiError },
     #[snafu(display("{message}"))]

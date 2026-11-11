@@ -11,6 +11,7 @@ adamite-core = { version = "0.1.0", path = "../adamite-core" }
 adamite-format = { version = "0.1.0", path = "../adamite-format" }
 ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
 snafu.workspace = true
+tracing.workspace = true
 unicode-width = "0.2.3"
 
 [dev-dependencies]

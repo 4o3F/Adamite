@@ -54,4 +54,5 @@ The gate checks Rust formatting, Clippy (including Windows cross-target checks),
 | [adamite-io](crates/adamite-io/README.md)             | Slice, image and Windows raw-volume readers with a synchronous scan driver.               |
 | [adamite-core](crates/adamite-core/README.md)         | Scanning, tree aggregation, immutable snapshots and `.adm` persistence.                   |
 | [adamite-ntfs](crates/adamite-ntfs/README.md)         | `no_std` NTFS byte decoding.                                                              |
+| [adamite-profile](crates/adamite-profile/README.md) | Requested heap counters and an opt-in Chrome trace subscriber for executables. |
 | [adamite-fixtures](crates/adamite-fixtures/README.md) | Shared development fixtures, independent reference reconstruction and synthetic builders. |

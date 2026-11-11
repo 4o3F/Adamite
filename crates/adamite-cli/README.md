@@ -15,6 +15,17 @@
 
 `scan`, `info`, `top`, `ext` and `ls` accept `--json` and `--bytes`. Text is the default; `--bytes` prints raw byte counts in text. JSON always uses bytes. `browse` rejects both flags. `--help` shows command help; `adamite --version` shows the version. Running `adamite` without a subcommand prints help.
 
+## Chrome tracing
+
+Every subcommand accepts the global `--trace-chrome <FILE>` option before or after its name. For example:
+
+```sh
+adamite --trace-chrome scan.json scan volume.img -o volume.adm
+adamite info volume.adm --trace-chrome load.json
+```
+
+Open the JSON file in Perfetto or `chrome://tracing` to inspect scan stages, I/O batches, snapshot encoding/decoding and rendering. Each span ends with a `heap_usage` event whose `args` identify the span and report `heap_current`, `heap_peak`, `heap_delta` and `process_peak` in requested bytes. `heap_peak` covers that span's open lifetime, and `process_peak` is cumulative for the process; the signed delta is the change in live bytes since that span opened. Measurements include other threads and profiling overhead. The trace is finished when the command returns, including command errors. Without this option, the binary installs no tracing subscriber.
+
 ## Sources and paths
 
 SOURCE is classified in this order:

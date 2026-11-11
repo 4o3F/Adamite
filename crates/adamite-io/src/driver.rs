@@ -114,17 +114,30 @@ impl Pending {
         R: VolumeReader + ?Sized,
         F: FnMut(ReadRequest, &[u8]) -> Result<(), FeedError>,
     {
-        let batch_len = self.requests.len();
+        let span = tracing::info_span!(
+            "driver_batch",
+            requests = self.requests.len(),
+            bytes = tracing::field::Empty
+        );
+        let mut bytes = 0usize;
         while let Some(request) = self.requests.pop_front() {
             let additional = request.len.saturating_sub(self.buffer.len());
             self.buffer
                 .try_reserve(additional)
                 .map_err(|source| VolumeError::Allocation { source })?;
             self.buffer.resize(request.len, 0);
-            reader.read_exact_at(request.offset, &mut self.buffer)?;
+            {
+                let _entered = span.enter();
+                reader.read_exact_at(request.offset, &mut self.buffer)?;
+            }
+            bytes = bytes
+                .checked_add(request.len)
+                .ok_or(VolumeError::Overflow {
+                    operation: "batch byte count",
+                })?;
             feed(request, &self.buffer).map_err(|source| VolumeError::Feed { request, source })?;
         }
-        tracing::debug!(requests = batch_len, phase = ?self.phase, "served scan read batch");
+        span.record("bytes", bytes);
         Ok(())
     }
 

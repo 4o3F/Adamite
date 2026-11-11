@@ -24,6 +24,8 @@ impl<'a> Validator<'a> {
     }
 
     pub(super) fn validate(&self) -> Result<(), PersistError> {
+        let _entered =
+            tracing::info_span!("persist_validate", nodes = self.data.nodes.len()).entered();
         self.columns()?;
         self.names()?;
         self.root()?;

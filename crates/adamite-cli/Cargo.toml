@@ -11,6 +11,7 @@ name = "adamite"
 path = "src/main.rs"
 
 [dependencies]
+adamite-profile = { version = "0.1.0", path = "../adamite-profile" }
 adamite-core = { version = "0.1.0", path = "../adamite-core" }
 adamite-format = { version = "0.1.0", path = "../adamite-format" }
 adamite-io = { version = "0.1.0", path = "../adamite-io" }
@@ -19,6 +20,7 @@ clap = { version = "4", default-features = false, features = ["std", "derive", "
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 snafu.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 adamite-fixtures = { version = "0.1.0", path = "../adamite-fixtures" }

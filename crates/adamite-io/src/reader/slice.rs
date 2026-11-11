@@ -21,6 +21,9 @@ impl VolumeReader for SliceReader<'_> {
     }
 
     fn read_exact_at(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), VolumeError> {
+        let _entered =
+            tracing::info_span!("reader_read", reader = "slice", offset, bytes = buf.len())
+                .entered();
         let out_of_bounds = || VolumeError::OutOfBounds {
             offset,
             len: buf.len(),

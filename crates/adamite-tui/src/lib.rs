@@ -59,6 +59,7 @@ impl<'a> Browser<'a> {
     /// attempted after initialization fails and after every event-loop result; a loop failure
     /// takes precedence over a restoration failure. Ratatui's restoration panic hook is retained.
     pub fn run(self) -> Result<(), TuiError> {
+        let startup = tracing::info_span!("tui_startup").entered();
         let mut terminal = match ratatui::try_init() {
             Ok(terminal) => terminal,
             Err(source) => {
@@ -69,6 +70,7 @@ impl<'a> Browser<'a> {
                 });
             }
         };
+        drop(startup);
         let result = self.run_loop(&mut terminal);
         let restored = ratatui::try_restore().map_err(|source| TuiError::Io {
             operation: "restore",

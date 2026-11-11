@@ -23,6 +23,7 @@ pub struct Scanner {
     requests: Requests,
     phase: ScanPhase,
     output: Option<ScanOutput>,
+    stage_span: Option<tracing::Span>,
     record_read: Option<(MftMapping, RecordAssembly)>,
     bootstrap: Option<Record0>,
     discovery: Option<Discovery>,
@@ -55,6 +56,7 @@ impl Scanner {
             config,
             phase: ScanPhase::Boot,
             output: None,
+            stage_span: None,
             record_read: None,
             bootstrap: None,
             discovery: None,
@@ -82,11 +84,81 @@ impl Scanner {
     /// Invalid geometry, bootstrap data, arithmetic overflow or allocation failure
     /// terminates the scan. Calls after the completed output is delivered return Inactive.
     pub fn step(&mut self) -> Result<ScanStep, ScanError> {
-        let span = tracing::info_span!("scan_phase", phase = ?self.phase);
-        let _entered = span.enter();
-        let result = self.advance();
+        let phase = self.phase;
+        let stage = self
+            .stage_span
+            .get_or_insert_with(|| match phase {
+                ScanPhase::Boot | ScanPhase::Record0 | ScanPhase::Discover => {
+                    tracing::info_span!("bootstrap")
+                }
+                ScanPhase::Stream => tracing::info_span!("ingest", records = tracing::field::Empty),
+                ScanPhase::Merge => tracing::info_span!(
+                    "merge",
+                    records = tracing::field::Empty,
+                    entries = tracing::field::Empty
+                ),
+                ScanPhase::Link => tracing::info_span!(
+                    "link",
+                    entries = self.entries.len(),
+                    nodes = tracing::field::Empty
+                ),
+                ScanPhase::Snapshot => tracing::info_span!(
+                    "build",
+                    nodes = self.parent_tree.as_ref().map_or(0, |tree| tree.nodes.len())
+                ),
+                ScanPhase::Aggregate => tracing::info_span!(
+                    "aggregate",
+                    nodes = self
+                        .output
+                        .as_ref()
+                        .map_or(0, |output| output.snapshot.len())
+                ),
+                ScanPhase::Finalize => tracing::info_span!(
+                    "finalize",
+                    nodes = self
+                        .output
+                        .as_ref()
+                        .map_or(0, |output| output.snapshot.len())
+                ),
+                ScanPhase::Done | ScanPhase::Failed => tracing::Span::none(),
+            })
+            .clone();
+        let result = {
+            let _stage_entered = stage.enter();
+            let span = tracing::info_span!("scan_phase", phase = ?phase);
+            let _entered = span.enter();
+            self.advance()
+        };
         if result.is_err() && !matches!(self.phase, ScanPhase::Done | ScanPhase::Failed) {
             self.fail();
+        }
+        if self.phase != phase {
+            match phase {
+                ScanPhase::Stream | ScanPhase::Merge => {
+                    stage.record(
+                        "records",
+                        self.ingest
+                            .as_ref()
+                            .map_or(0, |state| state.stats.records_total),
+                    );
+                    if phase == ScanPhase::Merge {
+                        stage.record("entries", self.entries.len());
+                    }
+                }
+                ScanPhase::Link => {
+                    stage.record(
+                        "nodes",
+                        self.parent_tree.as_ref().map_or(0, |tree| tree.nodes.len()),
+                    );
+                }
+                _ => {}
+            }
+            if !matches!(
+                (phase, self.phase),
+                (ScanPhase::Boot, ScanPhase::Record0) | (ScanPhase::Record0, ScanPhase::Discover)
+            ) {
+                self.stage_span = None;
+            }
         }
         result
     }

@@ -64,7 +64,15 @@ impl ScanOutput {
     /// Returns [`PersistError`] if a format width is exceeded, length arithmetic
     /// overflows, or the output buffer cannot be allocated.
     pub fn to_bytes(&self) -> Result<Vec<u8>, PersistError> {
-        self.snapshot.to_adm_bytes(&self.stats)
+        let span = tracing::info_span!(
+            "persist_encode",
+            nodes = self.snapshot.len(),
+            bytes = tracing::field::Empty
+        );
+        let _entered = span.enter();
+        let bytes = self.snapshot.to_adm_bytes(&self.stats)?;
+        span.record("bytes", bytes.len());
+        Ok(bytes)
     }
 
     /// Decodes canonical `.adm` v1 bytes after validating the format, tree and indexes.
@@ -74,7 +82,14 @@ impl ScanOutput {
     /// Returns [`PersistError`] for invalid or truncated bytes, unsupported versions,
     /// checksum or snapshot invariant failures, arithmetic overflow, or allocation failure.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, PersistError> {
+        let span = tracing::info_span!(
+            "persist_decode",
+            bytes = bytes.len(),
+            nodes = tracing::field::Empty
+        );
+        let _entered = span.enter();
         let (snapshot, stats) = Snapshot::from_adm_bytes(bytes)?;
+        span.record("nodes", snapshot.len());
         Ok(Self { snapshot, stats })
     }
 }

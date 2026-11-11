@@ -57,6 +57,9 @@ impl VolumeReader for ImageReader {
     }
 
     fn read_exact_at(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), VolumeError> {
+        let _entered =
+            tracing::info_span!("reader_read", reader = "image", offset, bytes = buf.len())
+                .entered();
         let end = u64::try_from(buf.len())
             .ok()
             .and_then(|len| offset.checked_add(len));

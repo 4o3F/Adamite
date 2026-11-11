@@ -16,6 +16,9 @@ use std::{ffi::OsStr, io::Write, path::PathBuf};
     about = "Scan NTFS volumes and inspect snapshots"
 )]
 pub(crate) struct Cli {
+    /// Write a Chrome trace with stage timings and requested heap usage.
+    #[arg(long, global = true, value_name = "FILE")]
+    pub(crate) trace_chrome: Option<PathBuf>,
     #[command(subcommand)]
     pub(crate) command: Option<Command>,
 }

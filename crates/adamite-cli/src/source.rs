@@ -20,6 +20,7 @@ pub(crate) enum Source {
 
 impl Source {
     pub(crate) fn open(path: &Path) -> Result<Self, CliError> {
+        let _entered = tracing::info_span!("source_detect").entered();
         if let Some(text) = path.to_str() {
             let mut chars = text.chars();
             if let (Some(letter), Some(':'), None) = (chars.next(), chars.next(), chars.next())
@@ -76,6 +77,7 @@ impl Source {
     pub(crate) fn load(self) -> Result<ScanOutput, CliError> {
         match self {
             Self::Snapshot { path, mut file } => {
+                let _entered = tracing::info_span!("snapshot_load").entered();
                 let len = file
                     .metadata()
                     .map_err(|source| CliError::Io {
@@ -123,6 +125,7 @@ impl Source {
         path: &Path,
         open: impl FnOnce() -> Result<(R, ScanContext), VolumeError>,
     ) -> Result<ScanOutput, VolumeError> {
+        let _entered = tracing::info_span!("scan").entered();
         let _ = writeln!(io::stderr().lock(), "scanning {}…", path.display());
         let (mut reader, context) = open()?;
         let config = ScanConfig {

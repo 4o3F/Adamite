@@ -122,6 +122,9 @@ impl VolumeReader for RawVolumeReader {
     }
 
     fn read_exact_at(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), VolumeError> {
+        let _entered =
+            tracing::info_span!("reader_read", reader = "volume", offset, bytes = buf.len())
+                .entered();
         let span = Span::new(offset, buf.len(), self.logical, self.len)?;
         if buf.is_empty() {
             return Ok(());

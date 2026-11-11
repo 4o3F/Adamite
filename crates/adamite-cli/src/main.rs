@@ -17,12 +17,17 @@ mod report;
 mod save;
 mod source;
 
+use adamite_profile::{ChromeProfile, CountingAllocator};
 use clap::{CommandFactory, Parser};
+
 use cli::Cli;
 use std::{
     io::{self, Write},
     process::ExitCode,
 };
+
+#[global_allocator]
+static ALLOC: CountingAllocator = CountingAllocator::new();
 
 fn main() -> ExitCode {
     let cli = match Cli::try_parse() {
@@ -38,6 +43,19 @@ fn main() -> ExitCode {
                 Err(error) if error.kind() != io::ErrorKind::BrokenPipe => ExitCode::FAILURE,
                 _ => ExitCode::from(code),
             };
+        }
+    };
+    let _profile = match cli
+        .trace_chrome
+        .as_ref()
+        .map(|path| ChromeProfile::install(path, &ALLOC))
+        .transpose()
+    {
+        Ok(profile) => profile,
+        Err(source) => {
+            let error = error::CliError::Profile { source };
+            error.print();
+            return ExitCode::from(error.exit_code());
         }
     };
     let mut stdout = io::stdout().lock();

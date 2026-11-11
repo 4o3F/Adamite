@@ -29,6 +29,7 @@ impl Renderer {
         report: &impl Report,
         stdout: &mut impl Write,
     ) -> Result<(), CliError> {
+        let _entered = tracing::info_span!("render").entered();
         if self.json {
             json::Json(report).write(stdout)
         } else {

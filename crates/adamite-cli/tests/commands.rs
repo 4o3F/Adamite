@@ -1247,6 +1247,9 @@ fn clap_usage_help_and_version() -> TestResult {
         assert!(output.status.success(), "{args:?}");
         assert!(output.stderr.is_empty());
         let text = String::from_utf8(output.stdout)?;
+        if !args.contains(&"--version") {
+            assert!(text.contains("--trace-chrome <FILE>"), "{text}");
+        }
         assert!(
             text.contains(if args.contains(&"--version") {
                 "adamite 0.1.0"
@@ -1347,5 +1350,178 @@ fn unwritable_output_exits_four_when_permissions_are_enforced() -> TestResult {
         assert!(!path.exists());
     }
     case.assert_no_temporary_files()?;
+    Ok(())
+}
+
+#[test]
+fn chrome_trace_contains_scan_stages_batches_and_heap() -> TestResult {
+    let case = Case::new("chrome-trace-scan", "basic-4k")?;
+    let path = case.directory.join("scan.json");
+    let output = Command::new(env!("CARGO_BIN_EXE_adamite"))
+        .arg("--trace-chrome")
+        .arg(&path)
+        .arg("scan")
+        .arg(&case.image)
+        .output()?;
+    assert!(output.status.success(), "{output:?}");
+    let trace: Value = serde_json::from_slice(&fs::read(&path)?)?;
+    let events = trace.as_array().ok_or("trace is not an array")?;
+    for name in [
+        "source_detect",
+        "scan",
+        "bootstrap",
+        "ingest",
+        "merge",
+        "link",
+        "build",
+        "aggregate",
+        "finalize",
+        "driver_batch",
+        "reader_read",
+        "render",
+    ] {
+        assert!(
+            events.iter().any(|event| event["name"] == name),
+            "missing {name}"
+        );
+        let heap = events
+            .iter()
+            .find(|event| event["name"] == "heap_usage" && event["args"]["span_name"] == name)
+            .ok_or_else(|| format!("missing heap event for {name}"))?;
+        for field in ["heap_current", "heap_peak", "heap_delta", "process_peak"] {
+            heap["args"][field]
+                .as_str()
+                .ok_or("missing heap argument")?
+                .parse::<i128>()?;
+        }
+    }
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event["name"] == "bootstrap" && event["ph"] == "b")
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event["name"] == "bootstrap" && event["ph"] == "e")
+            .count(),
+        1
+    );
+    let batch = events
+        .iter()
+        .find(|event| event["name"] == "driver_batch" && event["ph"] == "e")
+        .ok_or("missing completed batch")?;
+    assert!(
+        batch["args"]["bytes"]
+            .as_str()
+            .ok_or("missing bytes")?
+            .parse::<usize>()?
+            > 0
+    );
+    assert!(
+        batch["args"]["requests"]
+            .as_str()
+            .ok_or("missing requests")?
+            .parse::<usize>()?
+            > 0
+    );
+    Ok(())
+}
+
+#[test]
+fn chrome_trace_is_global_and_finishes_on_command_errors() -> TestResult {
+    let case = Case::new("chrome-trace-errors", "basic-4k")?;
+    let saved = case.snapshot("source.adm")?;
+    for command in ["scan", "info", "top", "ext", "ls", "browse"] {
+        let path = case.directory.join(format!("{command}.json"));
+        let source = if command == "scan" {
+            &case.image
+        } else {
+            &saved
+        };
+        let output = Command::new(env!("CARGO_BIN_EXE_adamite"))
+            .arg(command)
+            .arg(source)
+            .arg("--trace-chrome")
+            .arg(&path)
+            .output()?;
+        assert_eq!(
+            output.status.code(),
+            Some(if command == "browse" { 2 } else { 0 }),
+            "{output:?}"
+        );
+        let trace: Value = serde_json::from_slice(&fs::read(path)?)?;
+        assert!(trace.is_array());
+    }
+    let path = case.directory.join("failure.json");
+    let output = Command::new(env!("CARGO_BIN_EXE_adamite"))
+        .arg("--trace-chrome")
+        .arg(&path)
+        .arg("info")
+        .arg(case.directory.join("missing.img"))
+        .output()?;
+    assert_eq!(output.status.code(), Some(1));
+    let trace: Value = serde_json::from_slice(&fs::read(path)?)?;
+    assert!(
+        trace
+            .as_array()
+            .ok_or("trace is not an array")?
+            .iter()
+            .any(|event| {
+                event["name"] == "heap_usage" && event["args"]["span_name"] == "source_detect"
+            })
+    );
+    Ok(())
+}
+
+#[test]
+fn chrome_trace_covers_snapshot_saving_loading_and_validation() -> TestResult {
+    let case = Case::new("chrome-trace-persistence", "basic-4k")?;
+    let saved = case.directory.join("saved.adm");
+    let trace_path = case.directory.join("save.json");
+    let output = Command::new(env!("CARGO_BIN_EXE_adamite"))
+        .arg("scan")
+        .arg(&case.image)
+        .arg("-o")
+        .arg(&saved)
+        .arg("--force")
+        .arg("--trace-chrome")
+        .arg(&trace_path)
+        .output()?;
+    assert!(output.status.success(), "{output:?}");
+    let bytes = fs::read(&saved)?;
+    assert_eq!(ScanOutput::from_bytes(&bytes)?.to_bytes()?, bytes);
+    let trace: Value = serde_json::from_slice(&fs::read(trace_path)?)?;
+    for name in ["snapshot_save", "persist_encode"] {
+        assert!(
+            trace
+                .as_array()
+                .ok_or("trace is not an array")?
+                .iter()
+                .any(|event| { event["name"] == name && event["ph"] == "e" }),
+            "missing {name}"
+        );
+    }
+    let trace_path = case.directory.join("load.json");
+    let output = Command::new(env!("CARGO_BIN_EXE_adamite"))
+        .arg("info")
+        .arg(&saved)
+        .arg("--trace-chrome")
+        .arg(&trace_path)
+        .output()?;
+    assert!(output.status.success(), "{output:?}");
+    let trace: Value = serde_json::from_slice(&fs::read(trace_path)?)?;
+    for name in ["snapshot_load", "persist_decode", "persist_validate"] {
+        assert!(
+            trace
+                .as_array()
+                .ok_or("trace is not an array")?
+                .iter()
+                .any(|event| { event["name"] == name && event["ph"] == "e" }),
+            "missing {name}"
+        );
+    }
     Ok(())
 }

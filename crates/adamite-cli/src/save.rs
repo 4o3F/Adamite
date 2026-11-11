@@ -69,6 +69,7 @@ impl SnapshotFile {
 
     /// Encodes, writes, synchronizes and closes the temporary file before publishing it.
     pub(crate) fn save(&self, output: &ScanOutput) -> Result<usize, CliError> {
+        let _entered = tracing::info_span!("snapshot_save").entered();
         let bytes = output.to_bytes().map_err(|source| CliError::Persist {
             operation: "encode",
             path: self.path.clone(),
