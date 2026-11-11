@@ -107,13 +107,13 @@ Each milestone ends with one reviewed commit and `deno task check` green. A mile
 
 ### P6 — Real-volume round trip and documentation
 
-- [ ] Extend `adamite-io/tests/raw_volume.rs` per D7; update ARCHITECTURE, core and fuzz READMEs. After the commit, confirm the elevated Windows CI round trip passes.
+- [x] Extend `adamite-io/tests/raw_volume.rs` per D7; update ARCHITECTURE, core and fuzz READMEs. After the commit, confirm the elevated Windows CI round trip passes.
 
 ## Acceptance criteria
 
-- [ ] All three fixtures round-trip through `ScanOutput::{to_bytes, from_bytes}` with equality and byte-identical re-encoding; the golden v1 test passes.
-- [ ] Every D4 rule has a targeted rejection test returning the specified `PersistError` variant; no test relies on panics.
-- [ ] `rg -n 'unsafe' crates/adamite-core/src` matches only the crate-level `forbid`; `rg -n 'std::fs|File::' crates/adamite-core/src` has no matches.
-- [ ] `deno task check` and `deno task check --fuzz` pass with seven smoke targets; the existing six corpora are byte-identical and `fuzz/corpus/persist` is non-empty.
-- [ ] CI `check (windows-latest)` passes the elevated C: scan with `.adm` round trip.
-- [ ] ARCHITECTURE and READMEs describe the implemented format location, dependency edge and API.
+- [x] All three fixtures round-trip through `ScanOutput::{to_bytes, from_bytes}` with equality and byte-identical re-encoding; the golden v1 test passes.
+- [x] Every D4 rule has a targeted rejection test returning the specified `PersistError` variant; no test relies on panics.
+- [x] `rg -n 'unsafe' crates/adamite-core/src` matches only the crate-level `forbid`; `rg -n 'std::fs|File::' crates/adamite-core/src` has no matches.
+- [x] `deno task check` and `deno task check --fuzz` pass with seven smoke targets; the existing six corpora are byte-identical and `fuzz/corpus/persist` is non-empty.
+- [x] CI `check (windows-latest)` passes the elevated C: scan with `.adm` round trip.
+- [x] ARCHITECTURE and READMEs describe the implemented format location, dependency edge and API.
