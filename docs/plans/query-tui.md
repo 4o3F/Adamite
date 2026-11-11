@@ -103,7 +103,7 @@ Each task ends with one reviewed commit, `deno task check` green and CI green. E
 
 - [x] Q1 — `FileKind`, `FileFilter`, `rank_files`, `extension_stats_under`, `kind_stats` (D1).
 - [x] Q2 — `NamePattern` and `search` (D1).
-- [ ] Q3 — CLI `top`/`ext` flags and `adamite search`, with the core and CLI READMEs (D2).
+- [x] Q3 — CLI `top`/`ext` flags and `adamite search`, with the core and CLI READMEs (D2).
 - [ ] Q4 — TUI scope, filter, kind grouping, Search tab and jumps (D3).
 - [ ] Q5 — `Volume::list`, the snapshot directory and the poll-based elevated job; CLI behaviour unchanged (D4).
 - [ ] Q6 — Home screen, in-TUI scanning, `adamite`/`browse` without a source, the TUI README and ARCHITECTURE §4 (D4).

@@ -20,6 +20,12 @@ impl<'a> Locator<'a> {
         Ok(current)
     }
 
+    pub(crate) fn resolve_directory(&self, path: &str) -> Result<NodeId, CliError> {
+        let id = self.resolve(path)?;
+        self.directory(id)?;
+        Ok(id)
+    }
+
     pub(crate) fn directory(&self, id: NodeId) -> Result<&'a [NodeId], CliError> {
         if self.snapshot.node(id).is_some_and(NodeView::is_dir)
             && let Some(children) = self.snapshot.children(id)

@@ -4,7 +4,7 @@ mod support;
 
 use adamite_core::{
     scan::{ScanConfig, ScanContext, ScanOutput, ScanStats},
-    snapshot::{NodeId, Snapshot},
+    snapshot::{FileFilter, FileKind, NamePattern, NodeId, Snapshot},
 };
 use adamite_fixtures::{
     Fixture,
@@ -1771,5 +1771,442 @@ fn status_file_reports_done_when_saved_output_pipe_is_closed() -> TestResult {
         )
     );
     assert!(lines.iter().all(|line| line.get("failed").is_none()));
+    Ok(())
+}
+
+fn query_body(
+    case: &Case,
+    command: &str,
+    source: &Path,
+    flags: &[&str],
+) -> Result<String, Box<dyn Error>> {
+    let output = case.command(command, source, flags);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout)?;
+    Ok(text.split_once('\n').ok_or("report header")?.1.to_owned())
+}
+
+fn expected_top_item(snapshot: &Snapshot, id: NodeId) -> Value {
+    let node = snapshot.node(id).expect("ranked file");
+    json!({ "path": snapshot.path(id).expect("path").expect("existing path"),
+        "size": node.size(), "alloc": node.alloc(), "mtime_filetime": node.mtime().to_string() })
+}
+
+fn expected_search_item(snapshot: &Snapshot, id: NodeId) -> Value {
+    let mut item = expected_ls_item(snapshot, id);
+    item.as_object_mut().expect("item object").insert(
+        "path".to_owned(),
+        json!(snapshot.path(id).expect("path").expect("existing path")),
+    );
+    item
+}
+
+#[test]
+fn filtered_top_queries_match_core_on_images_and_snapshots() -> TestResult {
+    let case = Case::new("filtered-top", "basic-4k")?;
+    let saved = case.snapshot("filtered.adm")?;
+    let snapshot = &case.output.snapshot;
+    let documents =
+        snapshot.rank_files(NodeId::ROOT, &FileFilter::Kind(FileKind::Document), 100)?;
+    assert!(
+        documents
+            .iter()
+            .any(|id| !snapshot.top_files().contains(id)),
+        "fixture must exercise a result beyond the stored hundred"
+    );
+    let compressed = case.path_id("/compressed");
+    let selected = format!("/#{}", compressed.raw());
+    for source in [&case.image, &saved] {
+        for (flags, under, filter) in [
+            (
+                vec!["--ext", ".TxT", "--n", "100"],
+                NodeId::ROOT,
+                FileFilter::extensions(["txt"])?,
+            ),
+            (
+                vec!["--kind", "document", "--n", "100"],
+                NodeId::ROOT,
+                FileFilter::Kind(FileKind::Document),
+            ),
+            (
+                vec!["--under", "/compressed", "--n", "100"],
+                compressed,
+                FileFilter::All,
+            ),
+            (
+                vec!["--under", &selected, "--ext", ".TXT", "--n", "100"],
+                compressed,
+                FileFilter::extensions(["txt"])?,
+            ),
+            (
+                vec!["--ext", "", "--ext", ".txt,BIN", "--n", "100"],
+                NodeId::ROOT,
+                FileFilter::extensions(["", "txt", "bin"])?,
+            ),
+            (
+                vec!["--under", "/other", "--n", "100"],
+                case.path_id("/other"),
+                FileFilter::All,
+            ),
+        ] {
+            let value = case.json_with("top", source, &flags);
+            let expected: Vec<_> = snapshot
+                .rank_files(under, &filter, 100)?
+                .into_iter()
+                .map(|id| expected_top_item(snapshot, id))
+                .collect();
+            assert_eq!(value["items"], json!(expected), "{flags:?}");
+            assert_eq!(value["command"], "top");
+            assert_eq!(value.as_object().ok_or("top report")?.len(), 5);
+            let text = query_body(&case, "top", source, &flags)?;
+            for item in &expected {
+                assert!(
+                    text.contains(item["path"].as_str().ok_or("path")?),
+                    "{text}"
+                );
+            }
+        }
+        assert!(
+            query_body(&case, "top", source, &["--ext", "txt", "--n", "100"])?
+                .contains("/tiny.txt")
+        );
+        assert_eq!(
+            query_body(&case, "top", source, &["--ext", ".txt", "--n", "100"])?,
+            query_body(&case, "top", source, &["--kind", "document", "--n", "100"])?
+        );
+        assert_eq!(
+            query_body(&case, "top", source, &["--n", "100"])?,
+            query_body(&case, "top", source, &["--under", "/", "--n", "100"])?
+        );
+        for kind in FileKind::ALL {
+            let value = case.json_with(
+                "top",
+                source,
+                &["--kind", kind.name(), "--under", "/compressed"],
+            );
+            assert_eq!(
+                value["items"].as_array().ok_or("items")?.len(),
+                usize::from(kind == FileKind::Document)
+            );
+        }
+        assert_eq!(
+            query_body(&case, "top", source, &["--under", "/compressed"])?,
+            concat!(
+                "        Size        Alloc Path\n",
+                "   256.0 KiB     32.0 KiB /compressed/c.txt\n",
+            )
+        );
+        assert_eq!(
+            query_body(
+                &case,
+                "top",
+                source,
+                &["--kind", "document", "--under", "/compressed", "--bytes"]
+            )?,
+            concat!(
+                "                Size                Alloc Path\n",
+                "              262144                32768 /compressed/c.txt\n",
+            )
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn extension_and_kind_queries_match_core_and_keep_existing_fields() -> TestResult {
+    let case = Case::new("scoped-extension-kind", "basic-4k")?;
+    let saved = case.snapshot("groups.adm")?;
+    let snapshot = &case.output.snapshot;
+    for source in [&case.image, &saved] {
+        for under in [None, Some("/"), Some("/compressed"), Some("/other")] {
+            let mut flags = vec!["--n", "1000"];
+            if let Some(path) = under {
+                flags.extend(["--under", path]);
+            }
+            let id = under.map(|path| case.path_id(path)).unwrap_or(NodeId::ROOT);
+            let extensions = case.json_with("ext", source, &flags);
+            let expected: Vec<_> = snapshot.extension_stats_under(id)?.iter().map(|stat| json!({"extension": stat.extension(), "count": stat.count(), "total_size": stat.total_size(), "total_alloc": stat.total_alloc()})).collect();
+            assert_eq!(extensions["items"], json!(expected));
+            assert_eq!(extensions.as_object().ok_or("ext report")?.len(), 5);
+            flags.extend(["--by", "kind"]);
+            let kinds = case.json_with("ext", source, &flags);
+            let expected: Vec<_> = snapshot.kind_stats(id)?.iter().map(|stat| json!({"kind": stat.kind().name(), "count": stat.count(), "total_size": stat.total_size(), "total_alloc": stat.total_alloc()})).collect();
+            assert_eq!(kinds["items"], json!(expected));
+            assert_eq!(kinds["command"], "ext");
+            assert_eq!(kinds.as_object().ok_or("kind report")?.len(), 5);
+            assert!(
+                query_body(&case, "ext", source, &flags)?
+                    .lines()
+                    .next()
+                    .ok_or("column names")?
+                    .ends_with(" Kind")
+            );
+        }
+        assert_eq!(
+            query_body(&case, "ext", source, &[])?,
+            query_body(&case, "ext", source, &["--by", "extension"])?
+        );
+        assert_eq!(
+            query_body(&case, "ext", source, &["--under", "/compressed"])?,
+            concat!(
+                "        Size        Alloc      Count Extension\n",
+                "   256.0 KiB     32.0 KiB          1 txt\n",
+            )
+        );
+        assert_eq!(
+            query_body(
+                &case,
+                "ext",
+                source,
+                &["--under", "/compressed", "--by", "kind", "--bytes"]
+            )?,
+            concat!(
+                "                Size                Alloc      Count Kind\n",
+                "              262144                32768          1 document\n",
+            )
+        );
+        let kinds = case.json_with("ext", source, &["--by", "kind", "--n", "1"]);
+        assert_eq!(kinds["items"].as_array().ok_or("items")?.len(), 1);
+    }
+    Ok(())
+}
+
+#[test]
+fn search_json_and_text_pages_reach_the_end_in_core_order() -> TestResult {
+    let case = Case::new("search-paging", "basic-4k")?;
+    let saved = case.snapshot("search.adm")?;
+    let snapshot = &case.output.snapshot;
+    let all = snapshot.search(case.path_id("/bigdir"), &NamePattern::glob("f*")?, 0, 500)?;
+    assert_eq!(all.total_matches(), 200);
+    let expected: Vec<_> = all
+        .items()
+        .iter()
+        .map(|&id| expected_search_item(snapshot, id))
+        .collect();
+    for source in [&case.image, &saved] {
+        let mut combined = Vec::new();
+        for offset in [0, 73, 146] {
+            let offset_arg = offset.to_string();
+            let flags = [
+                "f*",
+                "--under",
+                "/BIGDIR",
+                "--offset",
+                &offset_arg,
+                "--limit",
+                "73",
+            ];
+            let value = case.json_with("search", source, &flags);
+            assert_eq!(value["schema"], "adamite/1");
+            assert_eq!(value["command"], "search");
+            assert_eq!(value["units"], json!({"size": "bytes"}));
+            assert_eq!(value.as_object().ok_or("search report")?.len(), 7);
+            assert_eq!(value["total_matches"], 200);
+            let items = value["items"].as_array().ok_or("search items")?;
+            assert_eq!(
+                items,
+                &expected
+                    .iter()
+                    .skip(offset)
+                    .take(73)
+                    .cloned()
+                    .collect::<Vec<_>>()
+            );
+            combined.extend(items.iter().cloned());
+            let end = offset + items.len();
+            let footer = if end < 200 {
+                assert_eq!(value["next_offset"], end);
+                format!("showing {}–{end} of 200 · next offset={end}", offset + 1)
+            } else {
+                assert!(value["next_offset"].is_null());
+                format!("showing {}–{end} of 200", offset + 1)
+            };
+            let body = query_body(&case, "search", source, &flags)?;
+            assert_eq!(body.lines().last().ok_or("footer")?, footer);
+            assert_eq!(body.lines().count(), items.len() + 2);
+            for item in items {
+                assert!(body.contains(item["path"].as_str().ok_or("path")?));
+            }
+        }
+        assert_eq!(combined, expected);
+        for offset in [200, 1000, usize::MAX] {
+            let arg = offset.to_string();
+            let flags = ["f*", "--under", "/bigdir", "--offset", &arg];
+            let value = case.json_with("search", source, &flags);
+            assert_eq!(value["items"], json!([]));
+            assert_eq!(value["total_matches"], 200);
+            assert!(value["next_offset"].is_null());
+            assert!(query_body(&case, "search", source, &flags)?.ends_with("showing 0 of 200\n"));
+        }
+        let limited = case.json_with("search", source, &["f*", "--under", "/bigdir"]);
+        assert_eq!(
+            limited["items"].as_array().ok_or("default items")?.len(),
+            50
+        );
+        assert_eq!(limited["next_offset"], 50);
+    }
+    Ok(())
+}
+
+#[test]
+fn search_rows_preserve_directory_markers_flags_and_byte_formatting() -> TestResult {
+    let case = Case::new("search-rows", "basic-4k")?;
+    let saved = case.snapshot("rows.adm")?;
+    for source in [&case.image, &saved] {
+        assert_eq!(
+            query_body(&case, "search", source, &["bigdir"])?,
+            concat!(
+                "  Total size  Total alloc      Files Path\n",
+                "         0 B     40.0 KiB        200 /bigdir/\n",
+                "showing 1–1 of 1\n",
+            )
+        );
+        assert_eq!(
+            query_body(
+                &case,
+                "search",
+                source,
+                &["*.TXT", "--under", "/compressed", "--bytes"]
+            )?,
+            concat!(
+                "          Total size          Total alloc      Files Path\n",
+                "              262144                32768          1 /compressed/c.txt\n",
+                "showing 1–1 of 1\n",
+            )
+        );
+        for flags in [
+            vec!["no-matching-name"],
+            vec!["bigdir", "--under", "/bigdir"],
+        ] {
+            let value = case.json_with("search", source, &flags);
+            assert_eq!(value["items"], json!([]));
+            assert_eq!(value["total_matches"], 0);
+            assert!(value["next_offset"].is_null());
+            assert!(query_body(&case, "search", source, &flags)?.ends_with("no matches\n"));
+        }
+        let links = case.json_with("search", source, &["link"]);
+        assert_eq!(links["total_matches"], 2);
+        assert!(
+            links["items"]
+                .as_array()
+                .ok_or("link items")?
+                .iter()
+                .any(|item| item["flags"]
+                    .as_array()
+                    .is_some_and(|flags| flags.contains(&json!("hardlink_dup"))))
+        );
+        let metadata = case.json_with("search", source, &["<ntfs metadata>"]);
+        assert_eq!(metadata["total_matches"], 1);
+        assert_eq!(metadata["items"][0]["kind"], "dir");
+        assert!(
+            metadata["items"][0]["flags"]
+                .as_array()
+                .ok_or("flags")?
+                .contains(&json!("synthetic"))
+        );
+        let selected = format!("/#{}", case.path_id("/compressed").raw());
+        let flags = [
+            "*",
+            "--under",
+            &selected,
+            "--profile",
+            "max",
+            "--threads",
+            "4",
+            "--no-elevate",
+        ];
+        assert_eq!(
+            case.json_with("search", source, &flags)["items"][0]["path"],
+            "/compressed/c.txt"
+        );
+    }
+    let control = Case::from_image("search-control-escaping", &path_test_image())?;
+    let body = query_body(&control, "search", &control.image, &["line*"])?;
+    assert!(body.contains("/line\\u{a}\\u{9}\\u{1b}.TX\\u{a}T/"));
+    assert!(!body.contains('\u{1b}'));
+    Ok(())
+}
+
+#[test]
+fn query_scopes_reuse_missing_file_and_ambiguous_path_errors() -> TestResult {
+    let case = Case::new("query-scope-errors", "basic-4k")?;
+    for (path, message) in [
+        ("/missing", "not found"),
+        ("/tiny.txt", "not a directory"),
+        ("/tiny.txt/child", "not a directory"),
+    ] {
+        for (command, mut flags) in [("top", vec![]), ("ext", vec![]), ("search", vec!["*"])] {
+            flags.extend(["--under", path, "--json"]);
+            assert!(
+                case.assert_command_failure(command, &flags, 1)
+                    .contains(message)
+            );
+        }
+    }
+    let ambiguous = Case::from_image("query-scope-ambiguity", &path_test_image())?;
+    for (command, mut flags) in [
+        ("top", vec![]),
+        ("ext", vec!["--by", "kind"]),
+        ("search", vec!["*"]),
+    ] {
+        flags.extend(["--under", "/TWIN"]);
+        assert!(
+            ambiguous
+                .assert_command_failure(command, &flags, 1)
+                .contains("ambiguous path component")
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn query_filter_help_conflicts_ranges_and_glob_errors_are_usage_errors() -> TestResult {
+    let case = Case::new("query-filter-errors", "basic-4k")?;
+    let conflict = case.assert_command_failure("top", &["--ext", "txt", "--kind", "document"], 2);
+    assert!(conflict.contains("cannot be used with"), "{conflict}");
+    for flags in [
+        vec!["--kind", "movie"],
+        vec!["--kind", "Video"],
+        vec!["--kind", "video", "--n", "101"],
+    ] {
+        case.assert_command_failure("top", &flags, 2);
+    }
+    case.assert_command_failure("ext", &["--by", "type"], 2);
+    for limit in ["0", "501", "-1", "no", "65536"] {
+        case.assert_command_failure("search", &["*", "--limit", limit], 2);
+    }
+    for offset in ["-1", "no", "18446744073709551616"] {
+        case.assert_command_failure("search", &["*", "--offset", offset], 2);
+    }
+    for pattern in ["[".to_owned(), "{a,b".to_owned(), "x".repeat(257)] {
+        let stderr = case.assert_command_failure("search", &[&pattern, "--json"], 2);
+        assert!(stderr.contains("hint:"), "{stderr}");
+        assert!(
+            stderr.contains("glob") && stderr.contains("256"),
+            "{stderr}"
+        );
+        assert!(stderr.contains("caused by:"), "{stderr}");
+    }
+    for command in ["top", "ext", "search"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_adamite"))
+            .args([command, "--help"])
+            .output()?;
+        assert!(output.status.success());
+        let text = String::from_utf8(output.stdout)?;
+        assert!(text.contains("--under <PATH>"));
+        if command == "top" {
+            for kind in FileKind::ALL {
+                assert!(text.contains(kind.name()));
+            }
+        }
+    }
+    assert_eq!(
+        case.json_with("search", &case.image, &["*", "--limit", "500"])["next_offset"],
+        Value::Null
+    );
     Ok(())
 }

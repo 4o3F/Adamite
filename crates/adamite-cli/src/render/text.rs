@@ -1,5 +1,8 @@
 use super::Report;
-use crate::report::{Envelope, ExtReport, InfoReport, LsReport, SavedReport, TopReport};
+use crate::report::{
+    Envelope, ExtReport, InfoReport, KindReport, LsItem, LsReport, SavedReport, SearchReport,
+    TopReport,
+};
 use adamite_format::{ByteSize, Escaped, ExtensionLabel, InfoFields};
 use std::io::{self, Write};
 
@@ -38,6 +41,21 @@ struct SizeRow {
     alloc: u64,
     count: Option<u64>,
     name: String,
+}
+
+impl SizeRow {
+    fn node(item: &LsItem<'_>, name: &str) -> Self {
+        Self {
+            size: item.total_size,
+            alloc: item.total_alloc,
+            count: Some(u64::from(item.file_count)),
+            name: format!(
+                "{}{}",
+                Escaped(name),
+                if item.kind == "dir" { "/" } else { "" }
+            ),
+        }
+    }
 }
 
 struct SizeTable<'a> {
@@ -134,6 +152,56 @@ impl Report for ExtReport<'_> {
     }
 }
 
+impl Report for KindReport<'_> {
+    fn write_text(&self, stdout: &mut impl Write, raw_bytes: bool) -> io::Result<()> {
+        Header(&self.envelope).write(stdout)?;
+        SizeTable {
+            sizes: ["Size", "Alloc"],
+            count: Some("Count"),
+            name: "Kind",
+            column: SizeColumn { raw_bytes },
+        }
+        .write(
+            stdout,
+            self.items.iter().map(|item| SizeRow {
+                size: item.total_size,
+                alloc: item.total_alloc,
+                count: Some(item.count),
+                name: item.kind.to_owned(),
+            }),
+        )
+    }
+}
+
+impl Report for SearchReport<'_> {
+    fn write_text(&self, stdout: &mut impl Write, raw_bytes: bool) -> io::Result<()> {
+        Header(&self.envelope).write(stdout)?;
+        SizeTable {
+            sizes: ["Total size", "Total alloc"],
+            count: Some("Files"),
+            name: "Path",
+            column: SizeColumn { raw_bytes },
+        }
+        .write(
+            stdout,
+            self.items
+                .iter()
+                .map(|item| SizeRow::node(&item.node, &item.path)),
+        )?;
+        if let Some((start, end)) = self.shown {
+            write!(stdout, "showing {start}–{end} of {}", self.total_matches)?;
+            if let Some(next) = self.next_offset {
+                write!(stdout, " · next offset={next}")?;
+            }
+            writeln!(stdout)
+        } else if self.total_matches == 0 {
+            writeln!(stdout, "no matches")
+        } else {
+            writeln!(stdout, "showing 0 of {}", self.total_matches)
+        }
+    }
+}
+
 impl Report for LsReport<'_> {
     fn write_text(&self, stdout: &mut impl Write, raw_bytes: bool) -> io::Result<()> {
         Header(&self.envelope).write(stdout)?;
@@ -145,16 +213,7 @@ impl Report for LsReport<'_> {
         }
         .write(
             stdout,
-            self.items.iter().map(|item| SizeRow {
-                size: item.total_size,
-                alloc: item.total_alloc,
-                count: Some(u64::from(item.file_count)),
-                name: format!(
-                    "{}{}",
-                    Escaped(item.name),
-                    if item.kind == "dir" { "/" } else { "" }
-                ),
-            }),
+            self.items.iter().map(|item| SizeRow::node(item, item.name)),
         )
     }
 }

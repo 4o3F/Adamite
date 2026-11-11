@@ -1,4 +1,4 @@
-use adamite_core::snapshot::{NodeId, PersistError, SnapshotError};
+use adamite_core::snapshot::{NodeId, PersistError, QueryError, SnapshotError};
 use adamite_io::error::VolumeError;
 use adamite_tui::TuiError;
 use snafu::Snafu;
@@ -75,6 +75,8 @@ pub(crate) enum CliError {
     SameAsSource { path: PathBuf },
     #[snafu(display("cannot read snapshot tree"))]
     Snapshot { source: SnapshotError },
+    #[snafu(display("cannot query snapshot"))]
+    Query { source: QueryError },
     #[snafu(display("snapshot is inconsistent: {reason}"))]
     InconsistentSnapshot { reason: &'static str },
     #[snafu(display("snapshot {} is too large for this platform", path.display()))]
@@ -92,7 +94,8 @@ impl CliError {
             Self::ChildFailed { exit_code, .. } => return u8::try_from(*exit_code).unwrap_or(1),
             _ => {}
         }
-        if matches!(self, Self::Usage { .. } | Self::StatusExists { .. }) {
+        if matches!(self, Self::Usage { .. } | Self::StatusExists { .. }) || self.is_pattern_error()
+        {
             return 2;
         }
         if matches!(self, Self::Terminal { .. }) {
@@ -116,6 +119,15 @@ impl CliError {
         if denied { 4 } else { 1 }
     }
 
+    fn is_pattern_error(&self) -> bool {
+        matches!(
+            self,
+            Self::Query {
+                source: QueryError::InvalidGlob { .. } | QueryError::PatternTooLong { .. }
+            }
+        )
+    }
+
     pub(crate) fn is_broken_pipe(&self) -> bool {
         matches!(self, Self::Output { source } if source.kind() == io::ErrorKind::BrokenPipe)
     }
@@ -136,6 +148,12 @@ impl CliError {
                 "use an elevated terminal to scan a drive"
             };
             let _ = writeln!(stderr, "hint: {hint}");
+        }
+        if self.is_pattern_error() {
+            let _ = writeln!(
+                stderr,
+                "hint: quote globs such as '*.iso', '[ab]*' or '{{x,y}}*'; plain text matches a substring; patterns are limited to 256 bytes"
+            );
         }
         if matches!(self, Self::Elevation { .. }) {
             let _ = writeln!(
@@ -163,5 +181,11 @@ impl CliError {
         } else {
             Self::Elevation { source }
         }
+    }
+}
+
+impl From<QueryError> for CliError {
+    fn from(source: QueryError) -> Self {
+        Self::Query { source }
     }
 }

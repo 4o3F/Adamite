@@ -4,16 +4,29 @@
 
 ## Commands and flags
 
-| Command                                                | Behavior and options                                                                                                                                                                                                              |
-| ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Command | Behavior and options |
+| --- | --- |
 | `adamite scan <SOURCE> [-o <FILE>] [--force] [--status-file <FILE>]` | Scan an image or drive. Without `-o`/`--output`, print the info report. With it, save a snapshot and print a one-line confirmation. `--force` requires an output file and allows replacement. `--status-file` requires an output file and writes progress and the outcome to a new JSON lines file. A snapshot source is a usage error. |
-| `adamite info <SOURCE>`                                | Show volume metadata, tree totals and scan counters.                                                                                                                                                                              |
-| `adamite top <SOURCE> [--n 20]`                        | Show files from the precomputed 100-entry index, ordered by allocation. `--n` accepts 1 through 100.                                                                                                                              |
-| `adamite ext <SOURCE> [--n 20]`                        | Show extension groups in stored allocation order. `--n` must be at least 1.                                                                                                                                                       |
-| `adamite ls <SOURCE> [PATH] [--offset 0] [--limit 50]` | List a directory's children in subtree allocation order. PATH defaults to `/`; an offset past the end returns an empty list. A file path is an error.                                                                             |
-| `adamite browse <SOURCE> [PATH]`                       | Open the terminal browser at a directory, default `/`. Standard output must be a terminal; this is checked before source loading.                                                                                                 |
+| `adamite info <SOURCE>` | Show volume metadata, tree totals and scan counters. |
+| `adamite top <SOURCE> [--under PATH] [--ext EXT[,EXT…] \| --kind KIND] [--n 20]` | Show the largest primary files by allocation. Without query flags, read the stored 100-entry index; with `--under`, `--ext` or `--kind`, rank matching files in the subtree. `--n` accepts 1 through 100. |
+| `adamite ext <SOURCE> [--under PATH] [--by extension\|kind] [--n 20]` | Show extension or file-category totals, ordered by allocation. The default is extension grouping from the stored index; `--under` restricts totals to a directory. `--n` must be at least 1. |
+| `adamite ls <SOURCE> [PATH] [--offset 0] [--limit 50]` | List a directory's children in subtree allocation order. PATH defaults to `/`; an offset past the end returns an empty list. A file path is an error. |
+| `adamite search <SOURCE> <PATTERN> [--under PATH] [--offset 0] [--limit 50]` | Search descendant names in stored-child pre-order. The offset counts matches; `--limit` accepts 1 through 500. |
+| `adamite browse <SOURCE> [PATH]` | Open the terminal browser at a directory, default `/`. Standard output must be a terminal; this is checked before source loading. |
 
-`scan`, `info`, `top`, `ext` and `ls` accept `--json` and `--bytes`. Text is the default; `--bytes` prints raw byte counts in text. JSON always uses bytes. `browse` rejects both flags. `--help` shows command help; `adamite --version` shows the version. Running `adamite` without a subcommand prints help.
+`scan`, `info`, `top`, `ext`, `ls` and `search` accept `--json` and `--bytes`. Text is the default; `--bytes` prints raw byte counts in text. JSON always uses bytes. `browse` rejects both flags. `--help` shows command help; `adamite --version` shows the version. Running `adamite` without a subcommand prints help.
+
+`top --ext` accepts comma-separated suffixes and may repeat, for example `--ext mp4,mkv --ext .webm`. One leading dot is removed and ASCII letters are lowercased. An empty value (`--ext ''`) includes names without a usable extension. `--ext` and `--kind` conflict. The accepted kind names are `video`, `audio`, `image`, `archive`, `disk-image`, `document`, `code`, `executable` and `other`; `ts` belongs to video. Rankings and totals count primary files, excluding duplicate hard links.
+
+`search` uses case-insensitive globs over whole node names, with backslash escaping and wildcards that can match separators. A pattern without `*?[{` is matched as a substring, so `steam` finds `SteamLibrary`. Quote globs to keep the shell from expanding them. Patterns are limited to 256 bytes. Search includes directories, synthetic directories and duplicate hard links, and excludes the scope directory itself.
+
+```sh
+adamite top C.adm --under /Users --ext mp4,mkv
+adamite top C.adm --kind video --n 50
+adamite ext C.adm --under /Users --by kind
+adamite search C.adm '*.iso' --under /Users --limit 50
+adamite search C.adm steam --offset 50
+```
 
 ## Chrome tracing
 
@@ -38,11 +51,11 @@ Image and supported drive scans show progress on standard error when it is a ter
 
 Image scans record the current scan timestamp; Windows drive scans also obtain the volume label and free bytes. Queries on snapshots reuse their saved metadata.
 
-For `ls` and `browse`, PATH is relative to the snapshot root. Both `/` and `\` separate components; empty components are skipped, so a leading separator is optional. `.` and `..` are literal names. Exact name matches take precedence; otherwise names are compared after Unicode lowercase expansion. Multiple matches produce `AmbiguousPath` with candidate NodeIds. A component such as `#1234` selects that decimal NodeId among the current directory's direct children. Synthetic directories such as `<NTFS metadata>` and `<orphaned>` use the same rules. Returned paths use `/` separators.
+For `ls`, `browse` and `--under`, PATH is relative to the snapshot root. `--under` must resolve to a directory and defaults to `/`. Both `/` and `\` separate components; empty components are skipped, so a leading separator is optional. `.` and `..` are literal names. Exact name matches take precedence; otherwise names are compared after Unicode lowercase expansion. Multiple matches produce `AmbiguousPath` with candidate NodeIds. A component such as `#1234` selects that decimal NodeId among the current directory's direct children. Synthetic directories such as `<NTFS metadata>` and `<orphaned>` use the same rules. Returned paths use `/` separators.
 
 ## Text and JSON output
 
-Text reports start with the source and scan time, followed by aligned fields or columns. Sizes use binary units such as `12.0 GiB`, or integers with `--bytes`. `scan -o` prints only the save confirmation. Text and terminal names escape control characters as `\u{…}`; empty extensions display as `(none)`.
+Text reports start with the source and scan time, followed by aligned fields or columns. Sizes use binary units such as `12.0 GiB`, or integers with `--bytes`. `scan -o` prints only the save confirmation. Text and terminal names escape control characters as `\u{…}`; empty extensions display as `(none)`. Search rows show subtree sizes, file counts and full paths, with `/` marking directories, as in `ls`. The footer reads `showing 1–50 of 120 · next offset=50`; the final page omits the next offset. No matches prints `no matches`, and an offset past the end prints `showing 0 of N`.
 
 Each successful non-interactive `--json` invocation writes one object followed by a newline. The common envelope is:
 
@@ -63,26 +76,28 @@ Each successful non-interactive `--json` invocation writes one object followed b
 
 The example shows the envelope; command fields are added at the top level. `source` is the supplied argument converted to text with replacement for invalid Unicode. `scanned_at` is RFC 3339 UTC at seconds precision, or `null` for absent or unrepresentable timestamps. `scanned_at_filetime` is a decimal string of 100-nanosecond ticks since 1601-01-01, or `null` when absent. `volume_serial` has sixteen lowercase hexadecimal digits. `label` and `volume.free_bytes` may be `null`. Byte counts are JSON integers; field names are snake_case and stable within `adamite/1`.
 
-| Command                       | Additional fields                                                                                                                                                               |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Command | Additional fields |
+| --- | --- |
 | `info`, `scan` without output | `volume: {bytes_per_sector, cluster_size, total_bytes, free_bytes}`, `tree: {nodes, files, total_size, total_alloc}`, `stats: {…}`. `command` is `info` or `scan` respectively. |
-| `top`                         | `items: [{path, size, alloc, mtime_filetime}]`; modification FILETIME is a decimal string, including zero.                                                                      |
-| `ext`                         | `items: [{extension, count, total_size, total_alloc}]`; the empty extension is `""`.                                                                                            |
-| `ls`                          | `path`, `total_children`, `offset`, `limit`, `items: [{name, kind, flags, size, alloc, total_size, total_alloc, file_count}]`. `kind` is `"dir"` or `"file"`.                   |
-| `scan` with output            | `saved` (destination path), `bytes` (encoded snapshot length).                                                                                                                  |
+| `top` | `items: [{path, size, alloc, mtime_filetime}]`; modification FILETIME is a decimal string, including zero. |
+| `ext` | `items: [{extension, count, total_size, total_alloc}]`; the empty extension is `""`. |
+| `ext --by kind` | `items: [{kind, count, total_size, total_alloc}]`; `kind` is one of the file-category names above. |
+| `search` | `items: [{path, name, kind, flags, size, alloc, total_size, total_alloc, file_count}]`, `total_matches`, `next_offset`. The next offset is `null` on the last page or past the end. |
+| `ls` | `path`, `total_children`, `offset`, `limit`, `items: [{name, kind, flags, size, alloc, total_size, total_alloc, file_count}]`. `kind` is `"dir"` or `"file"`. |
+| `scan` with output | `saved` (destination path), `bytes` (encoded snapshot length). |
 
 `stats` includes all 26 counters, including zeros: `records_total`, `records_in_use`, `base_records`, `extension_records`, `unused`, `deleted`, `baad`, `corrupt_records`, `bad_fixup`, `invalid_fixup_metadata`, `invalid_signature`, `corrupt_headers`, `corrupt_attributes`, `type_storage_mismatches`, `corrupt_values`, `corrupt_runlists`, `out_of_volume_extents`, `invalid_attribute_lists`, `invalid_file_refs`, `invalid_utf16`, `rejected_extensions`, `corrupt_streams`, `orphans`, `cycle_nodes`, `hardlink_duplicates`, `metafiles`. Text info reports omit zero counters.
 
-`ls.flags` contains the set names in bit order: `directory`, `reparse`, `sparse`, `compressed`, `hidden`, `system`, `hardlink_dup`, `synthetic`. `size`/`alloc` describe the node itself; `total_size`/`total_alloc` include its subtree. See [core accounting](../adamite-core/README.md) for stream and hard-link rules.
+`ls.flags` and `search.items[].flags` contain the set names in bit order: `directory`, `reparse`, `sparse`, `compressed`, `hidden`, `system`, `hardlink_dup`, `synthetic`. For `ls` and `search`, `kind` is `"dir"` or `"file"`. `size`/`alloc` describe the node itself; `total_size`/`total_alloc` include its subtree. See [core accounting](../adamite-core/README.md) for stream and hard-link rules.
 
 Errors use text on standard error, beginning with `error:` and followed by `caused by:` lines when a source exists. Failed commands leave standard output empty. A broken standard-output pipe ends successfully.
 
 ## Scan resource limits
 
-All six commands accept the same scan flags. Loading a saved snapshot ignores them. Only explicitly supplied resource flags are forwarded to an elevated scan; the child uses the same defaults for omitted flags.
+All commands accept the same scan flags. Loading a saved snapshot ignores them. Only explicitly supplied resource flags are forwarded to an elevated scan; the child uses the same defaults for omitted flags.
 
 | Flag | Default and meaning |
-|---|---|
+| --- | --- |
 | `--profile background\|balanced\|max` | Balanced: 256 MiB/s and 1 MiB chunks. Background: 64 MiB/s and 1 MiB chunks. Max: uncapped reads and 4 MiB chunks. All profiles use one outstanding request. |
 | `--max-read-rate <BYTES>` | Override the profile's read budget. K/M/G and KiB/MiB/GiB use powers of 1024, for example `128M` or `128MiB`. Zero and `unlimited` are rejected; select `--profile max` to uncap. |
 | `--threads <N>` | Positive worker ceiling, default 1. The current scanner uses one thread for every ceiling; future parallel work must honour it. |
@@ -113,17 +128,17 @@ Progress is flushed on phase changes and otherwise at most every 500 millisecond
 
 ## Exit codes and Windows elevation
 
-| Code | Condition                                                                                                                     |
-| ---- | ----------------------------------------------------------------------------------------------------------------------------- |
-| 0    | Success, help, version or a broken standard-output pipe.                                                                      |
-| 2    | Invalid arguments, an existing status file, scanning an existing snapshot, a raw drive on a non-Windows platform, or `browse` without terminal output. |
-| 3    | Snapshot encoding or decoding (`PersistError`).                                                                               |
-| 4    | Source/output permission denial, raw-volume access denial, declined elevation or elevation launch failure. |
-| 1    | Other failures, including I/O, scan, allocation, path, output and terminal errors.                                            |
+| Code | Condition |
+| --- | --- |
+| 0 | Success, help, version or a broken standard-output pipe. |
+| 2 | Invalid arguments, invalid or oversized search patterns, an existing status file, scanning an existing snapshot, a raw drive on a non-Windows platform, or `browse` without terminal output. |
+| 3 | Snapshot encoding or decoding (`PersistError`). |
+| 4 | Source/output permission denial, raw-volume access denial, declined elevation or elevation launch failure. |
+| 1 | Other failures, including I/O, scan, allocation, path, output and terminal errors. |
 
 Terminal errors return 1; snapshot codec errors take precedence over permission errors in their source chain. Loading a snapshot requires file access only. See [adamite-tui](../adamite-tui/README.md) for tabs, keys and rendering.
 
-On Windows, `scan`, `info`, `top`, `ext`, `ls` and `browse` automatically request UAC elevation for drive sources when the current process is unelevated. Before launching, the parent prints `requesting administrator access for <drive>…`. The elevated child scans and saves a snapshot while the parent displays progress, waits for the child to exit, then loads the snapshot and renders the requested result. `scan -o FILE` uses FILE after the normal destination checks; other commands use a unique `adamite-<pid>-<n>.adm` in the system temporary directory. The status file is `.<snapshot file>.<pid>-<n>.status.jsonl` beside the snapshot. The parent closes its reader before removing the status file and removes temporary snapshots after loading them.
+On Windows, `scan`, `info`, `top`, `ext`, `ls`, `search` and `browse` automatically request UAC elevation for drive sources when the current process is unelevated. Before launching, the parent prints `requesting administrator access for <drive>…`. The elevated child scans and saves a snapshot while the parent displays progress, waits for the child to exit, then loads the snapshot and renders the requested result. `scan -o FILE` uses FILE after the normal destination checks; other commands use a unique `adamite-<pid>-<n>.adm` in the system temporary directory. The status file is `.<snapshot file>.<pid>-<n>.status.jsonl` beside the snapshot. The parent closes its reader before removing the status file and removes temporary snapshots after loading them.
 
 The child receives `--no-elevate`, the explicitly supplied `--profile`, `--max-read-rate` and `--threads` options, and `--force` only for `scan -o FILE --force`. `--trace-chrome` profiles the parent and is not forwarded. Declining the prompt prints `error: elevation was declined` and returns 4. Other elevation failures include the system error and suggest `run with --no-elevate in an elevated terminal`. A child failure returns its reported message and exit code; an exit without a final status line returns 1 and names the child's exit code.
 

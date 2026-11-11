@@ -55,6 +55,8 @@ Self logical size is unnamed DATA; ADS logical bytes are separate. Allocation in
 
 `search(under, &pattern, offset, limit)` visits descendants in pre-order using stored child order, including directories, synthetic directories and duplicate hard links. The scope node itself is excluded. `SearchPage::items()` contains at most `limit` matches; `total_matches()` counts every match, and `next_offset()` supplies the next page offset when more remain. Offsets count matches, and an offset past the end returns an empty page with the full total. A zero limit returns only the total and retains the offset if matches remain.
 
+To query a saved snapshot from [adamite-cli](../adamite-cli/README.md), run `adamite top C.adm --under /Users --kind video`, `adamite ext C.adm --by kind`, or `adamite search C.adm '*.iso' --offset 0 --limit 50`.
+
 `scan::ConfigError` rejects invalid bounds, `scan::FeedError` rejects responses without changing state, `error::ScanError` terminates a failed scan, and `snapshot::SnapshotError` covers snapshot construction/path failures. Ordinary corrupt records are discarded and counted; a missing/corrupt root or bootstrap is fatal. Errors preserve parser/allocation sources through snafu.
 
 ## Persistence

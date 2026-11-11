@@ -1,11 +1,12 @@
 use crate::{
-    command::{browse::Browse, ext::Ext, info::Info, ls::Ls, scan::Scan, top::Top},
+    command::{browse::Browse, ext::Ext, info::Info, ls::Ls, scan::Scan, search::Search, top::Top},
     error::CliError,
 };
+use adamite_core::snapshot::FileKind;
 use adamite_io::limits::{ScanLimits, ScanProfile};
 use clap::{
-    Args, Parser, Subcommand,
-    builder::TypedValueParser,
+    Args, Parser, Subcommand, ValueEnum,
+    builder::{PossibleValuesParser, TypedValueParser},
     error::{ContextKind, ContextValue},
 };
 use std::num::{NonZeroU64, NonZeroUsize};
@@ -35,12 +36,14 @@ pub(crate) enum Command {
     Scan(ScanArgs),
     /// Show volume, tree totals and scan diagnostics.
     Info(SourceArgs),
-    /// Show files from the precomputed 100-entry index.
+    /// Show the largest files, optionally filtered or under a directory.
     Top(TopArgs),
-    /// Show extension statistics in stored order.
+    /// Show file statistics grouped by extension or kind.
     Ext(ExtArgs),
     /// List a directory's children in size order.
     Ls(LsArgs),
+    /// Search node names with a case-insensitive glob or substring.
+    Search(SearchArgs),
     /// Browse the directory tree interactively in a terminal.
     Browse(BrowseArgs),
 }
@@ -78,9 +81,28 @@ pub(crate) struct ScanArgs {
 pub(crate) struct TopArgs {
     #[command(flatten)]
     pub(crate) source: SourceArgs,
-    /// Number of files from the 100-entry index (1..=100).
+    /// Restrict files to this directory subtree; #id selects a direct child.
+    #[arg(long, value_name = "PATH")]
+    pub(crate) under: Option<String>,
+    /// Match comma-separated extensions; may repeat; an empty value matches files without an extension.
+    #[arg(
+        long,
+        value_delimiter = ',',
+        conflicts_with = "kind",
+        value_name = "EXT"
+    )]
+    pub(crate) ext: Vec<String>,
+    /// Match a file category inferred from its extension.
+    #[arg(long, value_parser = file_kind_parser(), value_name = "KIND")]
+    pub(crate) kind: Option<FileKind>,
+    /// Number of files to show (1..=100).
     #[arg(long, default_value_t = 20, allow_negative_numbers = true, value_parser = TopCountParser)]
     pub(crate) n: u32,
+}
+
+fn file_kind_parser() -> impl TypedValueParser<Value = FileKind> {
+    PossibleValuesParser::new(FileKind::ALL.map(FileKind::name))
+        .try_map(|name| name.parse::<FileKind>())
 }
 
 #[derive(Debug, Clone)]
@@ -112,9 +134,38 @@ impl TypedValueParser for TopCountParser {
 pub(crate) struct ExtArgs {
     #[command(flatten)]
     pub(crate) source: SourceArgs,
-    /// Number of extension groups to show (at least 1).
+    /// Restrict statistics to this directory subtree; #id selects a direct child.
+    #[arg(long, value_name = "PATH")]
+    pub(crate) under: Option<String>,
+    /// Group files by extension or category.
+    #[arg(long, value_enum, default_value = "extension")]
+    pub(crate) by: GroupBy,
+    /// Number of groups to show (at least 1).
     #[arg(long, default_value_t = 20, value_parser = clap::value_parser!(u64).range(1..))]
     pub(crate) n: u64,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub(crate) enum GroupBy {
+    Extension,
+    Kind,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct SearchArgs {
+    #[command(flatten)]
+    pub(crate) source: SourceArgs,
+    /// Name glob, or a substring when it contains none of *?[{ (at most 256 bytes).
+    pub(crate) pattern: String,
+    /// Restrict the search to this directory subtree; #id selects a direct child.
+    #[arg(long, value_name = "PATH")]
+    pub(crate) under: Option<String>,
+    /// Number of matches to skip.
+    #[arg(long, default_value_t = 0)]
+    pub(crate) offset: usize,
+    /// Maximum number of matches to show (1..=500).
+    #[arg(long, default_value_t = 50, value_parser = clap::value_parser!(u16).range(1..=500))]
+    pub(crate) limit: u16,
 }
 
 #[derive(Debug, Args)]
@@ -151,6 +202,7 @@ impl Command {
             Self::Top(args) => Top(args).run(stdout),
             Self::Ext(args) => Ext(args).run(stdout),
             Self::Ls(args) => Ls(args).run(stdout),
+            Self::Search(args) => Search(args).run(stdout),
             Self::Browse(args) => Browse(args).run(),
         }
     }
@@ -251,6 +303,7 @@ mod tests {
                 Command::Ext(args) => args.source.limits,
                 Command::Ls(args) => args.source.limits,
                 Command::Browse(args) => args.limits,
+                Command::Search(args) => args.source.limits,
             };
             let limits = args.limits();
             assert_eq!(

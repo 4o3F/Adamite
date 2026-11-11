@@ -1,7 +1,7 @@
 use crate::{error::CliError, locate::Locator};
 use adamite_core::{
     scan::{ScanOutput, ScanStats},
-    snapshot::{NodeId, Snapshot},
+    snapshot::{ExtensionStat, KindStat, NodeId, SearchPage, Snapshot},
 };
 use adamite_format::{ScanTime, VolumeSerial};
 use serde::{Serialize, Serializer, ser::SerializeMap};
@@ -58,6 +58,39 @@ pub(crate) struct ExtItem<'a> {
 }
 
 #[derive(Debug, Serialize)]
+pub(crate) struct KindReport<'a> {
+    #[serde(flatten)]
+    pub(crate) envelope: Envelope<'a>,
+    pub(crate) items: Vec<KindItem>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct KindItem {
+    pub(crate) kind: &'static str,
+    pub(crate) count: u64,
+    pub(crate) total_size: u64,
+    pub(crate) total_alloc: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct SearchReport<'a> {
+    #[serde(flatten)]
+    pub(crate) envelope: Envelope<'a>,
+    pub(crate) items: Vec<SearchItem<'a>>,
+    pub(crate) total_matches: u64,
+    pub(crate) next_offset: Option<usize>,
+    #[serde(skip)]
+    pub(crate) shown: Option<(usize, usize)>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct SearchItem<'a> {
+    pub(crate) path: String,
+    #[serde(flatten)]
+    pub(crate) node: LsItem<'a>,
+}
+
+#[derive(Debug, Serialize)]
 pub(crate) struct LsReport<'a> {
     #[serde(flatten)]
     pub(crate) envelope: Envelope<'a>,
@@ -83,12 +116,27 @@ pub(crate) struct LsItem<'a> {
 
 impl<'a> TopReport<'a> {
     pub(crate) fn new(source: &'a Path, output: &'a ScanOutput, n: u32) -> Result<Self, CliError> {
-        let snapshot = &output.snapshot;
-        let items = snapshot
-            .top_files()
-            .iter()
-            .zip(0..n)
-            .map(|(&id, _)| TopItem::new(snapshot, id))
+        Self::from_ids(
+            source,
+            output,
+            output
+                .snapshot
+                .top_files()
+                .iter()
+                .copied()
+                .zip(0..n)
+                .map(|(id, _)| id),
+        )
+    }
+
+    pub(crate) fn from_ids(
+        source: &'a Path,
+        output: &'a ScanOutput,
+        ids: impl IntoIterator<Item = NodeId>,
+    ) -> Result<Self, CliError> {
+        let items = ids
+            .into_iter()
+            .map(|id| TopItem::new(&output.snapshot, id))
             .collect::<Result<_, _>>()?;
         Ok(Self {
             envelope: Envelope::new("top", source, output),
@@ -103,12 +151,7 @@ impl TopItem {
             reason: "missing top file",
         })?;
         Ok(Self {
-            path: snapshot
-                .path(id)
-                .map_err(|source| CliError::Snapshot { source })?
-                .ok_or(CliError::InconsistentSnapshot {
-                    reason: "missing top file path",
-                })?,
+            path: node_path(snapshot, id)?,
             size: node.size(),
             alloc: node.alloc(),
             mtime_filetime: node.mtime().to_string(),
@@ -118,11 +161,18 @@ impl TopItem {
 
 impl<'a> ExtReport<'a> {
     pub(crate) fn new(source: &'a Path, output: &'a ScanOutput, n: u64) -> Self {
+        Self::from_stats(source, output, output.snapshot.ext_stats(), n)
+    }
+
+    pub(crate) fn from_stats(
+        source: &'a Path,
+        output: &'a ScanOutput,
+        stats: &'a [ExtensionStat],
+        n: u64,
+    ) -> Self {
         Self {
             envelope: Envelope::new("ext", source, output),
-            items: output
-                .snapshot
-                .ext_stats()
+            items: stats
                 .iter()
                 .zip(0..n)
                 .map(|(stat, _)| ExtItem {
@@ -134,6 +184,78 @@ impl<'a> ExtReport<'a> {
                 .collect(),
         }
     }
+}
+
+impl<'a> KindReport<'a> {
+    pub(crate) fn new(
+        source: &'a Path,
+        output: &'a ScanOutput,
+        stats: &[KindStat],
+        n: u64,
+    ) -> Self {
+        Self {
+            envelope: Envelope::new("ext", source, output),
+            items: stats
+                .iter()
+                .zip(0..n)
+                .map(|(stat, _)| KindItem {
+                    kind: stat.kind().name(),
+                    count: stat.count(),
+                    total_size: stat.total_size(),
+                    total_alloc: stat.total_alloc(),
+                })
+                .collect(),
+        }
+    }
+}
+
+impl<'a> SearchReport<'a> {
+    pub(crate) fn new(
+        source: &'a Path,
+        output: &'a ScanOutput,
+        page: &SearchPage,
+        offset: usize,
+    ) -> Result<Self, CliError> {
+        let shown = if page.items().is_empty() {
+            None
+        } else {
+            let start = offset.checked_add(1).ok_or(CliError::Usage {
+                message: "search page exceeds the supported range",
+            })?;
+            let end = offset
+                .checked_add(page.items().len())
+                .ok_or(CliError::Usage {
+                    message: "search page exceeds the supported range",
+                })?;
+            Some((start, end))
+        };
+        let items = page
+            .items()
+            .iter()
+            .map(|&id| {
+                Ok(SearchItem {
+                    path: node_path(&output.snapshot, id)?,
+                    node: LsItem::new(&output.snapshot, id)?,
+                })
+            })
+            .collect::<Result<_, CliError>>()?;
+        Ok(Self {
+            envelope: Envelope::new("search", source, output),
+            items,
+            total_matches: page.total_matches(),
+            next_offset: page.next_offset(),
+            shown,
+        })
+    }
+}
+
+fn node_path(snapshot: &Snapshot, id: NodeId) -> Result<String, CliError> {
+    snapshot
+        .path(id)
+        .map_err(|source| CliError::Snapshot { source })?
+        .ok_or(CliError::InconsistentSnapshot {
+            reason: "missing node path",
+        })
 }
 
 impl<'a> LsReport<'a> {
@@ -151,12 +273,7 @@ impl<'a> LsReport<'a> {
         let locator = Locator::new(snapshot);
         let id = locator.resolve(path)?;
         let children = locator.directory(id)?;
-        let path = snapshot
-            .path(id)
-            .map_err(|source| CliError::Snapshot { source })?
-            .ok_or(CliError::InconsistentSnapshot {
-                reason: "missing directory path",
-            })?;
+        let path = node_path(snapshot, id)?;
         let items = children
             .iter()
             .take(end)
