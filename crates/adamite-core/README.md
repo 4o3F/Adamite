@@ -43,7 +43,7 @@ The [crate docs](src/lib.rs) contain a runnable in-memory driver loop. Bootstrap
 
 `node`, `children`, `name` and iterative `path` expose immutable hot/cold fields, pooled names and CSR edges. `volume`, `top_files` and `ext_stats` expose parsed/caller metadata and final indexes. Snapshot is Send + Sync; share it through `Arc` to avoid deep clones.
 
-Self logical size is unnamed DATA; ADS logical bytes are separate. Allocation includes every non-resident stream, using compressed size for compressed/sparse streams. Primary links alone contribute to ancestors and file indexes. Output is deterministic across chunk sizes, caps and response orders; final name comparisons use UTF-16 re-encoding of pooled text.
+Self logical size is unnamed DATA; ADS logical bytes are separate. Allocation includes every non-resident stream: ordinary streams use mapped clusters across all segments × cluster size, including preallocation; sparse/compressed flagged streams use first-segment `compressed_size`. Resident allocation is zero. Holes without an LCN, such as `$BadClus:$Bad`, contribute nothing. Primary links alone contribute to ancestors and file indexes. Output is deterministic across chunk sizes, caps and response orders; final name comparisons use UTF-16 re-encoding of pooled text.
 
 `scan::ConfigError` rejects invalid bounds, `scan::FeedError` rejects responses without changing state, `error::ScanError` terminates a failed scan, and `snapshot::SnapshotError` covers snapshot construction/path failures. Ordinary corrupt records are discarded and counted; a missing/corrupt root or bootstrap is fatal. Errors preserve parser/allocation sources through snafu.
 

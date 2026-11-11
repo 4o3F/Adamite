@@ -47,11 +47,11 @@ Each milestone ends with one reviewed commit and `deno task check` green; each C
 
 ### S3 — Persist seeds and documentation
 
-- [ ] Regenerate the persist corpus per D6 and verify the exact replacement set; update documentation per D7; `deno task check --fuzz` green.
+- [x] Regenerate the persist corpus per D6 and verify the exact replacement set; update documentation per D7; `deno task check --fuzz` green.
 
 ## Acceptance criteria
 
-- [ ] On all three fixtures, `$BadClus` allocation is 0, root allocation equals D4, and root `total_alloc ≤` volume bytes.
-- [ ] Ordinary, multi-extent, sparse, compressed and hole cases have targeted tests; allocation overflow stays fatal.
-- [ ] Oracles derive allocation from the independent reference, not from core.
-- [ ] `deno task check` and `deno task check --fuzz` pass; only the D6 persist seeds change among committed binary artifacts; documentation states D1.
+- [x] On all three fixtures, `$BadClus` allocation is 0, root allocation equals D4, and root `total_alloc ≤` volume bytes.
+- [x] Ordinary, multi-extent, sparse, compressed and hole cases have targeted tests; allocation overflow stays fatal.
+- [x] Oracles derive allocation from the independent reference, not from core.
+- [x] `deno task check` and `deno task check --fuzz` pass; only the D6 persist seeds change among committed binary artifacts; documentation states D1.

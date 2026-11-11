@@ -50,7 +50,9 @@
 //!
 //! # Determinism and accounting
 //!
-//! For identical bytes and context, snapshot contents and stats are independent of chunk size, request cap and response order. Stable ids and explicit name/FileRef/id tie-breaks determine child and top-file order. Logical totals count unnamed DATA once per primary link; ADS is separate, while allocation includes every non-resident stream. Lossy names sort by their pooled replacement text during finalization.
+//! For identical bytes and context, snapshot contents and stats are independent of chunk size, request cap and response order. Stable ids and explicit name/FileRef/id tie-breaks determine child and top-file order. Logical totals count unnamed DATA once per primary link; ADS is separate. Lossy names sort by their pooled replacement text during finalization.
+//!
+//! Allocation includes every non-resident stream: ordinary streams use mapped clusters across all segments × cluster size, including preallocation; sparse/compressed flagged streams use first-segment `compressed_size`. Resident allocation is zero. Holes without an LCN, such as `$BadClus:$Bad`, contribute nothing.
 //!
 //! # Scope
 //!
