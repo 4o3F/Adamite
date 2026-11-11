@@ -60,14 +60,14 @@ impl DecodeError {
     }
 }
 
-fn name(value: Utf16Le<'_>) -> Result<Vec<u16>, ScanError> {
-    let mut units = Vec::new();
-    units.try_reserve_exact(value.len_units())?;
-    units.extend(value.units());
-    Ok(units)
-}
-
 impl RecordContribution {
+    fn name(value: Utf16Le<'_>) -> Result<Vec<u16>, ScanError> {
+        let mut units = Vec::new();
+        units.try_reserve_exact(value.len_units())?;
+        units.extend(value.units());
+        Ok(units)
+    }
+
     pub(super) fn decode(
         record: &FileRecord<'_>,
         reference: FileRef,
@@ -76,11 +76,53 @@ impl RecordContribution {
         let mut owned = RecordContribution {
             reference,
             hard_links: record.header().hard_links(),
+            flags: record.header().flags(),
+            conflicting_standard_information: false,
             names: Vec::new(),
-            standard_information: Vec::new(),
+            standard_information: None,
             streams: Vec::new(),
             reparse_tags: Vec::new(),
         };
+        let mut name_count = 0usize;
+        let mut stream_count = 0usize;
+        let mut tag_count = 0usize;
+        for attribute in record.attributes() {
+            // Leave diagnostics to the decoding pass so earlier value errors still win.
+            let Ok(attribute) = attribute else { break };
+            for (count, included) in [
+                (
+                    &mut name_count,
+                    attribute.attribute_type() == AttributeType::FILE_NAME,
+                ),
+                (
+                    &mut stream_count,
+                    attribute.attribute_type() == AttributeType::DATA
+                        || attribute.non_resident().is_some(),
+                ),
+                (
+                    &mut tag_count,
+                    attribute.attribute_type() == AttributeType::REPARSE_POINT,
+                ),
+            ] {
+                if included {
+                    *count = count
+                        .checked_add(1)
+                        .ok_or_else(|| ScanError::overflow("record attribute count"))?;
+                }
+            }
+        }
+        owned
+            .names
+            .try_reserve_exact(name_count)
+            .map_err(ScanError::from)?;
+        owned
+            .streams
+            .try_reserve_exact(stream_count)
+            .map_err(ScanError::from)?;
+        owned
+            .reparse_tags
+            .try_reserve_exact(tag_count)
+            .map_err(ScanError::from)?;
         for attribute in record.attributes() {
             let attribute = attribute.map_err(|_| DecodeError::Attributes)?;
             match attribute.attribute_type() {
@@ -91,17 +133,14 @@ impl RecordContribution {
                         .try_push(NameAttribute {
                             parent: value.parent(),
                             namespace: value.namespace(),
-                            name: name(value.name())?,
+                            name: Self::name(value.name())?,
                         })
                         .map_err(ScanError::from)?;
                 }
                 AttributeType::STANDARD_INFORMATION => {
                     let value = StandardInformation::from_attribute(attribute)
                         .map_err(DecodeError::Value)?;
-                    owned
-                        .standard_information
-                        .try_push(StandardAttribute { value })
-                        .map_err(ScanError::from)?;
+                    owned.add_standard(StandardAttribute { value });
                 }
                 AttributeType::REPARSE_POINT => {
                     let value =
@@ -145,7 +184,7 @@ impl RecordContribution {
                         highest_vcn: segment.highest_vcn(),
                         compression_unit: segment.compression_unit(),
                         sizes: segment.sizes(),
-                        run_count,
+                        has_runs: run_count != 0,
                         mapped_clusters,
                     }
                 } else {
@@ -163,7 +202,7 @@ impl RecordContribution {
                     .try_push(StreamSegment {
                         source: reference,
                         attribute_type: attribute.attribute_type(),
-                        name: name(attribute.name())?,
+                        name: Self::name(attribute.name())?,
                         attribute_id: attribute.id(),
                         flags: attribute.flags(),
                         storage,

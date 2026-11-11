@@ -94,7 +94,7 @@ fn ingest_classification_and_patches_do_not_double_count_bootstrap() -> TestResu
         patch.contribution.names.first().ok_or("patch name")?.name,
         vec![80]
     );
-    assert!(state.slots.get(7).ok_or("extension slot")?.base.is_none());
+    assert!(state.slots.base(7).is_none());
     assert_eq!(scanner.phase, ScanPhase::Merge);
     Ok(())
 }
@@ -127,7 +127,7 @@ fn ingest_late_attribute_and_runlist_errors_discard_whole_contribution() -> Test
     let (scanner, _, outcome) = ingest_image(&volume, 4, 4096)?;
     outcome?;
     let state = scanner.ingest.as_ref().ok_or("state")?;
-    assert!(state.slots.get(6).ok_or("bad base")?.base.is_none());
+    assert!(state.slots.base(6).is_none());
     assert!(state.patches.is_empty());
     assert_eq!(state.stats.corrupt_records, 2);
     assert_eq!(state.stats.corrupt_attributes, 1);
@@ -143,7 +143,7 @@ fn ingest_record_number_mismatch_is_rejected() -> TestResult {
     let (scanner, _, outcome) = ingest_image(&volume, 1, 512)?;
     outcome?;
     let state = scanner.ingest.as_ref().ok_or("state")?;
-    assert!(state.slots.get(6).ok_or("mismatched slot")?.base.is_none());
+    assert!(state.slots.base(6).is_none());
     assert_eq!(state.stats.corrupt_records, 1);
     assert_eq!(state.stats.corrupt_headers, 1);
     assert_eq!(
@@ -237,8 +237,7 @@ fn ingest_parser_error_categories_and_raw_utf16() -> TestResult {
     assert_eq!(
         state
             .slots
-            .get(13)
-            .and_then(|slot| slot.base.as_ref())
+            .base(13)
             .ok_or("raw name slot")?
             .names
             .first()
@@ -296,16 +295,12 @@ fn ingest_keeps_stream_segment_identity_sizes_and_typed_metadata() -> TestResult
     let (scanner, _, outcome) = ingest_image(&volume, 2, 512)?;
     outcome?;
     let state = scanner.ingest.as_ref().ok_or("state")?;
-    let contribution = state
-        .slots
-        .get(6)
-        .and_then(|slot| slot.base.as_ref())
-        .ok_or("typed contribution")?;
+    let contribution = state.slots.base(6).ok_or("typed contribution")?;
     let standard = contribution
         .standard_information
-        .first()
+        .as_ref()
         .ok_or("standard information")?;
-    assert_eq!(contribution.standard_information.len(), 1);
+    assert!(contribution.standard_information.is_some());
     assert_eq!(standard.value.times().modified(), 123);
     assert_eq!(standard.value.file_attributes().raw(), 0x20);
     assert_eq!(contribution.streams.len(), 4);
@@ -318,13 +313,13 @@ fn ingest_keeps_stream_segment_identity_sizes_and_typed_metadata() -> TestResult
     let StreamStorage::NonResident {
         lowest_vcn,
         sizes,
-        run_count,
+        has_runs,
         ..
     } = ads.storage
     else {
         return Err("ADS storage".into());
     };
-    assert_eq!((lowest_vcn, run_count), (0, 1));
+    assert_eq!((lowest_vcn, has_runs), (0, true));
     assert_eq!(sizes.ok_or("ADS sizes")?.data(), 4096);
     let StreamStorage::NonResident {
         lowest_vcn, sizes, ..
@@ -535,13 +530,21 @@ fn ingest_fixture(name: &str) -> TestResult {
             "{name}: {}",
             entry.path
         );
-        assert_eq!(slot.sequence, Some(entry.seq), "{name}: {}", entry.path);
-        let base = slot.base.as_ref().ok_or_else(|| {
-            format!(
-                "{name}: {} has no base contribution; stats {:?}",
-                entry.path, state.stats
-            )
-        })?;
+        let base = state
+            .slots
+            .base(usize::try_from(entry.record)?)
+            .ok_or_else(|| {
+                format!(
+                    "{name}: {} has no base contribution; stats {:?}",
+                    entry.path, state.stats
+                )
+            })?;
+        assert_eq!(
+            base.reference.sequence(),
+            entry.seq,
+            "{name}: {}",
+            entry.path
+        );
         for expected in &entry.names {
             assert!(
                 base.names
@@ -576,7 +579,7 @@ fn ingest_fixture(name: &str) -> TestResult {
     if name == "frag-512" {
         let slot = state.slots.get(4095).ok_or("cross-extent record 4095")?;
         assert_eq!(slot.classification, RecordKind::Deleted);
-        assert!(slot.base.is_none());
+        assert!(state.slots.base(4095).is_none());
         let boundary = 8191u64.checked_mul(512).ok_or("extent boundary")?;
         assert_eq!(
             boundary.checked_sub(4095u64.checked_mul(1024).ok_or("record offset")?),
@@ -656,8 +659,9 @@ fn ingest_frag_record_4095_restores_fixup_and_name_across_extents() -> TestResul
         let slot = state.slots.get(4095).ok_or("cross-extent slot")?;
         assert_eq!(slot.classification, RecordKind::Base);
         assert_eq!(
-            slot.base
-                .as_ref()
+            state
+                .slots
+                .base(4095)
                 .ok_or("cross-extent contribution")?
                 .names
                 .first()
@@ -701,20 +705,83 @@ fn ingest_unallocated_zero_record_number_is_not_corruption() -> TestResult {
         state.slots.get(6).ok_or("unallocated slot")?.classification,
         RecordKind::Deleted
     );
-    assert!(state.slots.get(6).ok_or("unallocated slot")?.base.is_none());
-    assert!(
-        state
-            .slots
-            .get(8)
-            .ok_or("mismatched live slot")?
-            .base
-            .is_none()
-    );
+    assert!(state.slots.base(6).is_none());
+    assert!(state.slots.base(8).is_none());
     assert_eq!(state.stats.deleted, 2);
     assert_eq!(
         state.stats.corrupt_records, 2,
         "only nonzero deleted mismatches and live mismatches are corrupt"
     );
     assert_eq!(state.stats.corrupt_headers, 2);
+    Ok(())
+}
+
+#[test]
+fn ingest_contribution_arrays_match_decoded_attribute_counts() -> TestResult {
+    for count in [0, 1, 5] {
+        let mut attributes = vec![
+            AttrBuilder::resident(0x10, vec![0; 48]).build(),
+            AttrBuilder::resident(0x10, vec![0; 48]).build(),
+        ];
+        for id in 0..count {
+            let mut stream = AttrBuilder::resident(0x80, vec![1]);
+            stream.id = id;
+            attributes.push(stream.build());
+            let mut tag = AttrBuilder::resident(0xc0, vec![0x0c, 0, 0, 0xa0, 0, 0, 0, 0]);
+            tag.id = id + 10;
+            attributes.push(tag.build());
+        }
+        for id in 0..count.min(2) {
+            let mut name = AttrBuilder::resident(0x30, FileNameBuilder::default().build());
+            name.id = id + 20;
+            attributes.push(name.build());
+        }
+        let record = RecordBuilder {
+            record_number: 6,
+            attributes,
+            ..RecordBuilder::default()
+        };
+        let volume = ingest_volume(16, vec![(6, record.build())])?;
+        let (scanner, _, outcome) = ingest_image(&volume, 2, 512)?;
+        outcome?;
+        let base = scanner
+            .ingest
+            .as_ref()
+            .ok_or("ingest")?
+            .slots
+            .base(6)
+            .ok_or("base")?;
+        assert_eq!(base.streams.len(), usize::from(count));
+        assert_eq!(base.streams.capacity(), base.streams.len());
+        assert_eq!(base.reparse_tags.len(), usize::from(count));
+        assert_eq!(base.reparse_tags.capacity(), base.reparse_tags.len());
+        assert_eq!(base.names.len(), usize::from(count.min(2)));
+        assert_eq!(base.names.capacity(), base.names.len());
+        assert!(base.standard_information.is_some());
+        assert!(!base.conflicting_standard_information);
+    }
+    Ok(())
+}
+
+#[test]
+fn ingest_attribute_counting_keeps_first_value_error_diagnostic() -> TestResult {
+    let invalid_value = AttrBuilder::resident(0x10, Vec::new()).build();
+    let mut invalid_attribute = AttrBuilder::resident(0x80, Vec::new()).build();
+    invalid_attribute
+        .get_mut(..4)
+        .ok_or("attribute type")?
+        .fill(0);
+    let record = RecordBuilder {
+        record_number: 6,
+        attributes: vec![invalid_value, invalid_attribute],
+        ..RecordBuilder::default()
+    };
+    let volume = ingest_volume(16, vec![(6, record.build())])?;
+    let (scanner, _, outcome) = ingest_image(&volume, 2, 512)?;
+    outcome?;
+    let state = scanner.ingest.as_ref().ok_or("ingest")?;
+    assert!(state.slots.base(6).is_none());
+    assert_eq!(state.stats.corrupt_values, 1);
+    assert_eq!(state.stats.corrupt_attributes, 0);
     Ok(())
 }

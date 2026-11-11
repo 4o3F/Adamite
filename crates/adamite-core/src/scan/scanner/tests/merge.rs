@@ -75,7 +75,7 @@ fn merge_driver_extension_before_base_ignores_cached_filename_sizes() -> TestRes
         scanner.ingest.as_ref().ok_or("stats")?.stats.records_total,
         16
     );
-    assert!(scanner.ingest.as_ref().ok_or("handoff")?.slots.is_empty());
+    assert_eq!(scanner.ingest.as_ref().ok_or("handoff")?.slots.len(), 0);
     assert!(scanner.ingest.as_ref().ok_or("handoff")?.patches.is_empty());
     assert_eq!(scanner.phase, ScanPhase::Link);
     Ok(())

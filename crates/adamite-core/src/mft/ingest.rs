@@ -6,14 +6,13 @@ use crate::{
     error::ScanError,
     mft::{
         mapping::MftMapping,
-        model::{Patch, RecordContribution, RecordKind, RecordSlot},
+        model::{Patch, RecordContribution, RecordKind, RecordSlots},
     },
     scan::ScanStats,
     util::{CounterExt, VecExt},
 };
 use adamite_ntfs::record::{
-    RecordClass, RecordError, RecordFlags, RecordHeader, fixup::FixupError, reference::FileRef,
-    system::ROOT,
+    RecordClass, RecordError, RecordFlags, fixup::FixupError, reference::FileRef, system::ROOT,
 };
 
 /// A checked read range and the virtual cursor to commit after successful issue.
@@ -30,13 +29,18 @@ pub(crate) struct Ingest {
     record_size: usize,
     planned: u64,
     raw: Vec<u8>,
-    pub slots: Vec<RecordSlot>,
+    pub slots: RecordSlots,
     pub patches: Vec<Patch>,
     pub stats: ScanStats,
 }
 
 impl Ingest {
     pub(crate) fn new(data_size: u64, record_size: u32) -> Result<Self, ScanError> {
+        let count = data_size
+            .checked_div(u64::from(record_size))
+            .and_then(|count| usize::try_from(count).ok())
+            .ok_or_else(|| ScanError::overflow("planned MFT record count"))?;
+        let slots = RecordSlots::new(count)?;
         let record_size =
             usize::try_from(record_size).map_err(|_| ScanError::overflow("record size"))?;
         let mut raw = Vec::new();
@@ -46,7 +50,7 @@ impl Ingest {
             record_size,
             planned: 0,
             raw,
-            slots: Vec::new(),
+            slots,
             patches: Vec::new(),
             stats: ScanStats::default(),
         })
@@ -154,24 +158,19 @@ impl Ingest {
         let ordinal = self.stats.records_total;
         self.stats.records_total.try_bump()?;
         let class = RecordClass::classify(&mut self.raw);
-        let mut slot = RecordSlot {
-            classification: RecordKind::Corrupt,
-            sequence: None,
-            flags: None,
-            base: None,
-        };
+        let mut classification = RecordKind::Corrupt;
+        let mut base_contribution = None;
         match class {
             RecordClass::Unused => {
-                slot.classification = RecordKind::Unused;
+                classification = RecordKind::Unused;
                 self.stats.unused.try_bump()?;
             }
             RecordClass::Baad => {
-                slot.classification = RecordKind::Baad;
+                classification = RecordKind::Baad;
                 self.stats.baad.try_bump()?;
             }
             RecordClass::NotInUse(header) => {
-                slot.classification = RecordKind::Deleted;
-                slot.set_header(header);
+                classification = RecordKind::Deleted;
                 self.stats.deleted.try_bump()?;
                 // Unallocated FILE slots can leave the stored record number unset.
                 if header
@@ -189,12 +188,11 @@ impl Ingest {
             RecordClass::Base(record) | RecordClass::Extension(record) => {
                 let header = record.header();
                 let base = header.base_reference().is_null();
-                slot.classification = if base {
+                classification = if base {
                     RecordKind::Base
                 } else {
                     RecordKind::Extension
                 };
-                slot.set_header(header);
                 self.stats.records_in_use.try_bump()?;
                 let counter = if base {
                     &mut self.stats.base_records
@@ -217,7 +215,7 @@ impl Ingest {
                         }
                     };
                     match RecordContribution::decode(&record, reference, mapping.geometry) {
-                        Ok(contribution) if base => slot.base = Some(contribution),
+                        Ok(contribution) if base => base_contribution = Some(contribution),
                         Ok(contribution) => self.patches.try_push(Patch {
                             base: header.base_reference(),
                             source: reference,
@@ -229,12 +227,11 @@ impl Ingest {
             }
             _ => return Err(ScanError::stream("unsupported parser classification")),
         }
-        let root_valid = slot.classification == RecordKind::Base
-            && slot.base.is_some()
-            && slot
-                .flags
-                .is_some_and(|flags| flags.contains(RecordFlags::DIRECTORY));
-        self.slots.try_push(slot)?;
+        let root_valid = classification == RecordKind::Base
+            && base_contribution
+                .as_ref()
+                .is_some_and(|base| base.flags.contains(RecordFlags::DIRECTORY));
+        self.slots.push(classification, base_contribution)?;
         if ordinal == ROOT && !root_valid {
             return Err(ScanError::RequiredRecord { record: ROOT });
         }
@@ -252,12 +249,5 @@ impl Ingest {
         };
         counter.try_bump()?;
         Ok(())
-    }
-}
-
-impl RecordSlot {
-    fn set_header(&mut self, header: RecordHeader) {
-        self.sequence = Some(header.sequence());
-        self.flags = Some(header.flags());
     }
 }

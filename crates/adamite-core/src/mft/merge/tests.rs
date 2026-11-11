@@ -2,10 +2,10 @@
 
 use super::{
     AttributeFlags, AttributeType, BAD_CLUS, BAD_STREAM_NAME, EntryRecord, Merge, NodeFlags, Patch,
-    ROOT, RecordContribution, RecordFlags, RecordKind, RecordSlot, ScanError, ScanStats,
-    StreamSegment, StreamStorage,
+    ROOT, RecordContribution, RecordFlags, RecordSlots, ScanError, ScanStats, StreamSegment,
+    StreamStorage,
 };
-use crate::mft::model::{NameAttribute, ReparseAttribute, StandardAttribute};
+use crate::mft::model::{NameAttribute, RecordKind, ReparseAttribute, StandardAttribute};
 use crate::util::CounterExt;
 use adamite_fixtures::builders::{AttrBuilder, NonResidentModel, RecordBuilder};
 use adamite_fixtures::runlist_encoder::{RunModel, RunlistEncoder};
@@ -48,42 +48,36 @@ fn contribution(record: u64) -> RecordContribution {
     RecordContribution {
         reference: reference(record),
         hard_links: 1,
+        flags: RecordFlags::from_raw(if record == ROOT { 3 } else { 1 }),
+        conflicting_standard_information: false,
         names: vec![name(65)],
-        standard_information: Vec::new(),
+        standard_information: None,
         streams: Vec::new(),
         reparse_tags: Vec::new(),
     }
 }
-fn empty_slot() -> RecordSlot {
-    RecordSlot {
-        classification: RecordKind::Unused,
-        sequence: None,
-        flags: None,
-        base: None,
-    }
-}
-fn base_slot(base: RecordContribution) -> RecordSlot {
-    let flags = if base.reference.record() == ROOT {
-        3
-    } else {
-        1
-    };
-    RecordSlot {
-        classification: RecordKind::Base,
-        sequence: Some(base.reference.sequence()),
-        flags: Some(RecordFlags::from_raw(flags)),
-        base: Some(base),
-    }
-}
-fn slots(base: RecordContribution) -> Result<Vec<RecordSlot>, Box<dyn Error>> {
-    let count = usize::try_from(base.reference.record())?
-        .checked_add(1)
-        .ok_or("slot count")?
-        .max(6);
-    let mut slots: Vec<_> = (0..count).map(|_| empty_slot()).collect();
-    *slots.get_mut(5).ok_or("root slot")? = base_slot(contribution(5));
+fn slots(base: RecordContribution) -> Result<RecordSlots, Box<dyn Error>> {
     let index = usize::try_from(base.reference.record())?;
-    *slots.get_mut(index).ok_or("base slot")? = base_slot(base);
+    let count = index.checked_add(1).ok_or("slot count")?.max(6);
+    let mut slots = RecordSlots::new(count)?;
+    let mut base = Some(base);
+    for ordinal in 0..count {
+        let contribution = if ordinal == index {
+            base.take()
+        } else if ordinal == 5 {
+            Some(contribution(5))
+        } else {
+            None
+        };
+        slots.push(
+            if contribution.is_some() {
+                RecordKind::Base
+            } else {
+                RecordKind::Unused
+            },
+            contribution,
+        )?;
+    }
     Ok(slots)
 }
 fn patch(base: u64, added: RecordContribution) -> Patch {
@@ -143,7 +137,7 @@ fn nonresident(
             highest_vcn: segment.highest_vcn(),
             compression_unit: segment.compression_unit(),
             sizes: segment.sizes(),
-            run_count,
+            has_runs: run_count != 0,
             mapped_clusters,
         },
     })
@@ -192,7 +186,7 @@ fn standard(attrs: u32, mtime: u64) -> Result<StandardAttribute, Box<dyn Error>>
 }
 
 fn finish(
-    slots: Vec<RecordSlot>,
+    slots: RecordSlots,
     patches: Vec<Patch>,
 ) -> Result<(Vec<EntryRecord>, ScanStats), ScanError> {
     let mut merge = Merge::new(slots, patches, 512);
@@ -238,7 +232,7 @@ fn merge_extension_before_base_and_multisegment_stream_counted_once() -> TestRes
     let mut added = contribution(1);
     added.hard_links = 9;
     added.names = vec![name(66)];
-    added.standard_information.push(standard(6, 123)?);
+    added.add_standard(standard(6, 123)?);
     added
         .streams
         .push(nonresident(1, 9, model(1, 1, [-1; 4]), 0)?);
@@ -257,25 +251,30 @@ fn merge_extension_before_base_and_multisegment_stream_counted_once() -> TestRes
 #[test]
 fn merge_missing_stale_and_discarded_bases_reject_patch_without_mutation() -> TestResult {
     for case in 0..5 {
-        let mut slots = slots(contribution(6))?;
+        let mut record_slots = slots(contribution(6))?;
         let mut added = patch(6, contribution(1));
         added.contribution.names = vec![name(66)];
         match case {
             0 => added.base = reference(0x0000_ffff_ffff_ffff),
             1 => added.base = FileRef::from_raw((8u64 << 48) | 6),
-            2 => slots.get_mut(6).ok_or("slot")?.classification = RecordKind::Deleted,
-            3 => slots.get_mut(6).ok_or("slot")?.flags = Some(RecordFlags::from_raw(0)),
-            _ => slots.get_mut(6).ok_or("slot")?.base = None,
+            2 => {
+                record_slots = slots(contribution(5))?;
+                record_slots.push(RecordKind::Deleted, None)?;
+            }
+            3 => record_slots.base_mut(6).ok_or("slot")?.flags = RecordFlags::from_raw(0),
+            _ => {
+                record_slots.take_base(6);
+            }
         }
         let mut stats = ScanStats::default();
-        let mut merge = Merge::new(slots, vec![], 512);
+        let mut merge = Merge::new(record_slots, vec![], 512);
         merge.apply_patch(added, &mut stats)?;
         assert_eq!(stats.rejected_extensions, 1);
         assert_eq!(stats.invalid_file_refs, 1);
-        if let Some(base) = merge.slots.get(6).and_then(|slot| slot.base.as_ref()) {
+        if let Some(base) = merge.slots.base(6) {
             assert_eq!(base.names.len(), 1);
             assert_eq!(base.names.first().ok_or("base name")?.name, vec![65]);
-            assert!(base.standard_information.is_empty());
+            assert!(base.standard_information.is_none());
             assert!(base.streams.is_empty());
         }
     }
@@ -535,8 +534,7 @@ fn merge_badclus_bad_excludes_only_its_logical_ads_size() -> TestResult {
 #[test]
 fn merge_reparse_directory_and_si_flags_are_retained() -> TestResult {
     let mut base = contribution(6);
-    base.standard_information
-        .push(standard(0x10 | 0x400 | 0x200 | 0x800 | 6, 456)?);
+    base.add_standard(standard(0x10 | 0x400 | 0x200 | 0x800 | 6, 456)?);
     base.reparse_tags.push(ReparseAttribute { tag: 0xa000000c });
     let (entries, _) = finish(slots(base)?, vec![])?;
     let entry = find(&entries, 6)?;
@@ -558,8 +556,8 @@ fn merge_reparse_directory_and_si_flags_are_retained() -> TestResult {
 #[test]
 fn merge_missing_root_is_fatal() -> TestResult {
     let mut without_root = slots(contribution(6))?;
-    *without_root.get_mut(5).ok_or("root slot")? = empty_slot();
-    for slots in [Vec::new(), without_root] {
+    without_root.take_base(5);
+    for slots in [RecordSlots::default(), without_root] {
         assert!(matches!(
             finish(slots, vec![]),
             Err(ScanError::RequiredRecord { record: 5 })
@@ -571,7 +569,8 @@ fn merge_missing_root_is_fatal() -> TestResult {
 #[test]
 fn merge_conflicting_si_and_corrupt_root_are_fatal_or_discarded() -> TestResult {
     let mut base = contribution(6);
-    base.standard_information = vec![standard(0, 1)?, standard(0, 2)?];
+    base.add_standard(standard(0, 1)?);
+    base.add_standard(standard(0, 2)?);
     let (entries, stats) = finish(slots(base)?, vec![])?;
     assert!(entries.iter().all(|entry| entry.file_ref.record() != 6));
     assert_eq!(stats.corrupt_values, 1);
@@ -620,14 +619,57 @@ fn merge_allocation_overflow_is_fatal() -> TestResult {
 
 #[test]
 fn merge_cpu_steps_handle_at_most_256_patches_or_slots() -> TestResult {
-    let slots = (0..700)
-        .map(|ordinal| base_slot(contribution(ordinal)))
-        .collect();
+    let mut slots = RecordSlots::new(700)?;
+    for ordinal in 0..700 {
+        slots.push(RecordKind::Base, Some(contribution(ordinal)))?;
+    }
     let patches = (700..1000)
         .map(|ordinal| patch(6, contribution(ordinal)))
         .collect();
     let (entries, _) = finish(slots, patches)?;
     assert_eq!(entries.len(), 700);
     assert_eq!(find(&entries, 6)?.names.len(), 301);
+    Ok(())
+}
+
+#[test]
+fn merge_inline_standard_information_preserves_base_and_extension_rules() -> TestResult {
+    for (base_times, extension_times, expected) in [
+        (vec![], vec![], Some(0)),
+        (vec![123], vec![], Some(123)),
+        (vec![], vec![123, 123], Some(123)),
+        (vec![123, 123], vec![123], Some(123)),
+        (vec![123], vec![456], None),
+        (vec![], vec![123, 456], None),
+        (vec![123, 456], vec![123], None),
+    ] {
+        let mut base = contribution(6);
+        for time in base_times {
+            base.add_standard(standard(0, time)?);
+        }
+        let mut patches = Vec::new();
+        for (index, time) in extension_times.into_iter().enumerate() {
+            let mut added = contribution(u64::try_from(index)? + 10);
+            added.add_standard(standard(0, time)?);
+            patches.push(patch(6, added));
+        }
+        let (entries, stats) = finish(slots(base)?, patches)?;
+        if let Some(time) = expected {
+            assert_eq!(find(&entries, 6)?.mtime, time);
+            assert_eq!(stats.corrupt_values, 0);
+            assert_eq!(stats.corrupt_records, 0);
+        } else {
+            assert!(entries.iter().all(|entry| entry.file_ref.record() != 6));
+            assert_eq!(stats.corrupt_values, 1);
+            assert_eq!(stats.corrupt_records, 1);
+        }
+    }
+    // Conflicts inside a single accepted extension must also reach the base.
+    let mut added = contribution(10);
+    added.add_standard(standard(0, 123)?);
+    added.add_standard(standard(0, 456)?);
+    let (entries, stats) = finish(slots(contribution(6))?, vec![patch(6, added)])?;
+    assert!(entries.iter().all(|entry| entry.file_ref.record() != 6));
+    assert_eq!((stats.corrupt_values, stats.corrupt_records), (1, 1));
     Ok(())
 }

@@ -3,7 +3,7 @@
 use crate::{
     error::ScanError,
     graph::entry::{EntryName, EntryRecord},
-    mft::model::{Patch, RecordContribution, RecordKind, RecordSlot, StreamSegment, StreamStorage},
+    mft::model::{Patch, RecordContribution, RecordSlots, StreamSegment, StreamStorage},
     scan::ScanStats,
     snapshot::NodeFlags,
     util::{CounterExt, VecExt},
@@ -31,7 +31,7 @@ enum Stage {
 
 #[derive(Debug)]
 pub(crate) struct Merge {
-    slots: Vec<RecordSlot>,
+    slots: RecordSlots,
     patches: IntoIter<Patch>,
     cluster_size: u32,
     cursor: usize,
@@ -46,11 +46,11 @@ impl Merge {
             .len()
             .checked_add(additional)
             .ok_or_else(|| ScanError::overflow("merged contribution length"))?;
-        VecExt::try_reserve(target, additional)?;
+        VecExt::try_reserve_exact(target, additional)?;
         Ok(())
     }
 
-    pub(crate) fn new(slots: Vec<RecordSlot>, patches: Vec<Patch>, cluster_size: u32) -> Self {
+    pub(crate) fn new(slots: RecordSlots, patches: Vec<Patch>, cluster_size: u32) -> Self {
         Self {
             slots,
             patches: patches.into_iter(),
@@ -74,25 +74,21 @@ impl Merge {
                     self.apply_patch(patch, stats)?;
                 }
                 Stage::Entries => {
-                    let Some(slot) = self.slots.get_mut(self.cursor) else {
+                    if self.cursor >= self.slots.len() {
                         if !self.root_emitted {
                             return Err(ScanError::RequiredRecord { record: ROOT });
                         }
                         return Ok(true);
-                    };
-                    let ordinal = u64::try_from(self.cursor)
+                    }
+                    let index = self.cursor;
+                    let ordinal = u64::try_from(index)
                         .map_err(|_| ScanError::overflow("merge record ordinal"))?;
                     self.cursor = self
                         .cursor
                         .checked_add(1)
                         .ok_or_else(|| ScanError::overflow("merge slot cursor"))?;
-                    if slot.classification == RecordKind::Base
-                        && let Some(base) = slot.base.take()
-                    {
-                        let flags = slot.flags.ok_or(ScanError::Stream {
-                            reason: "base slot has no record flags",
-                        })?;
-                        if let Some(entry) = base.into_entry(flags, self.cluster_size, stats)? {
+                    if let Some(base) = self.slots.take_base(index) {
+                        if let Some(entry) = base.into_entry(self.cluster_size, stats)? {
                             let is_root = entry.file_ref.record() == ROOT;
                             self.entries.try_push(entry)?;
                             self.root_emitted |= is_root;
@@ -109,17 +105,9 @@ impl Merge {
     fn apply_patch(&mut self, patch: Patch, stats: &mut ScanStats) -> Result<(), ScanError> {
         let index = usize::try_from(patch.base.record()).ok();
         let valid = index
-            .and_then(|index| self.slots.get(index))
-            .is_some_and(|slot| {
-                slot.classification == RecordKind::Base
-                    && slot.sequence == Some(patch.base.sequence())
-                    && slot
-                        .flags
-                        .is_some_and(|flags| flags.contains(RecordFlags::IN_USE))
-                    && slot
-                        .base
-                        .as_ref()
-                        .is_some_and(|base| base.reference == patch.base)
+            .and_then(|index| self.slots.base(index))
+            .is_some_and(|base| {
+                base.reference == patch.base && base.flags.contains(RecordFlags::IN_USE)
             })
             && patch.source == patch.contribution.reference
             && patch
@@ -133,23 +121,20 @@ impl Merge {
             return Ok(());
         }
         let base = index
-            .and_then(|index| self.slots.get_mut(index))
-            .and_then(|slot| slot.base.as_mut())
+            .and_then(|index| self.slots.base_mut(index))
             .ok_or(ScanError::Stream {
                 reason: "validated patch base disappeared",
             })?;
         let mut added = patch.contribution;
         // Reserve every destination before changing any logical contents.
         Self::reserve_contribution(&mut base.names, added.names.len())?;
-        Self::reserve_contribution(
-            &mut base.standard_information,
-            added.standard_information.len(),
-        )?;
         Self::reserve_contribution(&mut base.streams, added.streams.len())?;
         Self::reserve_contribution(&mut base.reparse_tags, added.reparse_tags.len())?;
         base.names.append(&mut added.names);
-        base.standard_information
-            .append(&mut added.standard_information);
+        if let Some(standard) = added.standard_information {
+            base.add_standard(standard);
+        }
+        base.conflicting_standard_information |= added.conflicting_standard_information;
         base.streams.append(&mut added.streams);
         base.reparse_tags.append(&mut added.reparse_tags);
         Ok(())
@@ -177,6 +162,25 @@ struct StreamTotals {
 }
 
 impl StreamSegment {
+    fn compare(&self, right: &Self) -> Ordering {
+        (
+            self.attribute_type.raw(),
+            &self.name,
+            self.lowest_vcn(),
+            self.source.record(),
+            self.source.sequence(),
+            self.attribute_id,
+        )
+            .cmp(&(
+                right.attribute_type.raw(),
+                &right.name,
+                right.lowest_vcn(),
+                right.source.record(),
+                right.source.sequence(),
+                right.attribute_id,
+            ))
+    }
+
     fn lowest_vcn(&self) -> u64 {
         match self.storage {
             StreamStorage::Resident { .. } => 0,
@@ -220,7 +224,7 @@ impl StreamTotals {
                 highest_vcn,
                 sizes,
                 compression_unit: unit,
-                run_count,
+                has_runs,
                 mapped_clusters: mapped,
             } = segment.storage
             else {
@@ -235,12 +239,12 @@ impl StreamTotals {
                 return Err(StreamError::Invalid);
             }
             if highest_vcn == -1 {
-                if segments.len() != 1 || lowest_vcn != 0 || run_count != 0 {
+                if segments.len() != 1 || lowest_vcn != 0 || has_runs {
                     return Err(StreamError::Invalid);
                 }
                 expected = 0;
             } else {
-                if run_count == 0 {
+                if !has_runs {
                     return Err(StreamError::Invalid);
                 }
                 expected = u64::try_from(highest_vcn)
@@ -310,18 +314,14 @@ impl RecordContribution {
 
     fn into_entry(
         mut self,
-        record_flags: RecordFlags,
         cluster_size: u32,
         stats: &mut ScanStats,
     ) -> Result<Option<EntryRecord>, ScanError> {
         let standard = self
             .standard_information
-            .first()
+            .as_ref()
             .map(|attribute| attribute.value);
-        if self
-            .standard_information
-            .iter()
-            .any(|attribute| Some(attribute.value) != standard)
+        if self.conflicting_standard_information
             || self.reparse_tags.iter().any(|tag| {
                 self.reparse_tags
                     .first()
@@ -336,9 +336,8 @@ impl RecordContribution {
         let attrs = standard.map_or(0, |value| value.file_attributes().raw());
         let mtime = standard.map_or(0, |value| value.times().modified());
         let reparse_tag = self.reparse_tags.first().map(|attribute| attribute.tag);
-        let mut flags =
-            Self::entry_flags(record_flags, FileAttributes::from_raw(attrs), reparse_tag);
-        self.streams.sort_unstable_by(compare_segments);
+        let mut flags = Self::entry_flags(self.flags, FileAttributes::from_raw(attrs), reparse_tag);
+        self.streams.sort_unstable_by(StreamSegment::compare);
         let mut size = 0u64;
         let mut ads_size = 0u64;
         let mut alloc = 0u64;
@@ -417,25 +416,6 @@ impl RecordContribution {
             flags,
         }))
     }
-}
-
-fn compare_segments(left: &StreamSegment, right: &StreamSegment) -> Ordering {
-    (
-        left.attribute_type.raw(),
-        &left.name,
-        left.lowest_vcn(),
-        left.source.record(),
-        left.source.sequence(),
-        left.attribute_id,
-    )
-        .cmp(&(
-            right.attribute_type.raw(),
-            &right.name,
-            right.lowest_vcn(),
-            right.source.record(),
-            right.source.sequence(),
-            right.attribute_id,
-        ))
 }
 
 #[cfg(test)]

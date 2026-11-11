@@ -48,7 +48,7 @@ Each milestone ends with one reviewed commit, `deno task check` green and CI gre
 
 ### M2 — Compact ingest state
 
-- [ ] Implement D4; report D2 numbers.
+- [x] Implement D4; report D2 numbers.
 
 ### M3 — Stage overlap
 
