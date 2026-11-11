@@ -95,7 +95,7 @@ Deno.test("normal checks format and lint both excluded fuzz packages and test th
   );
 });
 
-Deno.test("normal checks include fixture and check-script tests with scoped read permissions", () => {
+Deno.test("normal checks include fixture, check and package tests with scoped permissions", () => {
   const steps = checkSteps({ packages: fuzzPackages, fuzz: false });
   equal(
     steps.find((step) => step.name === "Deno fixture tests"),
@@ -113,8 +113,23 @@ Deno.test("normal checks include fixture and check-script tests with scoped read
   );
   equal(
     script.args.filter((arg) => arg.startsWith("--allow-")),
-    ["--allow-read=deno.json,.github/workflows/ci.yml,crates/adamite-ntfs/fuzz/Cargo.toml,crates/adamite-core/fuzz/Cargo.toml"],
+    ["--allow-read=deno.json,.github/workflows,crates/adamite-ntfs/fuzz/Cargo.toml,crates/adamite-core/fuzz/Cargo.toml"],
     "check-script permissions",
+  );
+  equal(
+    steps.find((step) => step.name === "package script tests"),
+    {
+      name: "package script tests",
+      command: "deno",
+      args: [
+        "test",
+        "--frozen",
+        "--allow-read=target/package-test",
+        "--allow-write=target/package-test",
+        "scripts/package_test.ts",
+      ],
+    },
+    "package tests and temporary-tree permissions",
   );
 });
 
@@ -533,5 +548,38 @@ Deno.test("Deno tasks permit both corpus paths without broadening executable acc
   assert(
     config.tasks["fuzz-corpus"].includes("--allow-run=cargo,zstd "),
     "corpus executable permission changed",
+  );
+});
+
+Deno.test("packaging tasks limit file access and pin the tar dependency exactly", async () => {
+  const config = JSON.parse(await Deno.readTextFile("deno.json")) as {
+    tasks: Record<string, string>;
+    imports: Record<string, string>;
+  };
+  for (
+    const [task, permissions] of [
+      ["package", [
+        "--allow-read=crates/adamite-cli/Cargo.toml,target/release/adamite,target/release/adamite.exe",
+        "--allow-write=dist",
+      ]],
+      ["release-check", ["--allow-read=crates/adamite-cli/Cargo.toml"]],
+    ] as const
+  ) {
+    const args = config.tasks[task].split(" ");
+    equal(args.slice(0, 3), ["deno", "run", "--frozen"], `${task} freezes dependencies`);
+    equal(
+      args.filter((arg) => arg.startsWith("--allow-") || arg === "-A"),
+      permissions,
+      `${task} permissions`,
+    );
+    equal(
+      args.slice(3 + permissions.length),
+      task === "package" ? ["scripts/package.ts"] : ["scripts/package.ts", "--release-check"],
+      `${task} entry point`,
+    );
+  }
+  assert(
+    /^jsr:@std\/tar@\d+\.\d+\.\d+$/.test(config.imports["@std/tar"]),
+    "tar dependency must use an exact version",
   );
 });

@@ -131,7 +131,7 @@ Each milestone ends with one reviewed commit and `deno task check` green. A mile
 
 ### C7 — Packaging script
 
-- [ ] Add `scripts/package.ts`, `package_test.ts`, `deno.json` tasks, the pinned `@std/tar` with `deno.lock`, `.gitignore` entry, and the gate step with its mirror and assertions (D11, D14).
+- [x] Add `scripts/package.ts`, `package_test.ts`, `deno.json` tasks, the pinned `@std/tar` with `deno.lock`, `.gitignore` entry, and the gate step with its mirror and assertions (D11, D14).
 
 ### C8 — CI artifacts and Windows CLI smoke
 

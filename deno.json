@@ -4,9 +4,12 @@
     "check": "deno run --frozen --allow-read=Cargo.toml,rust-toolchain.toml,crates/adamite-ntfs/fuzz/Cargo.toml,crates/adamite-ntfs/fuzz/corpus,crates/adamite-core/fuzz/Cargo.toml,crates/adamite-core/fuzz/corpus --allow-write=target/fuzz-smoke --allow-run=cargo,deno scripts/check.ts",
     "fixtures": "deno run --frozen --allow-run=mkntfs,sudo,ntfsinfo,getfattr,setfattr,zstd,mountpoint --allow-read=tests/fixtures/ntfs,/tmp --allow-write=tests/fixtures/ntfs,/tmp scripts/fixtures/generate.ts",
     "fuzz-corpus": "deno run --frozen --allow-run=cargo,zstd --allow-read=tests/fixtures/ntfs,crates/adamite-ntfs/fuzz/fuzz_targets/typed_values/selectors.rs,crates/adamite-core/fuzz/corpus/persist --allow-write=crates/adamite-ntfs/fuzz/corpus,crates/adamite-core/fuzz/corpus scripts/fuzz_corpus.ts",
-    "ci-lint": "deno run --frozen --allow-read=.github/workflows scripts/ci_lint.ts"
+    "ci-lint": "deno run --frozen --allow-read=.github/workflows scripts/ci_lint.ts",
+    "package": "deno run --frozen --allow-read=crates/adamite-cli/Cargo.toml,target/release/adamite,target/release/adamite.exe --allow-write=dist scripts/package.ts",
+    "release-check": "deno run --frozen --allow-read=crates/adamite-cli/Cargo.toml scripts/package.ts --release-check"
   },
   "imports": {
+    "@std/tar": "jsr:@std/tar@0.1.10",
     "@std/toml": "jsr:@std/toml@^1.0.0",
     "@std/yaml": "jsr:@std/yaml@^1.0.0"
   },

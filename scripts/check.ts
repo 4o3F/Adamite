@@ -177,8 +177,19 @@ export function checkSteps(options: { packages: readonly FuzzPackage[]; fuzz: bo
       args: [
         "test",
         "--frozen",
-        "--allow-read=deno.json,.github/workflows/ci.yml,crates/adamite-ntfs/fuzz/Cargo.toml,crates/adamite-core/fuzz/Cargo.toml",
+        "--allow-read=deno.json,.github/workflows,crates/adamite-ntfs/fuzz/Cargo.toml,crates/adamite-core/fuzz/Cargo.toml",
         "scripts/check_test.ts",
+      ],
+    },
+    {
+      name: "package script tests",
+      command: "deno",
+      args: [
+        "test",
+        "--frozen",
+        "--allow-read=target/package-test",
+        "--allow-write=target/package-test",
+        "scripts/package_test.ts",
       ],
     },
     { name: "workflow syntax", command: "deno", args: ["task", "ci-lint"] },

@@ -1,3 +1,4 @@
 target/
+dist/
 **/fuzz/artifacts/
 **/fuzz/coverage/

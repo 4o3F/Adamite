@@ -2,12 +2,23 @@
   "version": "5",
   "specifiers": {
     "jsr:@std/collections@^1.1.3": "1.4.0",
+    "jsr:@std/streams@^1.0.17": "1.0.17",
+    "jsr:@std/tar@0.1.10": "0.1.10",
     "jsr:@std/toml@1": "1.0.11",
     "jsr:@std/yaml@1": "1.3.0"
   },
   "jsr": {
     "@std/collections@1.4.0": {
       "integrity": "bd7f74966e11de11b1f0420b7e8cb7bb381d8af7872b738443b92050db28c9c0"
+    },
+    "@std/streams@1.0.17": {
+      "integrity": "7859f3d9deed83cf4b41f19223d4a67661b3d3819e9fc117698f493bf5992140"
+    },
+    "@std/tar@0.1.10": {
+      "integrity": "6bf907f3a4bc8bfef42973ba132d946756a6161ef6b914a9e1c06debe664db17",
+      "dependencies": [
+        "jsr:@std/streams"
+      ]
     },
     "@std/toml@1.0.11": {
       "integrity": "e084988b872ca4bad6aedfb7350f6eeed0e8ba88e9ee5e1590621c5b5bb8f715",
@@ -21,6 +32,7 @@
   },
   "workspace": {
     "dependencies": [
+      "jsr:@std/tar@0.1.10",
       "jsr:@std/toml@1",
       "jsr:@std/yaml@1"
     ]

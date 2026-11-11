@@ -89,7 +89,8 @@ jobs:
       - run: deno lint
       - run: deno check scripts/
       - run: deno test --frozen --allow-read=scripts/fixtures/testdata scripts/fixtures/
-      - run: deno test --frozen --allow-read=deno.json,.github/workflows/ci.yml,crates/adamite-ntfs/fuzz/Cargo.toml,crates/adamite-core/fuzz/Cargo.toml scripts/check_test.ts
+      - run: deno test --frozen --allow-read=deno.json,.github/workflows,crates/adamite-ntfs/fuzz/Cargo.toml,crates/adamite-core/fuzz/Cargo.toml scripts/check_test.ts
+      - run: deno test --frozen --allow-read=target/package-test --allow-write=target/package-test scripts/package_test.ts
       - run: deno task ci-lint
 
   fuzz:
