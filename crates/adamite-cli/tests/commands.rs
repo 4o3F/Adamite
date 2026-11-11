@@ -997,17 +997,14 @@ fn output_symlink_to_source_is_rejected_before_scanning() -> TestResult {
 }
 
 #[test]
-fn publish_and_temporary_creation_failures_leave_no_temporary_files() -> TestResult {
+fn directory_and_temporary_creation_failures_leave_no_temporary_files() -> TestResult {
     let case = Case::new("save-io-failures", "basic-4k")?;
     let directory = case.directory.join("directory.adm");
     fs::create_dir(&directory)?;
     let sentinel = directory.join("keep.txt");
     fs::write(&sentinel, b"keep")?;
-    for destination in [
-        &directory,
-        &case.directory.join("missing").join("saved.adm"),
-    ] {
-        let output = case.save(destination, &["--force", "--json"]);
+    for flags in [vec!["--json"], vec!["--force", "--json"]] {
+        let output = case.save(&directory, &flags);
         assert_eq!(
             output.status.code(),
             Some(1),
@@ -1015,8 +1012,55 @@ fn publish_and_temporary_creation_failures_leave_no_temporary_files() -> TestRes
             String::from_utf8_lossy(&output.stderr)
         );
         assert!(output.stdout.is_empty());
-        assert!(String::from_utf8(output.stderr)?.contains("caused by:"));
+        let stderr = String::from_utf8(output.stderr)?;
+        assert!(
+            stderr.contains(&format!("output {} is a directory", directory.display())),
+            "{stderr}"
+        );
+        assert!(!stderr.contains("scanning "), "{stderr}");
         assert_eq!(fs::read(&sentinel)?, b"keep");
+        case.assert_no_temporary_files()?;
+    }
+    let output = case.save(
+        &case.directory.join("missing").join("saved.adm"),
+        &["--force", "--json"],
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8(output.stderr)?.contains("caused by:"));
+    assert_eq!(fs::read(&sentinel)?, b"keep");
+    case.assert_no_temporary_files()?;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn output_symlink_to_directory_is_rejected_before_scanning() -> TestResult {
+    use std::os::unix::fs::symlink;
+    let case = Case::new("save-directory-symlink", "basic-4k")?;
+    let directory = case.directory.join("directory");
+    fs::create_dir(&directory)?;
+    let sentinel = directory.join("keep.txt");
+    fs::write(&sentinel, b"keep")?;
+    let path = case.directory.join("alias.adm");
+    symlink(&directory, &path)?;
+    for flags in [vec!["--json"], vec!["--force", "--json"]] {
+        let output = case.save(&path, &flags);
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8(output.stderr)?;
+        assert!(
+            stderr.contains(&format!("output {} is a directory", path.display())),
+            "{stderr}"
+        );
+        assert!(!stderr.contains("scanning "), "{stderr}");
+        assert_eq!(fs::read(&sentinel)?, b"keep");
+        assert_eq!(fs::read_link(&path)?, directory);
         case.assert_no_temporary_files()?;
     }
     Ok(())

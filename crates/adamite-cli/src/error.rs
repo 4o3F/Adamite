@@ -47,6 +47,8 @@ pub(crate) enum CliError {
     },
     #[snafu(display("output {} already exists; use --force to replace it", path.display()))]
     OutputExists { path: PathBuf },
+    #[snafu(display("output {} is a directory", path.display()))]
+    OutputIsDirectory { path: PathBuf },
     #[snafu(display("cannot save {} without replacement: hard links are unsupported; use --force", path.display()))]
     UnsupportedNoClobber { path: PathBuf, source: io::Error },
     #[snafu(display("output {} resolves to the source image", path.display()))]

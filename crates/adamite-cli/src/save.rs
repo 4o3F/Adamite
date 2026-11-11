@@ -32,6 +32,11 @@ impl SnapshotFile {
 
     /// Rejects conflicting destinations before scanning an image or drive.
     pub(crate) fn preflight(&self, source: &Source) -> Result<(), CliError> {
+        if fs::metadata(&self.path).is_ok_and(|metadata| metadata.is_dir()) {
+            return Err(CliError::OutputIsDirectory {
+                path: self.path.clone(),
+            });
+        }
         if matches!(self.mode, PublishMode::NoClobber) {
             return match fs::symlink_metadata(&self.path) {
                 Ok(_) => Err(CliError::OutputExists {
