@@ -9,6 +9,7 @@ publish = false
 [dependencies]
 adamite-ntfs = { version = "0.1.0", path = "../adamite-ntfs" }
 crc32fast = { version = "1.5", default-features = false, features = ["std"] }
+globset = { version = "0.4.21", default-features = false }
 snafu.workspace = true
 tracing.workspace = true
 

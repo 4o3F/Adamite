@@ -1,8 +1,8 @@
 //! Arena, name pool and CSR behavior through the frozen read interface.
 
 use super::{
-    NameRange, Node, NodeFlags, NodeId, ParentTree, ResolvedNode, Snapshot, SnapshotBuilder,
-    SnapshotError,
+    Aggregator, Finalizer, NameRange, Node, NodeFlags, NodeId, ParentTree, ResolvedNode, Snapshot,
+    SnapshotBuilder, SnapshotError,
 };
 use crate::scan::ScanContext;
 use crate::{
@@ -73,6 +73,28 @@ fn build(entries: Vec<EntryRecord>, context: &ScanContext) -> Result<Snapshot, B
         }
     }
     Err("snapshot builder did not terminate".into())
+}
+
+fn finish(entries: Vec<EntryRecord>, context: &ScanContext) -> Result<Snapshot, Box<dyn Error>> {
+    let mut snapshot = build(entries, context)?;
+    let mut aggregate = Aggregator::new(&snapshot)?;
+    let mut aggregated = false;
+    for _ in 0..100_000 {
+        if aggregate.step(&mut snapshot)? {
+            aggregated = true;
+            break;
+        }
+    }
+    if !aggregated {
+        return Err("aggregation did not terminate".into());
+    }
+    let mut finalizer = Finalizer::new();
+    for _ in 0..100_000 {
+        if finalizer.step(&mut snapshot)? {
+            return Ok(snapshot);
+        }
+    }
+    Err("finalization did not terminate".into())
 }
 
 #[test]
@@ -295,3 +317,4 @@ fn snapshot_deterministic_ids_under_shuffled_input() -> TestResult {
 }
 
 mod query;
+mod search;

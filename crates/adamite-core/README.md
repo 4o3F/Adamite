@@ -1,6 +1,6 @@
 # adamite-core
 
-`adamite-core` scans caller-supplied NTFS bytes into an immutable `snapshot::Snapshot` and `scan::ScanStats`. It uses `std`, forbids unsafe code and depends on `adamite-ntfs`, crc32fast, snafu and tracing. It performs no I/O and starts no threads or timers. Persistence accepts a caller-supplied sequential byte-copy callback; file access and seeking stay in `adamite-io`.
+`adamite-core` scans caller-supplied NTFS bytes into an immutable `snapshot::Snapshot` and `scan::ScanStats`. It uses `std`, forbids unsafe code and depends on `adamite-ntfs`, crc32fast, globset, snafu and tracing. It performs no I/O and starts no threads or timers. Persistence accepts a caller-supplied sequential byte-copy callback; file access and seeking stay in `adamite-io`.
 
 The public API lives under `scan::`, `snapshot::` and `error::`; the crate root exports modules only. Every scan item has one path directly under `scan::`, and its implementation children are private.
 
@@ -51,6 +51,10 @@ Self logical size is unnamed DATA; ADS logical bytes are separate. Allocation in
 
 `extension_stats_under(under)` returns subtree extension totals in the same order as `ext_stats`; the root scope copies the stored index. `kind_stats(under)` combines those totals into `KindStat` rows, ordered by allocation descending and then category order. Query scopes may be directories or individual files. Rankings and totals exclude duplicate hard links. Queries traverse iteratively, reserve storage fallibly and return `QueryError` for an unknown scope or a failed calculation/allocation.
 
+`NamePattern::glob(text)` compiles a case-insensitive name glob, preserving the input through `as_str()`. Input without `*?[{` uses substring matching, so `steam` finds `SteamLibrary`. Globs match whole names, allow wildcards across separators and support backslash escaping. Input is limited to 256 bytes; invalid globs and oversized input return `QueryError`.
+
+`search(under, &pattern, offset, limit)` visits descendants in pre-order using stored child order, including directories, synthetic directories and duplicate hard links. The scope node itself is excluded. `SearchPage::items()` contains at most `limit` matches; `total_matches()` counts every match, and `next_offset()` supplies the next page offset when more remain. Offsets count matches, and an offset past the end returns an empty page with the full total. A zero limit returns only the total and retains the offset if matches remain.
+
 `scan::ConfigError` rejects invalid bounds, `scan::FeedError` rejects responses without changing state, `error::ScanError` terminates a failed scan, and `snapshot::SnapshotError` covers snapshot construction/path failures. Ordinary corrupt records are discarded and counted; a missing/corrupt root or bootstrap is fatal. Errors preserve parser/allocation sources through snafu.
 
 ## Persistence
@@ -79,4 +83,4 @@ The shared `adamite-fixtures` crate loads committed images and independent v3 ma
 
 The [standalone nightly fuzz harnesses](fuzz/README.md) check bounded scan inputs, protocol and aggregation invariants, plus `.adm` decoding and canonical re-encoding. `deno task fuzz-corpus` generates parser seeds and both core corpora; `deno task check --fuzz` runs all seven smoke targets. Smoke mutations go to scratch directories under `target/fuzz-smoke`; committed seed corpora are read without changes.
 
-[`adamite-io`](../adamite-io/README.md) provides `VolumeReader`, slice/image/Windows raw-volume readers and `SyncDriver` for synchronous scans. [`adamite-cli`](../adamite-cli/README.md) scans and saves `.adm` files, prints reports and launches the [`adamite-tui`](../adamite-tui/README.md) browser. Parallelism, buffer pools, `$BITMAP` skipping, general resource limits, name search, MCP, USN and walkdir fallback remain future changes. Mirror fallback, reparse-target traversal and atomic live-volume snapshots are not provided.
+[`adamite-io`](../adamite-io/README.md) provides `VolumeReader`, slice/image/Windows raw-volume readers and `SyncDriver` for synchronous scans. [`adamite-cli`](../adamite-cli/README.md) scans and saves `.adm` files, prints reports and launches the [`adamite-tui`](../adamite-tui/README.md) browser. Parallelism, buffer pools, `$BITMAP` skipping, general resource limits, MCP, USN and walkdir fallback remain future changes. Mirror fallback, reparse-target traversal and atomic live-volume snapshots are not provided.

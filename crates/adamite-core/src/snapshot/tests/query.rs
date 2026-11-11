@@ -1,12 +1,12 @@
 //! Query results compared with full sorting and independent file folds.
 
-use super::{TestResult, build as build_arena, entry, root};
+use super::{TestResult, entry, finish as build, root};
 use crate::{
     graph::entry::EntryName,
     scan::ScanContext,
     snapshot::{
-        Aggregator, FileFilter, FileKind, Finalizer, NodeFlags, NodeId, QueryError, Snapshot,
-        SnapshotError, kind::EXTENSION_KINDS,
+        FileFilter, FileKind, NodeFlags, NodeId, QueryError, Snapshot, SnapshotError,
+        kind::EXTENSION_KINDS,
     },
 };
 use adamite_ntfs::record::reference::FileRef;
@@ -18,31 +18,6 @@ use std::{
 };
 
 const SUFFIXES: [&str; 9] = ["MP4", "mkv", "RS", "txt", "zip", "iso", "", "ÄBC", "äBC"];
-
-fn build(
-    entries: Vec<crate::graph::entry::EntryRecord>,
-    context: &ScanContext,
-) -> Result<Snapshot, Box<dyn Error>> {
-    let mut snapshot = build_arena(entries, context)?;
-    let mut aggregate = Aggregator::new(&snapshot)?;
-    let mut aggregated = false;
-    for _ in 0..100_000 {
-        if aggregate.step(&mut snapshot)? {
-            aggregated = true;
-            break;
-        }
-    }
-    if !aggregated {
-        return Err("aggregation did not terminate".into());
-    }
-    let mut finalizer = Finalizer::new();
-    for _ in 0..100_000 {
-        if finalizer.step(&mut snapshot)? {
-            return Ok(snapshot);
-        }
-    }
-    Err("finalization did not terminate".into())
-}
 
 fn generated_snapshot(files: &[(u16, u8, bool)]) -> Result<Snapshot, Box<dyn Error>> {
     let mut entries = vec![

@@ -1,7 +1,7 @@
-//! Fallible subtree ranking and primary-file summaries without I/O.
+//! Fallible subtree ranking, name search and primary-file summaries without I/O.
 
 use super::{
-    ExtensionStat, FileKind, KindStat, Node, NodeId, Snapshot, SnapshotError,
+    ExtensionStat, FileKind, KindStat, NamePattern, Node, NodeId, Snapshot, SnapshotError,
     indexes::ExtensionGroups,
     rules::{Extension, Ranking},
 };
@@ -22,6 +22,18 @@ pub enum QueryError {
     /// The category name is not one of the names in [`FileKind::ALL`].
     #[snafu(display("unknown file kind"))]
     InvalidKind,
+    /// A name pattern exceeds the supported byte length.
+    #[snafu(display("name pattern exceeds the {limit}-byte limit"))]
+    PatternTooLong {
+        /// Maximum accepted pattern length in bytes.
+        limit: usize,
+    },
+    /// The supplied name pattern is not a valid glob.
+    #[snafu(display("invalid name glob: {source}"))]
+    InvalidGlob {
+        /// Underlying glob parsing failure.
+        source: globset::Error,
+    },
     /// Fallible query storage reservation failed.
     #[snafu(display("query allocation failed: {source}"))]
     Allocation {
@@ -45,6 +57,43 @@ impl From<TryReserveError> for QueryError {
 impl From<SnapshotError> for QueryError {
     fn from(source: SnapshotError) -> Self {
         Self::Snapshot { source }
+    }
+}
+
+impl From<globset::Error> for QueryError {
+    fn from(source: globset::Error) -> Self {
+        Self::InvalidGlob { source }
+    }
+}
+
+/// One page of matching node identifiers and the full subtree match count.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchPage {
+    items: Vec<NodeId>,
+    total_matches: u64,
+    offset: usize,
+}
+
+impl SearchPage {
+    /// Borrows this page's matches in stored-child pre-order.
+    #[must_use]
+    pub fn items(&self) -> &[NodeId] {
+        &self.items
+    }
+
+    /// Returns the total number of matches, including those outside this page.
+    #[must_use]
+    pub const fn total_matches(&self) -> u64 {
+        self.total_matches
+    }
+
+    /// Returns the next match offset when more matches remain.
+    ///
+    /// A zero-sized page retains its offset when matches remain.
+    #[must_use]
+    pub fn next_offset(&self) -> Option<usize> {
+        let next = self.offset.checked_add(self.items.len())?;
+        (u64::try_from(next).ok()? < self.total_matches).then_some(next)
     }
 }
 
@@ -194,6 +243,43 @@ impl Snapshot {
         Ok(result)
     }
 
+    /// Searches descendant names in pre-order, preserving the stored order of children.
+    ///
+    /// The scope itself is excluded. Files, directories, synthetic directories and duplicate hard links can all match. `offset` skips matches; at most `limit` identifiers are retained while the traversal counts every match. An offset past the end returns an empty page with the full count. A zero limit returns only the count.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`QueryError::InvalidNode`] for an unknown scope, or an allocation, overflow or snapshot error during traversal.
+    pub fn search(
+        &self,
+        under: NodeId,
+        pattern: &NamePattern,
+        offset: usize,
+        limit: usize,
+    ) -> Result<SearchPage, QueryError> {
+        self.check_scope(under)?;
+        let skip = u64::try_from(offset).map_err(|_| SnapshotError::overflow("search offset"))?;
+        let mut page = SearchPage {
+            items: Vec::new(),
+            total_matches: 0,
+            offset,
+        };
+        self.visit_preorder(under, |id, _| {
+            if id != under && pattern.matches(self.query_name(id)?) {
+                if page.total_matches >= skip && page.items.len() < limit {
+                    page.items.try_reserve(1)?;
+                    page.items.push(id);
+                }
+                page.total_matches = page
+                    .total_matches
+                    .checked_add(1)
+                    .ok_or_else(|| SnapshotError::overflow("search match count"))?;
+            }
+            Ok(())
+        })?;
+        Ok(page)
+    }
+
     fn check_scope(&self, under: NodeId) -> Result<(), QueryError> {
         self.node(under)
             .ok_or(QueryError::InvalidNode { node: under })?;
@@ -205,6 +291,24 @@ impl Snapshot {
         under: NodeId,
         mut visit: impl FnMut(NodeId, &Node, &str) -> Result<(), QueryError>,
     ) -> Result<(), QueryError> {
+        self.visit_preorder(under, |id, node| {
+            if node.is_primary_file() {
+                visit(id, node, self.query_name(id)?)?;
+            }
+            Ok(())
+        })
+    }
+
+    fn query_name(&self, id: NodeId) -> Result<&str, QueryError> {
+        self.name(id)
+            .ok_or_else(|| SnapshotError::invalid("missing query name").into())
+    }
+
+    fn visit_preorder(
+        &self,
+        under: NodeId,
+        mut visit: impl FnMut(NodeId, &Node) -> Result<(), QueryError>,
+    ) -> Result<(), QueryError> {
         let mut pending = Vec::new();
         pending.try_reserve(1)?;
         pending.push(under);
@@ -212,17 +316,12 @@ impl Snapshot {
             let node = self
                 .node(id)
                 .ok_or_else(|| SnapshotError::invalid("missing query node"))?;
-            if node.node.is_primary_file() {
-                let name = self
-                    .name(id)
-                    .ok_or_else(|| SnapshotError::invalid("missing query name"))?;
-                visit(id, node.node, name)?;
-            }
+            visit(id, node.node)?;
             let children = self
                 .children(id)
                 .ok_or_else(|| SnapshotError::invalid("missing query children"))?;
             pending.try_reserve(children.len())?;
-            pending.extend_from_slice(children);
+            pending.extend(children.iter().rev().copied());
         }
         Ok(())
     }
