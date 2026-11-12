@@ -11,13 +11,13 @@ name = "adamite"
 path = "src/main.rs"
 
 [dependencies]
+adamite-access = { version = "0.1.0", path = "../adamite-access" }
 adamite-profile = { version = "0.1.0", path = "../adamite-profile" }
 adamite-core = { version = "0.1.0", path = "../adamite-core" }
 adamite-format = { version = "0.1.0", path = "../adamite-format" }
 adamite-io = { version = "0.1.0", path = "../adamite-io" }
 adamite-tui = { version = "0.1.0", path = "../adamite-tui" }
 clap.workspace = true
-serde.workspace = true
 serde_json.workspace = true
 snafu.workspace = true
 tracing.workspace = true

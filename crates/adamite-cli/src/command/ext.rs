@@ -1,10 +1,11 @@
 use crate::{
     cli::{ExtArgs, GroupBy},
-    error::{CliError, DirectoryLookup},
+    error::CliError,
     render::Renderer,
-    report::{ExtReport, KindReport},
-    source::Source,
+    source::SourceExt,
 };
+use adamite_access::report::{ExtReport, KindReport};
+use adamite_access::{DirectoryLookup, Source};
 use std::io::Write;
 
 pub(crate) struct Ext(pub(crate) ExtArgs);

@@ -3,12 +3,13 @@ use crate::{
     command::info::Info,
     error::CliError,
     render::Renderer,
-    report::SavedReport,
     save::{PublishMode, SnapshotFile},
     scan_progress_view::ScanProgressView,
-    source::Source,
+    source::SourceExt,
     status_file::StatusFile,
 };
+use adamite_access::Source;
+use adamite_access::report::SavedReport;
 use adamite_io::status::ScanStatus;
 use std::io::Write;
 

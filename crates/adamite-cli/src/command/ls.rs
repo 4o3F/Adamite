@@ -1,4 +1,6 @@
-use crate::{cli::LsArgs, error::CliError, render::Renderer, report::LsReport, source::Source};
+use crate::{cli::LsArgs, error::CliError, render::Renderer, source::SourceExt};
+use adamite_access::Source;
+use adamite_access::report::LsReport;
 use std::io::Write;
 
 pub(crate) struct Ls(pub(crate) LsArgs);

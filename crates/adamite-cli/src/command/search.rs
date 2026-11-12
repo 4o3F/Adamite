@@ -1,10 +1,6 @@
-use crate::{
-    cli::SearchArgs,
-    error::{CliError, DirectoryLookup},
-    render::Renderer,
-    report::SearchReport,
-    source::Source,
-};
+use crate::{cli::SearchArgs, error::CliError, render::Renderer, source::SourceExt};
+use adamite_access::report::SearchReport;
+use adamite_access::{DirectoryLookup, Source};
 use adamite_core::snapshot::NamePattern;
 use std::io::Write;
 

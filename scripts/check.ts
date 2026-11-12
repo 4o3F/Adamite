@@ -129,6 +129,8 @@ export function checkSteps(options: { packages: readonly FuzzPackage[]; fuzz: bo
       args: [
         "clippy",
         "-p",
+        "adamite-access",
+        "-p",
         "adamite-io",
         "-p",
         "adamite-cli",

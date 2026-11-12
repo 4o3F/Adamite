@@ -1,10 +1,6 @@
-use crate::{
-    cli::TopArgs,
-    error::{CliError, DirectoryLookup},
-    render::Renderer,
-    report::TopReport,
-    source::Source,
-};
+use crate::{cli::TopArgs, error::CliError, render::Renderer, source::SourceExt};
+use adamite_access::report::TopReport;
+use adamite_access::{DirectoryLookup, Source};
 use adamite_core::snapshot::FileFilter;
 use std::io::Write;
 

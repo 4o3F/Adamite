@@ -1,9 +1,5 @@
-use crate::{
-    cli::BrowseArgs,
-    error::{CliError, DirectoryLookup},
-    launcher::CliSources,
-    source::Source,
-};
+use crate::{cli::BrowseArgs, error::CliError, launcher::CliSources, source::SourceExt};
+use adamite_access::{DirectoryLookup, Source};
 use adamite_tui::{Browser, Launcher};
 use std::io::{self, IsTerminal};
 

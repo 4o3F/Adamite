@@ -3,8 +3,9 @@ use crate::{
     cli::{BrowseArgs, Cli, Command, LimitArgs},
     elevated_scan::{CompletedScan, JobState as ElevatedState},
     save::{PublishMode, SnapshotFile},
-    source::Source,
+    source::SourceExt,
 };
+use adamite_access::Source;
 use adamite_core::scan::{ScanOutput, ScanPhase, ScanProgress};
 use adamite_fixtures::Fixture;
 use adamite_io::{driver::DriverProgress, snapshot_dir::SnapshotDir};
@@ -45,7 +46,7 @@ impl Case {
     }
 
     fn output(&self) -> TestResult<ScanOutput> {
-        Ok(Source::open(&self.image)?.load_in_process(&LimitArgs::default(), |_| {})?)
+        Ok(Source::open(&self.image)?.load_observed_cli(&LimitArgs::default(), |_| {})?)
     }
 
     fn snapshot(&self, name: &str) -> TestResult<PathBuf> {

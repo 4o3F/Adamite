@@ -1,4 +1,5 @@
-use crate::{cli::LimitArgs, error::CliError, save::PublishMode, source::Source};
+use crate::{cli::LimitArgs, error::CliError, save::PublishMode, source::SourceExt};
+use adamite_access::Source;
 use adamite_core::scan::ScanOutput;
 use adamite_io::{
     driver::DriverProgress,
@@ -143,7 +144,7 @@ impl ElevatedScan {
             waited?;
         }
         let completed = result?;
-        Source::open(&completed.snapshot)?.load_in_process(limits, |_| {})
+        Source::open(&completed.snapshot)?.load_observed_cli(limits, |_| {})
     }
 }
 

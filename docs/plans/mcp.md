@@ -188,7 +188,7 @@ Out of scope:
 Each task ends with one reviewed commit, `deno task check` green and CI green. Each Codex run covers implementation and targeted verification and stays under 40 minutes; review and CI are separate.
 
 - [x] M1a — `Snapshot::resolve_path` in core; the CLI uses it (D3).
-- [ ] M1b — Extract `adamite-access` with sources, reports and text rendering (D2).
+- [x] M1b — Extract `adamite-access` with sources, reports and text rendering (D2).
 - [ ] M1c — Move publishing, the elevated scan, scan jobs and the snapshot catalog into `adamite-access`; `CliSources` adapts them (D2).
 - [ ] M2 — `Snapshot::summarize`, the tree report and `adamite tree` (D3, D4).
 - [ ] M4a — `adamite-mcp` discovery, selection and cache, without rmcp (D6).

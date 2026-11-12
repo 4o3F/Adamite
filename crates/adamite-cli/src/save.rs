@@ -1,4 +1,5 @@
-use crate::{error::CliError, source::Source};
+use crate::error::CliError;
+use adamite_access::Source;
 use adamite_core::scan::ScanOutput;
 use adamite_format::Escaped;
 use adamite_io::snapshot::{SnapshotIoError, SnapshotWriter};

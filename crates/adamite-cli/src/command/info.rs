@@ -1,6 +1,6 @@
-use crate::{
-    cli::SourceArgs, error::CliError, render::Renderer, report::InfoReport, source::Source,
-};
+use crate::{cli::SourceArgs, error::CliError, render::Renderer, source::SourceExt};
+use adamite_access::Source;
+use adamite_access::report::InfoReport;
 use adamite_core::scan::ScanOutput;
 use std::io::Write;
 

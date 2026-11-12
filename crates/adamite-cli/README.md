@@ -2,6 +2,8 @@
 
 `adamite-cli` builds the `adamite` binary. It loads NTFS images, Windows raw volumes and saved `.adm` snapshots, then prints reports or launches [adamite-tui](../adamite-tui/README.md). Build it from the repository root with `cargo build --release -p adamite-cli --locked`.
 
+Source detection and loading, report types, and text and JSON rendering live in [adamite-access](../adamite-access/README.md). The CLI's `source` extension trait supplies terminal progress, scan limits and elevation policy; its `render` adapter converts command-line output flags. `error` maps access errors into the existing CLI messages, hints and exit codes. Snapshot saving (`save`), elevation (`elevated_scan` and `status_file`), launcher jobs and the snapshot catalog remain in this crate.
+
 ## Commands and flags
 
 | Command | Behavior and options |

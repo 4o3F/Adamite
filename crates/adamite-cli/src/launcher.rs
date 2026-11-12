@@ -6,8 +6,9 @@ use crate::{
     error::CliError,
     save::{PublishMode, SnapshotFile},
     scan_progress_view::ScanProgressView,
-    source::Source,
+    source::SourceExt,
 };
+use adamite_access::Source;
 use adamite_core::scan::ScanOutput;
 use adamite_io::{driver::DriverProgress, snapshot_dir::SnapshotDir};
 use adamite_tui::{Entry, JobProgress, JobState, ScanJob, SnapshotInfo, Sources};
@@ -86,7 +87,7 @@ impl CliSources {
         let letter = letter.to_ascii_uppercase();
         let path = PathBuf::from(format!("{letter}:"));
         let destination = directory.drive_snapshot(letter);
-        let source = Source::open(&path).map_err(|error| error.message())?;
+        let source = Source::open(&path).map_err(|error| CliError::from(error).message())?;
         let file = SnapshotFile::new(destination.clone(), PublishMode::Replace);
         file.preflight(&source).map_err(|error| error.message())?;
         let limits = self.limits.clone();
@@ -103,7 +104,7 @@ impl CliSources {
             }));
         }
         Ok(WorkerJob::spawn(label, move |progress| {
-            let output = source.load_in_process(&limits, |report| {
+            let output = source.load_observed_cli(&limits, |report| {
                 let _ = progress.send(report);
             })?;
             file.save(&output)?;
@@ -178,12 +179,12 @@ impl Sources for CliSources {
                 };
                 let limits = self.limits.clone();
                 WorkerJob::spawn(label, move |progress| {
-                    source.load_in_process(&limits, |report| {
+                    source.load_observed_cli(&limits, |report| {
                         let _ = progress.send(report);
                     })
                 })
             }
-            Err(error) => failed(error.message()),
+            Err(error) => failed(CliError::from(error).message()),
         }
     }
 }
@@ -218,7 +219,7 @@ struct WorkerJob {
 impl WorkerJob {
     fn load(path: PathBuf, limits: LimitArgs) -> Box<dyn ScanJob> {
         Self::spawn(format!("Loading {}", path.display()), move |_| {
-            Source::open(&path)?.load_in_process(&limits, |_| {})
+            Source::open(&path)?.load_observed_cli(&limits, |_| {})
         })
     }
 

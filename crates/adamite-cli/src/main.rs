@@ -14,7 +14,6 @@ mod elevated_scan;
 mod error;
 mod launcher;
 mod render;
-mod report;
 mod save;
 mod scan_progress_view;
 mod source;

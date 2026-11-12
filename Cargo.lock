@@ -3,6 +3,21 @@
 version = 4
 
 [[package]]
+name = "adamite-access"
+version = "0.1.0"
+dependencies = [
+ "adamite-core",
+ "adamite-fixtures",
+ "adamite-format",
+ "adamite-io",
+ "serde",
+ "serde_json",
+ "snafu",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
 name = "adamite-bench"
 version = "0.1.0"
 dependencies = [
@@ -21,6 +36,7 @@ dependencies = [
 name = "adamite-cli"
 version = "0.1.0"
 dependencies = [
+ "adamite-access",
  "adamite-core",
  "adamite-fixtures",
  "adamite-format",
@@ -30,7 +46,6 @@ dependencies = [
  "clap",
  "indicatif",
  "parse-size",
- "serde",
  "serde_json",
  "snafu",
  "tempfile",

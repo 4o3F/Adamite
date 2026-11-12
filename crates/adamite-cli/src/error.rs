@@ -1,4 +1,5 @@
-use adamite_core::snapshot::{NodeId, NodeView, PersistError, QueryError, Snapshot, SnapshotError};
+use adamite_access::{ReportError, SourceError};
+use adamite_core::snapshot::{NodeId, PersistError, QueryError, SnapshotError};
 use adamite_io::error::VolumeError;
 use adamite_tui::TuiError;
 use snafu::Snafu;
@@ -186,9 +187,59 @@ impl CliError {
 
 impl From<QueryError> for CliError {
     fn from(source: QueryError) -> Self {
-        match source {
-            QueryError::PathNotFound { path, component } => Self::PathNotFound { path, component },
-            QueryError::AmbiguousPath {
+        ReportError::from(source).into()
+    }
+}
+
+impl From<SourceError> for CliError {
+    fn from(error: SourceError) -> Self {
+        match error {
+            SourceError::Io {
+                operation,
+                path,
+                source,
+            } => Self::Io {
+                operation,
+                path,
+                source,
+            },
+            SourceError::SnapshotLength { path } => Self::SnapshotLength { path },
+            SourceError::Persist {
+                operation,
+                path,
+                source,
+            } => Self::Persist {
+                operation,
+                path,
+                source,
+            },
+            SourceError::Volume {
+                path,
+                drive,
+                source,
+            } => Self::Volume {
+                path,
+                drive,
+                no_elevate: false,
+                source,
+            },
+            SourceError::UnsupportedSource => Self::Usage {
+                message: "source is not a snapshot",
+            },
+            SourceError::RawVolumesRequireWindows => Self::Usage {
+                message: "raw volumes require Windows",
+            },
+        }
+    }
+}
+
+impl From<ReportError> for CliError {
+    fn from(error: ReportError) -> Self {
+        match error {
+            ReportError::InconsistentSnapshot { reason } => Self::InconsistentSnapshot { reason },
+            ReportError::Usage { message } => Self::Usage { message },
+            ReportError::PathNotFound { path, component } => Self::PathNotFound { path, component },
+            ReportError::AmbiguousPath {
                 path,
                 component,
                 candidates,
@@ -197,31 +248,11 @@ impl From<QueryError> for CliError {
                 component,
                 candidates,
             },
-            source => Self::Query { source },
+            ReportError::NotADirectory { path } => Self::NotADirectory { path },
+            ReportError::Query { source } => Self::Query { source },
+            ReportError::Snapshot { source } => Self::Snapshot { source },
+            ReportError::Json { source } => Self::Json { source },
+            ReportError::Output { source } => Self::Output { source },
         }
-    }
-}
-
-/// CLI path lookups that require a directory and report files by their canonical path.
-pub(crate) trait DirectoryLookup {
-    /// Resolves `path` and rejects nodes that are not directories.
-    fn resolve_directory(&self, path: &str) -> Result<NodeId, CliError>;
-}
-
-impl DirectoryLookup for Snapshot {
-    fn resolve_directory(&self, path: &str) -> Result<NodeId, CliError> {
-        let id = match self.resolve_path(path) {
-            Ok(id) if self.node(id).is_some_and(NodeView::is_dir) => return Ok(id),
-            Ok(id) | Err(QueryError::NotADirectory { node: id }) => id,
-            Err(source) => return Err(source.into()),
-        };
-        let path = self
-            .path(id)
-            .map_err(|source| CliError::Snapshot { source })?
-            .ok_or_else(|| CliError::PathNotFound {
-                path: format!("#{}", id.raw()),
-                component: format!("#{}", id.raw()),
-            })?;
-        Err(CliError::NotADirectory { path })
     }
 }
