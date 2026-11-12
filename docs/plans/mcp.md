@@ -199,11 +199,11 @@ Each task ends with one reviewed commit, `deno task check` green and CI green. E
 
 ## Acceptance criteria
 
-- [ ] MCP Inspector (`npx @modelcontextprotocol/inspector adamite mcp`) lists ten tools; the eight query tools carry `readOnlyHint: true`.
+- [x] MCP Inspector (`npx @modelcontextprotocol/inspector adamite mcp`) lists ten tools; the eight query tools carry `readOnlyHint: true`.
 - [ ] With no snapshot, `get_tree` returns `no_snapshot`. Asked "why is my C: drive full?" in Claude Code on Windows with the plugin installed, the agent asks before calling `scan_volume`. After the user agrees, a UAC prompt appears; accepting it lets `scan_status` show progress and then `done`, and the next `get_tree` answers from the new snapshot. Declining returns `elevation_declined`, and the agent does not retry or delete anything.
-- [ ] `get_tree` on the bench synthetic volume, with default settings, starts with the header line, contains `… N more` rows and emits at most 60 rows.
-- [ ] `list_dir` and `search` page through `next_offset` to `null`; an offset past the end returns an empty page.
-- [ ] With `C.adm` and `D.adm` discovered, omitting `snapshot` returns `ambiguous_snapshot` and `snapshot: "D:"` succeeds. An ambiguous path returns `#id` candidates, and the retry succeeds.
-- [ ] After `adamite scan <image> -o C.adm --force` over a cached snapshot, the next `snapshot_info` reports the new scan time without a restart. A truncated `.adm` returns `corrupt_snapshot`, and the next call succeeds.
+- [x] `get_tree` on the bench synthetic volume, with default settings, starts with the header line, contains `… N more` rows and emits at most 60 rows.
+- [x] `list_dir` and `search` page through `next_offset` to `null`; an offset past the end returns an empty page.
+- [x] With `C.adm` and `D.adm` discovered, omitting `snapshot` returns `ambiguous_snapshot` and `snapshot: "D:"` succeeds. An ambiguous path returns `#id` candidates, and the retry succeeds.
+- [x] After `adamite scan <image> -o C.adm --force` over a cached snapshot, the next `snapshot_info` reports the new scan time without a restart. A truncated `.adm` returns `corrupt_snapshot`, and the next call succeeds.
 - [ ] `/plugin marketplace add` and `/plugin install adamite@adamite` show the `disk-usage` Skill and the connected server. With the server removed, the Skill answers "largest files" and "what's in /Users" through `adamite top … --json` and `adamite ls … --json`.
-- [ ] Existing CLI exact-text and JSON tests are unchanged; `deno task check` and CI pass on Linux and Windows.
+- [x] Existing CLI exact-text and JSON tests are unchanged; `deno task check` and CI pass on Linux and Windows.
