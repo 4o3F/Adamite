@@ -2223,3 +2223,167 @@ fn browse_path_without_a_source_is_a_usage_error() -> TestResult {
     assert!(!stderr.contains("scanning"));
     Ok(())
 }
+
+#[test]
+fn tree_text_columns_indentation_collapsing_and_raw_bytes() -> TestResult {
+    let case = Case::new("tree-text", "basic-4k")?;
+    let snapshot = &case.output.snapshot;
+    let root = snapshot.node(NodeId::ROOT).ok_or("root")?;
+    let children = snapshot.children(NodeId::ROOT).ok_or("children")?;
+    let alloc: u64 = children
+        .iter()
+        .map(|&id| snapshot.node(id).expect("child").total_alloc())
+        .sum();
+    for source in [&case.image, &case.snapshot("tree.adm")?] {
+        let output = case.command("tree", source, &["--bytes", "--min-share", "100"]);
+        assert!(output.status.success(), "{output:?}");
+        let text = String::from_utf8(output.stdout)?;
+        let lines: Vec<_> = text.lines().skip(1).collect();
+        assert_eq!(
+            lines,
+            vec![
+                format!("{:>20}  {:>6}  name", "alloc", "share"),
+                format!("{:>20}  100.0%  /", root.total_alloc()),
+                format!(
+                    "{alloc:>20}  {:>5.1}%    … {} more ({alloc})",
+                    alloc as f64 / root.total_alloc() as f64 * 100.0,
+                    children.len()
+                ),
+            ]
+        );
+        let human = case.command("tree", source, &["--min-share", "100"]);
+        assert!(human.status.success(), "{human:?}");
+        let human = String::from_utf8(human.stdout)?;
+        assert!(human.contains("MiB"), "{human}");
+        assert!(human.contains("… "), "{human}");
+        let one = case.command("tree", source, &["--budget", "1"]);
+        assert!(one.status.success(), "{one:?}");
+        assert_eq!(String::from_utf8(one.stdout)?.lines().count(), 3);
+    }
+    Ok(())
+}
+
+#[test]
+fn tree_json_rows_match_subtree_queries_and_budget_flags() -> TestResult {
+    use adamite_core::snapshot::SummaryRow;
+    let case = Case::new("tree-json", "basic-4k")?;
+    let snapshot = &case.output.snapshot;
+    for source in [&case.image, &case.snapshot("tree.adm")?] {
+        for path in ["/", "/<ntfs METADATA>"] {
+            let root = snapshot.resolve_path(path)?;
+            let denominator = snapshot.node(root).ok_or("root")?.total_alloc();
+            for (budget, percent, bp) in [
+                (1, "0", 0),
+                (3, "0.5", 50),
+                (60, "100", 10_000),
+                (400, "0", 0),
+            ] {
+                let summary = snapshot.summarize(root, budget, bp)?;
+                let value = case.json_with(
+                    "tree",
+                    source,
+                    &[
+                        path,
+                        "--budget",
+                        &budget.to_string(),
+                        "--min-share",
+                        percent,
+                    ],
+                );
+                assert_eq!(value["schema"], "adamite/1");
+                assert_eq!(value["command"], "tree");
+                assert_eq!(value["units"], json!({"size": "bytes"}));
+                assert_eq!(value["truncated"], summary.truncated);
+                let rows = value["rows"].as_array().ok_or("rows")?;
+                assert_eq!(rows.len(), summary.rows.len());
+                assert!(rows.len() <= budget);
+                for (row, expected) in rows.iter().zip(summary.rows) {
+                    let (id, depth, alloc, size, name, kind, count) = match expected {
+                        SummaryRow::Node { id, depth } => {
+                            let node = snapshot.node(id).ok_or("node")?;
+                            (
+                                id,
+                                depth,
+                                node.total_alloc(),
+                                node.total_size(),
+                                snapshot.name(id).ok_or("name")?,
+                                "node",
+                                None,
+                            )
+                        }
+                        SummaryRow::Collapsed {
+                            parent,
+                            depth,
+                            count,
+                            alloc,
+                            size,
+                        } => (parent, depth, alloc, size, "…", "collapsed", Some(count)),
+                    };
+                    assert_eq!(row["path"], snapshot.path(id)?.ok_or("path")?);
+                    assert!(row["path"].as_str().ok_or("string path")?.starts_with('/'));
+                    assert_eq!(row["name"], name);
+                    assert_eq!(row["depth"], depth);
+                    assert_eq!(row["alloc"], alloc);
+                    assert_eq!(row["size"], size);
+                    assert_eq!(row["kind"], kind);
+                    if let Some(count) = count {
+                        assert_eq!(row["count"], count);
+                    } else {
+                        assert!(row.get("count").is_none());
+                    }
+                    let share = if denominator == 0 {
+                        0.0
+                    } else {
+                        alloc as f64 / denominator as f64 * 100.0
+                    };
+                    assert!((row["share"].as_f64().ok_or("share")? - share).abs() < 1e-10);
+                }
+            }
+        }
+    }
+    for (path, message) in [("/missing", "not found"), ("/tiny.txt", "not a directory")] {
+        assert!(
+            case.assert_command_failure("tree", &[path], 1)
+                .contains(message)
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn tree_invalid_arguments_are_usage_errors_before_source_loading() -> TestResult {
+    for (flag, value) in [
+        ("--budget", "0"),
+        ("--budget", "401"),
+        ("--budget", "-1"),
+        ("--budget", "1.5"),
+        ("--min-share", "NaN"),
+        ("--min-share", "inf"),
+        ("--min-share", "-0.1"),
+        ("--min-share", "100.01"),
+        ("--min-share", "unknown"),
+    ] {
+        let output = support::command("tree", Path::new("missing-source.img"), &[flag, value]);
+        assert_eq!(output.status.code(), Some(2), "{flag} {value}: {output:?}");
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8(output.stderr)?;
+        assert!(stderr.starts_with("error:"), "{stderr}");
+        assert!(!stderr.contains("scanning "), "{stderr}");
+    }
+    let help = Command::new(env!("CARGO_BIN_EXE_adamite"))
+        .args(["tree", "--help"])
+        .output()?;
+    assert!(help.status.success());
+    let help = String::from_utf8(help.stdout)?;
+    for text in [
+        "[PATH]",
+        "--budget",
+        "--min-share",
+        "--json",
+        "--bytes",
+        "--profile",
+    ] {
+        assert!(help.contains(text), "{help}");
+    }
+    Ok(())
+}

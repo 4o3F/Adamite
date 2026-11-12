@@ -13,6 +13,12 @@ use std::collections::TryReserveError;
 #[derive(Debug, Snafu)]
 #[non_exhaustive]
 pub enum QueryError {
+    /// A query argument is outside its accepted range.
+    #[snafu(display("invalid query argument: {reason}"))]
+    InvalidArgument {
+        /// Requirement that the argument failed.
+        reason: &'static str,
+    },
     /// A component does not identify a child of the current directory.
     #[snafu(display("path component {component:?} not found in {path:?}"))]
     PathNotFound {

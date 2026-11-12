@@ -11,6 +11,7 @@ mod persist;
 mod query;
 mod rules;
 mod storage;
+mod summary;
 
 pub(crate) use build::{
     Aggregator, Finalizer, NameRange, ParentTree, ResolvedNode, SnapshotBuilder,
@@ -23,6 +24,7 @@ pub use node::{Node, NodeFlags, NodeId, NodeView};
 pub use persist::{PersistError, SnapshotDecoder, SnapshotEncoder};
 pub use query::{FileFilter, QueryError, SearchPage};
 pub use storage::{Snapshot, VolumeInfo};
+pub use summary::{Summary, SummaryRow};
 
 #[cfg(test)]
 mod tests;

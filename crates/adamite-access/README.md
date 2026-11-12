@@ -21,12 +21,15 @@
 | `ReportError` | Reports missing snapshot data, page range errors, path lookup failures, query and tree errors, JSON serialization errors and output I/O failures. |
 | `DirectoryLookup` | Adds `resolve_directory(path)` to `Snapshot`, reporting a file's canonical path when it is not a directory. |
 | `report::{InfoReport, SavedReport, TopReport, ExtReport, KindReport, SearchReport, LsReport}` | Constructs volume information, save confirmations, file rankings, grouped statistics, search pages and directory pages. The corresponding row types are `TopItem`, `ExtItem`, `KindItem`, `SearchItem` and `LsItem`. |
+| `report::{TreeReport, TreeItem}` | `TreeReport::new(source, output, path, budget, min_share_bp)` resolves a directory and constructs a budgeted tree through `Snapshot::summarize`. `rows` contains node and collapsed rows; `truncated` records budget limits. Each row has a canonical path, name, depth, subtree allocation and logical size, percentage share, and `kind: node\|collapsed`. Collapsed rows add the direct-child count and use the parent path. |
 | `report::{Envelope, SnapshotReport, Units, Volume, Tree, Stats}` | Shared schema, source identity, scan time, units, volume geometry, tree totals and scan counters. `Stats::entries()` returns the counters in core field order. |
 | `render::Report` | Provides `write_text(writer, raw_bytes)` alongside Serde serialization. |
 | `render::Renderer` | `new(json, raw_bytes)` selects output format. `write(report, writer)` writes text or one JSON line with raw byte counts. |
 | `render::json::Json` | Writes any borrowed serializable value as one JSON line. |
 
 Source detection opens snapshot files but defers decoding until loading. An `.adm` extension selects even a damaged or truncated snapshot; decoding failures are returned without scanning. Raw drives use an ASCII drive letter followed by `:`, such as `C:`. Images start at NTFS volume byte zero.
+
+Tree text starts with source, volume serial, scan timestamp, scan age and the allocation-unit label. Rows use two spaces of indentation per depth and the columns `alloc  share  name`. Shares have one decimal place; sizes use `ByteSize` or raw integers when requested. A collapsed name reads `… N more (X)`. JSON uses the shared `adamite/1` envelope and byte counts; shares are percentages and are zero for a zero-allocation root.
 
 The [CLI](../adamite-cli/README.md) owns command-line parsing, exit codes, error printing and hints, standard output, terminal progress and the adapter from access jobs and catalog entries to the TUI. It converts parsed command-line limits to `ScanOptions` and supplies final failure messages and exit codes to `StatusFile`. It passes its progress observer into this crate and maps library errors to its existing error variants.
 

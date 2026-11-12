@@ -94,3 +94,34 @@ fn reports_render_as_text_and_one_json_line_and_preserve_output_errors() -> Test
     );
     Ok(())
 }
+
+#[test]
+fn tree_report_header_and_writer_failures_use_the_shared_renderer() -> TestResult {
+    use adamite_access::report::TreeReport;
+    let fixture = Fixture::load(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/ntfs/basic-4k.json"),
+    )?;
+    let output =
+        SyncDriver::new(ScanConfig::default())?.run(&mut SliceReader::new(fixture.image()))?;
+    let report = TreeReport::new(Path::new("source.adm"), &output, "/", 1, 0)?;
+    assert!(report.truncated);
+    let mut text = Vec::new();
+    Renderer::new(false, false).write(&report, &mut text)?;
+    let text = String::from_utf8(text)?;
+    assert!(
+        text.starts_with(&format!(
+            "source.adm · serial {} · scanned unknown (unknown) · sizes: on-disk allocation\n",
+            report.envelope.snapshot.volume_serial,
+        )),
+        "{text}"
+    );
+    for json in [false, true] {
+        let error = Renderer::new(json, false)
+            .write(&report, &mut BrokenWriter)
+            .expect_err("broken writer");
+        assert!(
+            matches!(error, ReportError::Output { source } if source.kind() == io::ErrorKind::BrokenPipe)
+        );
+    }
+    Ok(())
+}

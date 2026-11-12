@@ -549,3 +549,105 @@ impl Serialize for Stats<'_> {
         map.end()
     }
 }
+
+/// A budgeted, pre-order tree of subtree sizes and allocation shares.
+#[derive(Debug, Serialize)]
+pub struct TreeReport<'a> {
+    /// Shared report metadata.
+    #[serde(flatten)]
+    pub envelope: Envelope<'a>,
+    /// Individually selected nodes and collapsed sibling groups.
+    pub rows: Vec<TreeItem<'a>>,
+    /// Whether the budget prevented any node expansion.
+    pub truncated: bool,
+}
+
+/// One tree row, with byte totals and percentage of the requested root allocation.
+#[derive(Debug, Serialize)]
+pub struct TreeItem<'a> {
+    /// Canonical node path, or the parent path for a collapsed group.
+    pub path: String,
+    /// Node name, or `…` for a collapsed group.
+    pub name: &'a str,
+    /// Distance from the requested root; its depth is zero.
+    pub depth: usize,
+    /// Subtree allocation in bytes.
+    pub alloc: u64,
+    /// Subtree logical size in bytes.
+    pub size: u64,
+    /// Percentage of the requested root allocation; zero when its allocation is zero.
+    pub share: f64,
+    /// `node` or `collapsed`.
+    pub kind: &'static str,
+    /// Number of direct children represented by a collapsed row; absent on nodes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub count: Option<usize>,
+}
+
+impl<'a> TreeReport<'a> {
+    /// Resolves a directory and summarizes it within a row budget and share threshold.
+    ///
+    /// # Errors
+    /// Returns a directory lookup, summary query, allocation or snapshot metadata error.
+    pub fn new(
+        source: &'a Path,
+        output: &'a ScanOutput,
+        path: &str,
+        budget: usize,
+        min_share_bp: u32,
+    ) -> Result<Self, ReportError> {
+        use adamite_core::snapshot::{QueryError, SummaryRow};
+
+        let snapshot = &output.snapshot;
+        let root = snapshot.resolve_directory(path)?;
+        let denominator = snapshot
+            .node(root)
+            .ok_or(ReportError::InconsistentSnapshot {
+                reason: "missing tree root",
+            })?
+            .total_alloc();
+        let summary = snapshot.summarize(root, budget, min_share_bp)?;
+        let mut rows = Vec::new();
+        rows.try_reserve_exact(summary.rows.len())
+            .map_err(QueryError::from)?;
+        for row in summary.rows {
+            let (id, depth, alloc, size, name, count) = match row {
+                SummaryRow::Node { id, depth } => {
+                    let node = snapshot.node(id).ok_or(ReportError::InconsistentSnapshot {
+                        reason: "missing tree node",
+                    })?;
+                    let name = snapshot.name(id).ok_or(ReportError::InconsistentSnapshot {
+                        reason: "missing tree name",
+                    })?;
+                    (id, depth, node.total_alloc(), node.total_size(), name, None)
+                }
+                SummaryRow::Collapsed {
+                    parent,
+                    depth,
+                    count,
+                    alloc,
+                    size,
+                } => (parent, depth, alloc, size, "…", Some(count)),
+            };
+            rows.push(TreeItem {
+                path: LsItem::path(snapshot, id)?,
+                name,
+                depth,
+                alloc,
+                size,
+                share: if denominator == 0 {
+                    0.0
+                } else {
+                    alloc as f64 / denominator as f64 * 100.0
+                },
+                kind: if count.is_some() { "collapsed" } else { "node" },
+                count,
+            });
+        }
+        Ok(Self {
+            envelope: Envelope::new("tree", source, output),
+            rows,
+            truncated: summary.truncated,
+        })
+    }
+}

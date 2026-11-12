@@ -1,7 +1,7 @@
 use super::Report;
 use crate::report::{
     Envelope, ExtReport, InfoReport, KindReport, LsItem, LsReport, SavedReport, SearchReport,
-    TopReport,
+    TopReport, TreeReport,
 };
 use adamite_format::{ByteSize, Escaped, ExtensionLabel, InfoFields};
 use std::io::{self, Write};
@@ -229,5 +229,39 @@ impl Report for SavedReport<'_> {
                 raw_bytes
             }
         )
+    }
+}
+
+impl Report for TreeReport<'_> {
+    fn write_text(&self, stdout: &mut impl Write, raw_bytes: bool) -> io::Result<()> {
+        let snapshot = &self.envelope.snapshot;
+        writeln!(
+            stdout,
+            "{} · serial {} · scanned {} ({:#}) · sizes: on-disk allocation",
+            Escaped(&snapshot.source),
+            snapshot.volume_serial,
+            snapshot.scanned_at,
+            snapshot.scanned_at.age(std::time::SystemTime::now())
+        )?;
+        let column = SizeColumn { raw_bytes };
+        let width = column.width();
+        writeln!(stdout, "{:>width$}  {:>6}  name", "alloc", "share")?;
+        for row in &self.rows {
+            write!(
+                stdout,
+                "{:>width$}  {:>5.1}%  ",
+                column.value(row.alloc).to_string(),
+                row.share
+            )?;
+            for _ in 0..row.depth {
+                write!(stdout, "  ")?;
+            }
+            if let Some(count) = row.count {
+                writeln!(stdout, "… {count} more ({})", column.value(row.alloc))?;
+            } else {
+                writeln!(stdout, "{}", Escaped(row.name))?;
+            }
+        }
+        Ok(())
     }
 }

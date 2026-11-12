@@ -1,5 +1,8 @@
 use crate::{
-    command::{browse::Browse, ext::Ext, info::Info, ls::Ls, scan::Scan, search::Search, top::Top},
+    command::{
+        browse::Browse, ext::Ext, info::Info, ls::Ls, scan::Scan, search::Search, top::Top,
+        tree::Tree,
+    },
     error::CliError,
 };
 use adamite_access::{ReadRate, ScanOptions};
@@ -39,6 +42,8 @@ pub(crate) enum Command {
     Ext(ExtArgs),
     /// List a directory's children in size order.
     Ls(LsArgs),
+    /// Show a budgeted tree of subtree allocation and shares.
+    Tree(TreeArgs),
     /// Search node names with a case-insensitive glob or substring.
     Search(SearchArgs),
     /// Browse the directory tree interactively in a terminal.
@@ -180,6 +185,81 @@ pub(crate) struct LsArgs {
     pub(crate) limit: usize,
 }
 
+#[derive(Debug, Args)]
+pub(crate) struct TreeArgs {
+    #[command(flatten)]
+    pub(crate) source: SourceArgs,
+    /// Directory path; #id selects a direct child by its decimal NodeId.
+    #[arg(default_value = "/")]
+    pub(crate) path: String,
+    /// Maximum rows, including root and collapsed groups (1..=400).
+    #[arg(long, default_value_t = 60, value_parser = clap::value_parser!(u16).range(1..=400))]
+    pub(crate) budget: u16,
+    /// Minimum allocation share of the requested root, as a percentage (0..=100).
+    #[arg(long, default_value = "0.5", allow_negative_numbers = true, value_parser = ShareParser)]
+    pub(crate) min_share: u32,
+}
+
+#[derive(Debug, Clone)]
+struct ShareParser;
+
+impl TypedValueParser for ShareParser {
+    type Value = u32;
+
+    fn parse_ref(
+        &self,
+        command: &clap::Command,
+        _arg: Option<&clap::Arg>,
+        value: &OsStr,
+    ) -> Result<Self::Value, clap::Error> {
+        let percent = value
+            .to_str()
+            .and_then(|value| value.parse::<f64>().ok())
+            .ok_or_else(|| {
+                clap::Error::raw(
+                    clap::error::ErrorKind::ValueValidation,
+                    "--min-share must be a finite percentage from 0 to 100",
+                )
+                .with_cmd(command)
+            })?;
+        if !percent.is_finite() || !(0.0..=100.0).contains(&percent) {
+            return Err(clap::Error::raw(
+                clap::error::ErrorKind::ValueValidation,
+                "--min-share must be a finite percentage from 0 to 100",
+            )
+            .with_cmd(command));
+        }
+        Self::basis_points(percent).ok_or_else(|| {
+            clap::Error::raw(
+                clap::error::ErrorKind::ValueValidation,
+                "--min-share cannot be represented in basis points",
+            )
+            .with_cmd(command)
+        })
+    }
+}
+
+impl ShareParser {
+    fn basis_points(percent: f64) -> Option<u32> {
+        if percent == 0.0 {
+            return Some(0);
+        }
+        // Truncate decimal places so values such as 0.29 do not lose a basis point
+        // through binary floating-point multiplication.
+        let decimal = percent.to_string();
+        let (whole, fraction) = decimal.split_once('.').unwrap_or((&decimal, ""));
+        let mut basis_points = whole.parse::<u32>().ok()?;
+        let mut digits = fraction.bytes();
+        for _ in 0..2 {
+            let digit = digits.next().unwrap_or(b'0').checked_sub(b'0')?;
+            basis_points = basis_points
+                .checked_mul(10)?
+                .checked_add(u32::from(digit))?;
+        }
+        Some(basis_points)
+    }
+}
+
 #[derive(Debug, Default, Args)]
 pub(crate) struct BrowseArgs {
     #[command(flatten)]
@@ -199,6 +279,7 @@ impl Command {
             Self::Top(args) => Top(args).run(stdout),
             Self::Ext(args) => Ext(args).run(stdout),
             Self::Ls(args) => Ls(args).run(stdout),
+            Self::Tree(args) => Tree(args).run(stdout),
             Self::Search(args) => Search(args).run(stdout),
             Self::Browse(args) => Browse(args).run(),
         }
@@ -256,6 +337,28 @@ mod tests {
     use adamite_io::limits::ScanProfile;
     use clap::Parser;
     use std::error::Error;
+
+    #[test]
+    fn tree_percentages_round_down_to_basis_points() -> Result<(), Box<dyn Error>> {
+        for (text, expected) in [
+            ("0", 0),
+            ("-0", 0),
+            ("0.5", 50),
+            ("0.509", 50),
+            ("0.29", 29),
+            ("99.999", 9999),
+            ("100", 10_000),
+            ("1e-2", 1),
+            ("1e-300", 0),
+        ] {
+            let cli = Cli::try_parse_from(["adamite", "tree", "source.adm", "--min-share", text])?;
+            let Some(Command::Tree(args)) = cli.command else {
+                return Err("missing tree".into());
+            };
+            assert_eq!(args.min_share, expected, "{text}");
+        }
+        Ok(())
+    }
 
     #[test]
     fn access_options_preserve_explicit_arguments_and_omit_parent_flags()
@@ -319,6 +422,7 @@ mod tests {
                 Command::Top(args) => args.source.limits,
                 Command::Ext(args) => args.source.limits,
                 Command::Ls(args) => args.source.limits,
+                Command::Tree(args) => args.source.limits,
                 Command::Browse(args) => args.limits,
                 Command::Search(args) => args.source.limits,
             };

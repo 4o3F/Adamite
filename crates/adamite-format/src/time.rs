@@ -10,6 +10,17 @@ pub struct ScanTime(
 );
 
 impl ScanTime {
+    /// Returns the scan age relative to `now`, using unknown for missing or unrepresentable times.
+    #[must_use]
+    pub fn age(&self, now: SystemTime) -> Age {
+        let modified = self.0.and_then(|raw| {
+            SystemTime::UNIX_EPOCH
+                .checked_sub(FileTime::UNIX_EPOCH.to_duration())?
+                .checked_add(FileTime::new(raw).to_duration())
+        });
+        Age::new(modified, now)
+    }
+
     /// Returns UTC text, or None for an absent timestamp or a value outside time's range.
     #[must_use]
     pub fn rfc3339(&self) -> Option<String> {
@@ -25,6 +36,7 @@ impl fmt::Display for ScanTime {
 }
 
 /// A modification age relative to a caller-supplied clock, rendered in seconds, minutes, hours or days.
+/// Alternate display omits the ` ago` suffix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Age {
     modified: Option<SystemTime>,
@@ -54,7 +66,11 @@ impl fmt::Display for Age {
             3600..86400 => (seconds / 3600, "h"),
             _ => (seconds / 86400, "d"),
         };
-        write!(f, "{value}{unit} ago")
+        write!(f, "{value}{unit}")?;
+        if !f.alternate() {
+            f.write_str(" ago")?;
+        }
+        Ok(())
     }
 }
 
@@ -62,6 +78,28 @@ impl fmt::Display for Age {
 mod tests {
     use super::{Age, ScanTime};
     use std::time::{Duration, SystemTime};
+
+    #[test]
+    fn scan_ages_use_compact_units_and_handle_missing_and_future_times()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let scanned = ScanTime(Some(116_444_736_000_000_000));
+        for (seconds, expected) in [(45, "45s"), (720, "12m"), (18_000, "5h"), (259_200, "3d")] {
+            let now = SystemTime::UNIX_EPOCH
+                .checked_add(Duration::from_secs(seconds))
+                .ok_or("clock")?;
+            assert_eq!(format!("{:#}", scanned.age(now)), expected);
+        }
+        assert_eq!(
+            format!("{:#}", ScanTime(None).age(SystemTime::UNIX_EPOCH)),
+            "unknown"
+        );
+        let future = ScanTime(Some(116_444_736_010_000_000));
+        assert_eq!(
+            format!("{:#}", future.age(SystemTime::UNIX_EPOCH)),
+            "unknown"
+        );
+        Ok(())
+    }
 
     #[test]
     fn ages_use_whole_units_and_an_explicit_clock() -> Result<(), Box<dyn std::error::Error>> {
