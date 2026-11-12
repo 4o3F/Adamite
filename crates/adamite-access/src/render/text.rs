@@ -6,6 +6,28 @@ use crate::report::{
 use adamite_format::{ByteSize, Escaped, ExtensionLabel, InfoFields};
 use std::io::{self, Write};
 
+impl Envelope<'_> {
+    /// Writes source, serial, scan time and allocation units with age relative to `now`.
+    ///
+    /// # Errors
+    /// Returns any error from the supplied writer.
+    pub fn write_allocation_header(
+        &self,
+        stdout: &mut impl Write,
+        now: std::time::SystemTime,
+    ) -> io::Result<()> {
+        let snapshot = &self.snapshot;
+        writeln!(
+            stdout,
+            "{} · serial {} · scanned {} ({:#}) · sizes: on-disk allocation",
+            Escaped(&snapshot.source),
+            snapshot.volume_serial,
+            snapshot.scanned_at,
+            snapshot.scanned_at.age(now)
+        )
+    }
+}
+
 struct Header<'a>(&'a Envelope<'a>);
 
 impl Header<'_> {
@@ -98,6 +120,16 @@ impl SizeTable<'_> {
 impl Report for InfoReport<'_> {
     fn write_text(&self, stdout: &mut impl Write, raw_bytes: bool) -> io::Result<()> {
         Header(&self.envelope).write(stdout)?;
+        self.write_details(stdout, raw_bytes)
+    }
+}
+
+impl InfoReport<'_> {
+    /// Writes volume details and scan counters without a source header.
+    ///
+    /// # Errors
+    /// Returns any error from the supplied writer.
+    pub fn write_details(&self, stdout: &mut impl Write, raw_bytes: bool) -> io::Result<()> {
         for (label, value) in (InfoFields {
             output: self.output,
             raw_bytes,
@@ -205,6 +237,16 @@ impl Report for SearchReport<'_> {
 impl Report for LsReport<'_> {
     fn write_text(&self, stdout: &mut impl Write, raw_bytes: bool) -> io::Result<()> {
         Header(&self.envelope).write(stdout)?;
+        self.write_entries(stdout, raw_bytes)
+    }
+}
+
+impl LsReport<'_> {
+    /// Writes the child size table without a source header.
+    ///
+    /// # Errors
+    /// Returns any error from the supplied writer.
+    pub fn write_entries(&self, stdout: &mut impl Write, raw_bytes: bool) -> io::Result<()> {
         SizeTable {
             sizes: ["Total size", "Total alloc"],
             count: Some("Files"),
@@ -234,15 +276,8 @@ impl Report for SavedReport<'_> {
 
 impl Report for TreeReport<'_> {
     fn write_text(&self, stdout: &mut impl Write, raw_bytes: bool) -> io::Result<()> {
-        let snapshot = &self.envelope.snapshot;
-        writeln!(
-            stdout,
-            "{} · serial {} · scanned {} ({:#}) · sizes: on-disk allocation",
-            Escaped(&snapshot.source),
-            snapshot.volume_serial,
-            snapshot.scanned_at,
-            snapshot.scanned_at.age(std::time::SystemTime::now())
-        )?;
+        self.envelope
+            .write_allocation_header(stdout, std::time::SystemTime::now())?;
         let column = SizeColumn { raw_bytes };
         let width = column.width();
         writeln!(stdout, "{:>width$}  {:>6}  name", "alloc", "share")?;

@@ -12,8 +12,15 @@ adamite-core = { version = "0.1.0", path = "../adamite-core" }
 adamite-format = { version = "0.1.0", path = "../adamite-format" }
 adamite-io = { version = "0.1.0", path = "../adamite-io" }
 snafu.workspace = true
+rmcp.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
 
 [dev-dependencies]
+rmcp = { workspace = true, features = ["client"] }
+tokio = { workspace = true, features = ["io-util"] }
 tempfile = "3"
 adamite-fixtures = { version = "0.1.0", path = "../adamite-fixtures" }
 

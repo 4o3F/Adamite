@@ -57,16 +57,20 @@ fn main() -> ExitCode {
             return ExitCode::from(error.exit_code());
         }
     };
-    let mut stdout = io::stdout().lock();
-    let result = match cli.command {
-        Some(command) => command.run(&mut stdout),
-        None if io::stdout().is_terminal() && io::stdin().is_terminal() => {
-            command::browse::Browse(cli::BrowseArgs::default()).run()
+    let result = if let Some(cli::Command::Mcp(args)) = cli.command {
+        args.run()
+    } else {
+        let mut stdout = io::stdout().lock();
+        match cli.command {
+            Some(command) => command.run(&mut stdout),
+            None if io::stdout().is_terminal() && io::stdin().is_terminal() => {
+                command::browse::Browse(cli::BrowseArgs::default()).run()
+            }
+            None => Cli::command()
+                .write_long_help(&mut stdout)
+                .and_then(|()| writeln!(stdout))
+                .map_err(|source| error::CliError::Output { source }),
         }
-        None => Cli::command()
-            .write_long_help(&mut stdout)
-            .and_then(|()| writeln!(stdout))
-            .map_err(|source| error::CliError::Output { source }),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,

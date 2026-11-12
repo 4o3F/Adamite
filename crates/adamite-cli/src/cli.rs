@@ -48,6 +48,39 @@ pub(crate) enum Command {
     Search(SearchArgs),
     /// Browse the directory tree interactively in a terminal.
     Browse(BrowseArgs),
+    /// Serve saved-snapshot MCP tools over standard input and output.
+    Mcp(McpArgs),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct McpArgs {
+    /// Include a saved .adm file; may be repeated.
+    #[arg(long = "snapshot", value_name = "FILE")]
+    pub(crate) snapshots: Vec<PathBuf>,
+    /// Discover .adm files directly in this directory; defaults to the saved-scan directory.
+    #[arg(long, value_name = "DIR")]
+    pub(crate) snapshot_dir: Option<PathBuf>,
+    /// Number of decoded snapshots retained in memory; zero shares only in-flight loads.
+    #[arg(long, default_value_t = 2, value_name = "N")]
+    pub(crate) cache: usize,
+    /// Mark snapshots stale after this many seconds.
+    #[arg(long, default_value_t = 86_400, value_name = "SECONDS")]
+    pub(crate) stale_after: u64,
+}
+
+impl McpArgs {
+    pub(crate) fn run(self) -> Result<(), CliError> {
+        adamite_mcp::McpServer::new(adamite_mcp::ServerOptions {
+            snapshots: adamite_mcp::SnapshotOptions {
+                snapshots: self.snapshots,
+                snapshot_dir: self.snapshot_dir,
+                cache_capacity: self.cache,
+            },
+            stale_after: std::time::Duration::from_secs(self.stale_after),
+        })
+        .and_then(adamite_mcp::McpServer::serve_stdio)
+        .map_err(|source| CliError::Mcp { source })
+    }
 }
 
 #[derive(Debug, Args)]
@@ -282,6 +315,7 @@ impl Command {
             Self::Tree(args) => Tree(args).run(stdout),
             Self::Search(args) => Search(args).run(stdout),
             Self::Browse(args) => Browse(args).run(),
+            Self::Mcp(args) => args.run(),
         }
     }
 }
@@ -425,6 +459,7 @@ mod tests {
                 Command::Tree(args) => args.source.limits,
                 Command::Browse(args) => args.limits,
                 Command::Search(args) => args.source.limits,
+                Command::Mcp(_) => return Err("mcp does not take scan limits".into()),
             };
             let limits = args.limits();
             assert_eq!(

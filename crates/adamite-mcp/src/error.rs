@@ -6,6 +6,36 @@ use std::{io, path::PathBuf, sync::Arc};
 #[derive(Debug, Clone, Snafu)]
 #[non_exhaustive]
 pub enum McpError {
+    /// A snapshot path could not be resolved.
+    #[snafu(display("path not found: {path:?}"))]
+    PathNotFound {
+        /// Requested snapshot path.
+        path: String,
+        /// Deepest resolved directory to inspect next.
+        directory: String,
+    },
+    /// A path component matches several children.
+    #[snafu(display("ambiguous path: {path:?}"))]
+    AmbiguousPath {
+        /// Requested snapshot path.
+        path: String,
+        /// Paths with direct-child identifiers that resolve the ambiguity.
+        candidates: Vec<String>,
+    },
+    /// A directory query selected a file.
+    #[snafu(display("not a directory: {path:?}"))]
+    NotADirectory {
+        /// Canonical file path.
+        path: String,
+    },
+    /// A deserialized parameter is outside its supported range.
+    #[snafu(display("{message}"))]
+    InvalidArgument {
+        /// Invalid parameter and value.
+        message: String,
+        /// Allowed range or values.
+        allowed: String,
+    },
     /// Discovery found no snapshot for the requested volume.
     #[snafu(display("no snapshot found for {volume}:"))]
     NoSnapshot {
@@ -57,6 +87,10 @@ impl McpError {
     #[must_use]
     pub const fn code(&self) -> &'static str {
         match self {
+            Self::PathNotFound { .. } => "path_not_found",
+            Self::AmbiguousPath { .. } => "ambiguous_path",
+            Self::NotADirectory { .. } => "not_a_directory",
+            Self::InvalidArgument { .. } => "invalid_argument",
             Self::NoSnapshot { .. } => "no_snapshot",
             Self::UnsupportedSource { .. } => "unsupported_source",
             Self::AmbiguousSnapshot { .. } => "ambiguous_snapshot",
@@ -70,6 +104,14 @@ impl McpError {
     #[must_use]
     pub fn next_step(&self) -> String {
         match self {
+            Self::PathNotFound { directory, .. } => {
+                format!("Call list_dir with path {directory:?}.")
+            }
+            Self::AmbiguousPath { candidates, .. } => {
+                format!("Pass one of these paths: {}", candidates.join(", "))
+            }
+            Self::NotADirectory { path } => format!("Call node_info with path {path:?}."),
+            Self::InvalidArgument { allowed, .. } => allowed.clone(),
             Self::NoSnapshot { volume, directory } => {
                 let target = directory.join(format!("{volume}.adm"));
                 let force = if target.exists() { " --force" } else { "" };

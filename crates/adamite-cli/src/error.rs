@@ -11,6 +11,8 @@ use std::{
 
 #[derive(Debug, Snafu)]
 pub(crate) enum CliError {
+    #[snafu(display("cannot serve MCP"))]
+    Mcp { source: adamite_mcp::McpError },
     #[snafu(display("cannot start profiling"))]
     Profile {
         source: adamite_profile::ProfileError,

@@ -169,7 +169,11 @@ impl SnapshotStore {
     /// # Errors
     /// Returns selection, permission, I/O or snapshot decoding failures.
     pub fn load(&self, snapshot: Option<&str>) -> Result<Arc<ScanOutput>, McpError> {
-        self.cache.load(&self.select(snapshot)?)
+        self.load_path(&self.select(snapshot)?)
+    }
+
+    pub(crate) fn load_path(&self, path: &Path) -> Result<Arc<ScanOutput>, McpError> {
+        self.cache.load(path)
     }
 
     fn volume(value: &str) -> Option<char> {

@@ -30,6 +30,8 @@ adamite ls C.adm /Users --limit 50
 
 The snapshot must be readable from the ordinary terminal. On either platform, an uncompressed NTFS volume image can replace `C:` as the scan source. See the [CLI README](crates/adamite-cli/README.md) for source detection, flags, paths and the JSON schema, and the [TUI README](crates/adamite-tui/README.md) for keyboard controls.
 
+Run `adamite mcp --snapshot C.adm` to expose `snapshots`, `snapshot_info` and `list_dir` over MCP stdin/stdout. See the [MCP README](crates/adamite-mcp/README.md) for discovery, cache and output options.
+
 ## Build and develop
 
 Install Rust through rustup and use the toolchain selected by [rust-toolchain.toml](rust-toolchain.toml) (currently Rust 1.99). From the repository root:

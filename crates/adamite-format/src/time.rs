@@ -10,15 +10,32 @@ pub struct ScanTime(
 );
 
 impl ScanTime {
+    /// Converts a system timestamp, using unknown when it is outside the FILETIME range.
+    #[must_use]
+    pub fn from_system_time(time: SystemTime) -> Self {
+        Self(FileTime::try_from(time).ok().map(FileTime::to_raw))
+    }
+
     /// Returns the scan age relative to `now`, using unknown for missing or unrepresentable times.
     #[must_use]
     pub fn age(&self, now: SystemTime) -> Age {
-        let modified = self.0.and_then(|raw| {
+        Age::new(self.system_time(), now)
+    }
+
+    /// Returns whole elapsed seconds, or `None` for absent, future or unrepresentable times.
+    #[must_use]
+    pub fn age_seconds(&self, now: SystemTime) -> Option<u64> {
+        now.duration_since(self.system_time()?)
+            .ok()
+            .map(|age| age.as_secs())
+    }
+
+    fn system_time(&self) -> Option<SystemTime> {
+        self.0.and_then(|raw| {
             SystemTime::UNIX_EPOCH
                 .checked_sub(FileTime::UNIX_EPOCH.to_duration())?
                 .checked_add(FileTime::new(raw).to_duration())
-        });
-        Age::new(modified, now)
+        })
     }
 
     /// Returns UTC text, or None for an absent timestamp or a value outside time's range.
@@ -88,12 +105,16 @@ mod tests {
                 .checked_add(Duration::from_secs(seconds))
                 .ok_or("clock")?;
             assert_eq!(format!("{:#}", scanned.age(now)), expected);
+            assert_eq!(scanned.age_seconds(now), Some(seconds));
         }
         assert_eq!(
             format!("{:#}", ScanTime(None).age(SystemTime::UNIX_EPOCH)),
             "unknown"
         );
         let future = ScanTime(Some(116_444_736_010_000_000));
+        assert_eq!(future.age_seconds(SystemTime::UNIX_EPOCH), None);
+        assert_eq!(ScanTime(None).age_seconds(SystemTime::UNIX_EPOCH), None);
+        assert_eq!(ScanTime::from_system_time(SystemTime::UNIX_EPOCH), scanned);
         assert_eq!(
             format!("{:#}", future.age(SystemTime::UNIX_EPOCH)),
             "unknown"

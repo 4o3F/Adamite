@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 adamite-access = { version = "0.1.0", path = "../adamite-access" }
+adamite-mcp = { version = "0.1.0", path = "../adamite-mcp" }
 adamite-profile = { version = "0.1.0", path = "../adamite-profile" }
 adamite-core = { version = "0.1.0", path = "../adamite-core" }
 adamite-format = { version = "0.1.0", path = "../adamite-format" }
