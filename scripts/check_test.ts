@@ -108,7 +108,8 @@ Deno.test("normal checks include fixture, check and package tests with scoped pe
   );
   const script = steps.find((step) => step.name === "check script tests");
   assert(
-    script?.command === "deno" && script.args.includes("scripts/check_test.ts"),
+    script?.command === "deno" && script.args.includes("scripts/check_test.ts") &&
+      script.args.includes("scripts/ci_lint_test.ts"),
     "missing script tests",
   );
   equal(

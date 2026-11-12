@@ -1,6 +1,6 @@
 # adamite-cli
 
-`adamite-cli` builds the `adamite` binary. It loads NTFS images, Windows raw volumes and saved `.adm` snapshots, then prints reports or launches [adamite-tui](../adamite-tui/README.md). Build it from the repository root with `cargo build --release -p adamite-cli --locked`.
+`adamite-cli` builds the `adamite` binary. It loads NTFS images, Windows raw volumes and saved `.adm` snapshots, then prints reports, launches [adamite-tui](../adamite-tui/README.md) or serves [MCP tools](../adamite-mcp/README.md). Build it from the repository root with `cargo build --release -p adamite-cli --locked`.
 
 Source detection and loading, snapshot publication, status files, elevated scans, report types, and text and JSON rendering live in [adamite-access](../adamite-access/README.md). The CLI's `source` extension trait supplies terminal progress, scan limits and elevation policy; its `render` adapter converts command-line output flags. `error` maps access errors into the existing CLI messages, hints and exit codes. `cli::LimitArgs` converts parsed arguments into access `ScanOptions`. The CLI constructs final failure statuses with its existing messages and exit codes. `launcher::CliSources` delegates discovery, drive-snapshot matching and background work to access `SnapshotCatalog` and `ScanJob`. Its small job adapter supplies the existing Loading/Scanning titles and phase labels, transfers the completed output to the TUI, and displays job error messages.
 
@@ -15,7 +15,7 @@ Source detection and loading, snapshot publication, status files, elevated scans
 | `adamite ls <SOURCE> [PATH] [--offset 0] [--limit 50]` | List a directory's children in subtree allocation order. PATH defaults to `/`; an offset past the end returns an empty list. A file path is an error. |
 | `adamite tree <SOURCE> [PATH] [--budget 60] [--min-share 0.5]` | Summarize a directory in tree order. PATH defaults to `/`. The budget accepts 1 through 400 and includes the root and collapsed rows. `--min-share` accepts a percentage from 0 through 100, converted to basis points by rounding down. |
 | `adamite search <SOURCE> <PATTERN> [--under PATH] [--offset 0] [--limit 50]` | Search descendant names in stored-child pre-order. The offset counts matches; `--limit` accepts 1 through 500. |
-| `adamite mcp [--snapshot FILE]... [--snapshot-dir DIR] [--cache N] [--stale-after SECONDS]` | Serve `snapshots`, `snapshot_info` and `list_dir` over MCP stdin/stdout. Cache defaults to 2; stale age defaults to 86400 seconds (24 hours). See the [MCP README](../adamite-mcp/README.md) for parameters, selection and output. |
+| `adamite mcp [--snapshot FILE]... [--snapshot-dir DIR] [--cache N] [--stale-after SECONDS]` | Serve ten snapshot-query and scan-job tools over MCP stdin/stdout. Cache defaults to 2; zero retains only in-flight loads. Stale age defaults to 86400 seconds (24 hours). See the [MCP README](../adamite-mcp/README.md) for parameters, selection and output, and the [Claude Code plugin](../../plugins/adamite/README.md) for installation. |
 | `adamite browse [SOURCE [PATH]]` | Without SOURCE, open Home. With SOURCE, load it and open the browser at PATH, default `/`. PATH requires SOURCE. Standard output must be a terminal; this is checked before source loading. |
 
 `scan`, `info`, `top`, `ext`, `ls`, `tree` and `search` accept `--json` and `--bytes`. Text is the default; `--bytes` prints raw byte counts in text. JSON always uses bytes. `browse` rejects both flags. `--help` shows command help; `adamite --version` shows the version. Running `adamite` without a subcommand opens Home when both standard input and standard output are terminals; otherwise it prints the long help.
@@ -30,6 +30,8 @@ adamite top C.adm --kind video --n 50
 adamite ext C.adm --under /Users --by kind
 adamite search C.adm '*.iso' --under /Users --limit 50
 adamite search C.adm steam --offset 50
+adamite tree C.adm /Users --budget 100 --min-share 1 --json
+adamite mcp --snapshot C.adm --snapshot-dir ./snapshots
 ```
 
 ## Home and saved scans

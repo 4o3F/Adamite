@@ -23,6 +23,7 @@ Then use an ordinary terminal to browse or query the saved file:
 ```text
 adamite browse C.adm
 adamite info C.adm
+adamite tree C.adm / --budget 60 --min-share 0.5
 adamite top C.adm --n 20
 adamite ext C.adm --json
 adamite ls C.adm /Users --limit 50
@@ -30,7 +31,11 @@ adamite ls C.adm /Users --limit 50
 
 The snapshot must be readable from the ordinary terminal. On either platform, an uncompressed NTFS volume image can replace `C:` as the scan source. See the [CLI README](crates/adamite-cli/README.md) for source detection, flags, paths and the JSON schema, and the [TUI README](crates/adamite-tui/README.md) for keyboard controls.
 
-Run `adamite mcp --snapshot C.adm` to expose `snapshots`, `snapshot_info` and `list_dir` over MCP stdin/stdout. See the [MCP README](crates/adamite-mcp/README.md) for discovery, cache and output options.
+## MCP server and Claude Code plugin
+
+Run `adamite mcp` to serve snapshot discovery, disk-usage queries and consent-based scan jobs over MCP stdin/stdout. It discovers saved scans in the [snapshot directory](crates/adamite-cli/README.md#home-and-saved-scans); use `adamite mcp --snapshot C.adm` to include a specific file. Queries include budgeted trees, directory pages, largest files, extension/category totals, name search and node details. See the [MCP README](crates/adamite-mcp/README.md) for all ten tools, parameters, limits and errors.
+
+For Claude Code, run `/plugin marketplace add 4o3F/Adamite`, then `/plugin install adamite@adamite`. The plugin registers `adamite mcp` and installs the `disk-usage` Skill, which asks before scanning and presents candidates for the user to review. The `adamite` binary must already be on PATH. See the [plugin README](plugins/adamite/README.md) for local installation, manual MCP/Skill setup and permission rules.
 
 ## Build and develop
 
@@ -53,10 +58,12 @@ The gate checks Rust formatting, Clippy (including Windows cross-target checks),
 | Crate                                                 | Responsibility                                                                            |
 | ----------------------------------------------------- | ----------------------------------------------------------------------------------------- |
 | [adamite-cli](crates/adamite-cli/README.md)           | The `adamite` binary: source loading, saving, reports and launching the browser.          |
+| [adamite-access](crates/adamite-access/README.md)     | Shared source loading, reports, snapshot discovery, publication and scan jobs.            |
+| [adamite-mcp](crates/adamite-mcp/README.md)           | MCP stdio server with snapshot queries, caching and scan control.                         |
 | [adamite-tui](crates/adamite-tui/README.md)           | Source selection, scan progress and read-only snapshot browsing.                          |
 | [adamite-format](crates/adamite-format/README.md)     | Shared display formatting for the CLI and TUI.                                            |
 | [adamite-io](crates/adamite-io/README.md)             | Slice, image and Windows raw-volume readers with a synchronous scan driver.               |
 | [adamite-core](crates/adamite-core/README.md)         | Scanning, tree aggregation, immutable snapshots and `.adm` persistence.                   |
 | [adamite-ntfs](crates/adamite-ntfs/README.md)         | `no_std` NTFS byte decoding.                                                              |
-| [adamite-profile](crates/adamite-profile/README.md) | Requested heap counters and an opt-in Chrome trace subscriber for executables. |
+| [adamite-profile](crates/adamite-profile/README.md)   | Requested heap counters and an opt-in Chrome trace subscriber for executables.            |
 | [adamite-fixtures](crates/adamite-fixtures/README.md) | Shared development fixtures, independent reference reconstruction and synthetic builders. |

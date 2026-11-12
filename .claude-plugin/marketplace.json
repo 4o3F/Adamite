@@ -1,0 +1,11 @@
+{
+  "name": "adamite",
+  "owner": { "name": "4o3F" },
+  "plugins": [
+    {
+      "name": "adamite",
+      "source": "./plugins/adamite",
+      "description": "Inspect NTFS disk usage with Adamite snapshots, MCP tools and the disk-usage Skill."
+    }
+  ]
+}

@@ -187,6 +187,7 @@ export function checkSteps(options: { packages: readonly FuzzPackage[]; fuzz: bo
         "--frozen",
         "--allow-read=deno.json,.github/workflows,crates/adamite-ntfs/fuzz/Cargo.toml,crates/adamite-core/fuzz/Cargo.toml",
         "scripts/check_test.ts",
+        "scripts/ci_lint_test.ts",
       ],
     },
     {
@@ -200,7 +201,7 @@ export function checkSteps(options: { packages: readonly FuzzPackage[]; fuzz: bo
         "scripts/package_test.ts",
       ],
     },
-    { name: "workflow syntax", command: "deno", args: ["task", "ci-lint"] },
+    { name: "workflow and plugin syntax", command: "deno", args: ["task", "ci-lint"] },
   );
   if (options.fuzz && options.packages.length > 0) {
     steps.push({

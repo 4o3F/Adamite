@@ -8,7 +8,15 @@ Start the server with:
 adamite mcp --snapshot C.adm --snapshot-dir ./snapshots --cache 2 --stale-after 86400
 ```
 
-`--snapshot FILE` may repeat. `--snapshot-dir DIR` defaults to the platform snapshot directory documented in the [CLI README](../adamite-cli/README.md#home-and-saved-scans). `--cache N` defaults to two retained outputs. `--stale-after SECONDS` accepts a nonnegative integer number of seconds and defaults to `86400` (24 hours). The global `--trace-chrome FILE` records profiling without writing logs to protocol stdout.
+| Option | Default and behavior |
+| --- | --- |
+| `--snapshot FILE` | May repeat; adds explicit saved snapshots to directory discovery. |
+| `--snapshot-dir DIR` | Defaults to the platform [snapshot directory](../adamite-cli/README.md#home-and-saved-scans), also used for scan publication. |
+| `--cache N` | Nonnegative machine-sized integer, default 2 retained outputs; zero shares only in-flight loads. |
+| `--stale-after SECONDS` | Nonnegative u64 seconds, default 86400 (24 hours); age at or above the threshold is stale. |
+| `--trace-chrome FILE` | Global profiling option; writes the trace separately from protocol stdout. |
+
+For Claude Code, the repository provides a [plugin and disk-usage Skill](../../plugins/adamite/README.md) with installation, consent and permission rules. The binary is installed separately on PATH.
 
 The server uses a current-thread Tokio runtime. Discovery, decoding and queries run in `spawn_blocking`, with two query permits and the cache's single process-wide load permit. The query permit stays with blocking work even if its response handler is cancelled. On stdin EOF, rmcp stops receiving requests and drains responses; runtime shutdown waits for all started blocking work before the command returns successfully.
 
@@ -36,11 +44,28 @@ Scan jobs use `adamite-access::ScanJob`, `ScanOptions`, `ElevatedScan` and `Snap
 
 Every query tool accepts `snapshot` (an optional saved `.adm` path or volume letter) and `format` (`text` by default, or `json`). `snapshots` lists all discovered files when selection is omitted; an explicit selection filters the catalog. It reads metadata without loading snapshots and shows scan timestamps only for matching cached outputs. Its text rows include absolute paths, file lengths, RFC 3339 modification times and known scan times. Its JSON `items` contain `name`, `path`, `byte_len`, `modified`, `scanned_at`, `age_seconds`, `stale` and a nullable per-entry `error`. An empty catalog is a successful empty listing.
 
-`snapshot_info` shows volume metadata, tree totals and scan counters. `list_dir` takes `path` (default `/`), `offset` (default `0`) and `limit` (default `50`, allowed `1` through `500`). Paths start with `/` and use `/` separators. `list_dir` preserves the access report's allocation order and fields. A page past the end is empty. Text pages with remaining children end with `showing A–B of N · next offset=B`; the last page omits this footer.
+| Tool | Parameters beyond common `format` and query `snapshot` |
+| --- | --- |
+| `snapshots` | None; omitted `snapshot` lists all files, supplied `snapshot` filters the catalog. |
+| `snapshot_info` | None; shows volume metadata, tree totals and scan counters. |
+| `get_tree` | `path="/"`, `budget=60` (1–400 rows including root and collapsed groups), `min_share_percent=0.5` (finite 0–100 percentage, rounded down to basis points). |
+| `list_dir` | `path="/"`, `offset=0` (nonnegative machine-sized integer), `limit=50` (1–500); offset + limit must fit. |
+| `top_files` | `n=20` (1–100), optional `under`, optional `ext` array or `kind` string, mutually exclusive. |
+| `ext_breakdown` | `n=20` (1–200), optional `under`, `by="extension"` or `"kind"`. |
+| `search` | Required `pattern` (at most 256 bytes), optional `under`, `offset=0` (nonnegative machine-sized integer), `limit=50` (1–500). |
+| `node_info` | Required `path`, accepting a file or directory. |
+| `scan_volume` | Required `volume`, `profile="balanced"` (`background`, `balanced`, `max`); accepts `format`, no `snapshot`. |
+| `scan_status` | Optional `volume` matching the current or last job; accepts `format`, no `snapshot`. |
+
+`under` defaults to `/`. `ext` accepts suffixes with or without a leading dot, lowercases ASCII letters, and uses an empty string for files without an extension, for example `["mp4", ".mkv"]`. `kind` accepts `video`, `audio`, `image`, `archive`, `disk-image`, `document`, `code`, `executable`, `other`. These categories are inferred from extensions. Search uses case-insensitive whole-name globs (`*`, `?`, `[abc]`, `{a,b}`), with backslash escaping; input without `*?[{` matches a substring. Search includes directories and duplicate hard links; rankings and grouped totals count primary files only.
+
+Paths start with `/` and use `/` separators in results. Input accepts `/` or `\` separators and resolves exact names before Unicode lowercase matches; `#id` selects a direct child. `list_dir` preserves the access report's allocation order and fields. A page past the end is empty. Text pages with remaining children end with `showing A–B of N · next offset=B`; the last page omits this footer. `get_tree` uses two spaces of indentation per depth with `alloc  share  name` columns, shares to one decimal place, and collapsed rows named `… N more (X)`. Its budget/collapse rules are described in the [core README](../adamite-core/README.md#snapshot-and-errors).
 
 Query text begins with `<snapshot file> · serial <hex> · scanned <RFC 3339 | unknown> (<age>) · sizes: on-disk allocation`. Ages use the largest whole unit (`45s`, `12m`, `5h`, `3d`). Missing, future and unrepresentable scan ages are unknown.
 
-JSON is one `adamite/1` object returned identically as a text block and MCP `structuredContent`. The wrapper extends the access report's `snapshot` with `path`, `age_seconds` and `stale`. Unknown ages make both age fields null. The catalog has no selected snapshot, so its top-level `snapshot` fields are null; each item carries its own age. Reports include `truncated` and a nullable `next_offset`; `list_dir` sets the next offset while children remain. The response builder assembles reports and paging before wire encoding. Every response is capped at 32 KiB, preserving whole items and shortening oversized paths when necessary.
+JSON is one `adamite/1` object returned identically as a text block and MCP `structuredContent`. The wrapper extends the access report's `snapshot` with `path`, `age_seconds` and `stale`. Unknown ages make `age_seconds` and `stale` null. The catalog has no selected snapshot, so its top-level `snapshot` fields are null; each item carries its own age. Successful reports include `truncated` and a nullable `next_offset`; `list_dir` and `search` set the next offset while results remain. The response builder assembles reports and paging before wire encoding. Every encoded MCP result is capped at 32 KiB, including the wrapper and duplicated structured content, by dropping whole rows/items and setting `truncated`. Oversized strings are shortened in the middle at UTF-8 boundaries when needed. Non-paginated tools leave `next_offset` null; narrow `path` or `under` for a truncated tree or ranking.
+
+Shared report fields are documented in the [CLI output contract](../adamite-cli/README.md#text-and-json-output), with MCP tool names in `command`. `node_info` adds `path`, `node_id`, `hard_link_count`, nullable `mtime_filetime` and `modified_at`, plus the directory-listing node fields (`name`, `kind`, flags and self/subtree sizes). `get_tree` rows use subtree `alloc`/`size` and percentage `share`. Scan responses carry `status` and the job fields described below instead of the loaded-snapshot envelope.
 
 The query tools and `scan_status` advertise `readOnlyHint: true`, `idempotentHint: true` and `openWorldHint: false`. `scan_volume` advertises `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: false` and `openWorldHint: false`.
 
@@ -52,7 +77,25 @@ Images and drives with administrator access scan on access-layer workers. Other 
 
 Elevated children continue running and publishing to their explicit destination after server shutdown. Dropping the process owner closes the Windows process handle without terminating or waiting for the child. Server instructions describe consent, polling and query steps.
 
-Malformed requests, unknown tools and parameter deserialization failures are protocol errors. Other failures set MCP `isError: true`. Text errors contain exactly two lines: `error[<code>]: <what happened>` and `next: <exact step>`. JSON errors wrap that same two-line string as `{"schema":"adamite/1","error":"..."}`, identically in text and structured content. Missing paths suggest the deepest resolved directory for `list_dir`; ambiguous paths suggest identifier paths ending in `/#id`. These identifier paths can be passed directly to retry the call. A failed call leaves the server running.
+## Errors
+
+Malformed requests, unknown tools and parameter deserialization failures are protocol errors. Other failures set MCP `isError: true`. Text errors contain exactly two lines: `error[<code>]: <what happened>` and `next: <exact step>`. JSON errors wrap that same two-line string as `{"schema":"adamite/1","error":"..."}`, identically in text and structured content. A failed call leaves the server running.
+
+| Code | Condition and recovery |
+| --- | --- |
+| `no_snapshot` | No matching saved snapshot; ask for consent, then call `scan_volume`. `next` also supplies a manual scan command with the absolute destination and `--force` when it exists. |
+| `unsupported_source` | Non-`.adm` query source, `.adm` scan source, or a drive scan outside Windows; `next` supplies an image scan command or directs the caller to query the existing snapshot. |
+| `elevation_declined` | UAC was declined; ask whether to retry and wait for agreement. |
+| `scan_busy` | Another scan is active; call `scan_status`. |
+| `scan_failed` | Scan worker or child failed; inspect the reported message and exit code (unavailable for in-process failures). |
+| `ambiguous_snapshot` | Several selections match; pass one of the absolute candidate paths. |
+| `path_not_found` | A component is missing; call `list_dir` on the deepest resolved directory from `next`. |
+| `ambiguous_path` | Several children match; retry with a returned identifier path containing `/#id`. |
+| `not_a_directory` | A directory query selected a file; use `node_info`. |
+| `corrupt_snapshot` | Decoding failed; rescan the original source and replace the snapshot after consent. The manual command uses `--force`. |
+| `permission_denied` | File access was denied; check permissions or rescan into the snapshot directory. |
+| `invalid_argument` | Parameter outside its accepted range or values, invalid glob, invalid scan source or status volume mismatch; follow the correction in `next`. |
+| `internal_error` | Other I/O or synchronization failure; check the reported path and cause, then retry. |
 
 ## Verification
 
