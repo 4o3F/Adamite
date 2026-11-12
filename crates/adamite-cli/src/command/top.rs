@@ -1,5 +1,8 @@
 use crate::{
-    cli::TopArgs, error::CliError, locate::Locator, render::Renderer, report::TopReport,
+    cli::TopArgs,
+    error::{CliError, DirectoryLookup},
+    render::Renderer,
+    report::TopReport,
     source::Source,
 };
 use adamite_core::snapshot::FileFilter;
@@ -14,7 +17,8 @@ impl Top {
         let report = if args.under.is_none() && args.ext.is_empty() && args.kind.is_none() {
             TopReport::new(&args.source.source, &output, args.n)?
         } else {
-            let under = Locator::new(&output.snapshot)
+            let under = output
+                .snapshot
                 .resolve_directory(args.under.as_deref().unwrap_or("/"))?;
             let filter = match args.kind {
                 Some(kind) => FileFilter::Kind(kind),

@@ -6,6 +6,7 @@ mod indexes;
 mod kind;
 mod name_pattern;
 mod node;
+mod path;
 mod persist;
 mod query;
 mod rules;

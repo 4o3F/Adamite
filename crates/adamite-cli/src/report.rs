@@ -1,4 +1,4 @@
-use crate::{error::CliError, locate::Locator};
+use crate::error::{CliError, DirectoryLookup};
 use adamite_core::{
     scan::{ScanOutput, ScanStats},
     snapshot::{ExtensionStat, KindStat, NodeId, SearchPage, Snapshot},
@@ -270,9 +270,12 @@ impl<'a> LsReport<'a> {
             message: "--offset + --limit exceeds the supported range",
         })?;
         let snapshot = &output.snapshot;
-        let locator = Locator::new(snapshot);
-        let id = locator.resolve(path)?;
-        let children = locator.directory(id)?;
+        let id = snapshot.resolve_directory(path)?;
+        let children = snapshot
+            .children(id)
+            .ok_or(CliError::InconsistentSnapshot {
+                reason: "missing directory children",
+            })?;
         let path = node_path(snapshot, id)?;
         let items = children
             .iter()

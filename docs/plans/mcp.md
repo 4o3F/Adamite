@@ -11,7 +11,7 @@
 ## What Changes
 
 - Core gains path resolution and a budgeted summary. Ranking, extension and kind totals, and search come from [query-tui.md](query-tui.md).
-- A new `adamite-access` crate holds source loading, reports and text rendering shared by the CLI and MCP.
+- A new `adamite-access` crate holds source loading, reports, text rendering, the snapshot catalog and scan jobs, shared by the CLI, the home screen and MCP.
 - The CLI gains a `tree` command.
 - A new `adamite-mcp` library serves snapshot query tools and scan jobs over stdio, started by `adamite mcp`.
 - MCP `scan_volume` requests drive scans through the UAC prompt from [elevation.md](elevation.md).
@@ -51,13 +51,17 @@ Out of scope:
    - Every report and the `Envelope`.
    - Text rendering (`write_text`).
    - `SourceError` and `ReportError`.
+   - Snapshot publishing (`save.rs`), the elevated scan (`elevated_scan.rs`, `status_file.rs`) and the scan jobs now in `launcher.rs`:
+     - The jobs become `ScanJob` with `poll() -> JobStatus { Running(Option<DriverProgress>), Done(Arc<ScanOutput>, Option<PathBuf>), Failed(JobError) }`.
+     - The variants cover loading an `.adm` or image on a worker thread, an in-process drive scan, and an elevated drive scan. All of them publish to the snapshot directory, and `JobError` keeps the child's message and exit code.
+   - The snapshot catalog: the `*.adm` listing in the snapshot directory and the drive-letter match from `CliSources::snapshots`, used by the home screen and by D6.
 
-   The CLI keeps clap, exit codes, the terminal progress view, stdout handling and snapshot saving. Existing CLI text, JSON and exit codes are byte-for-byte unchanged.
+   The CLI keeps clap, exit codes, the terminal progress view and stdout handling. `CliSources` becomes a thin adapter from `ScanJob` and the catalog to the TUI's `Sources`. Existing CLI text, JSON and exit codes are byte-for-byte unchanged.
 3. D3. Core queries. Each query is a method on `Snapshot`. Core stays sans-io and panic-free, with fallible allocation (`try_reserve`; no infallible `collect` or `to_owned` on query paths). Errors use snafu `QueryError`.
 
    | Method | Behavior |
    |---|---|
-   | `resolve_path(&str) -> Result<NodeId, QueryError>` | Replaces the CLI `Locator` with the same rules: `/` or `\` separators, exact name first, then Unicode lowercase, `#id` for a direct child. An ambiguous match returns candidate NodeIds. |
+   | `resolve_path(&str) -> Result<NodeId, QueryError>` | Replaces the CLI `Locator` (`resolve` and `resolve_directory`; the directory check stays a caller-side `not_a_directory`) with the same rules: `/` or `\` separators, exact name first, then Unicode lowercase, `#id` for a direct child. An ambiguous match returns candidate NodeIds. |
    | `summarize(root, budget, min_share_bp)` | Implements §4.2 with a lazy candidate heap over the pre-sorted children; memory is O(budget). See the rules below. |
 
    Rules for `summarize`:
@@ -85,8 +89,8 @@ Out of scope:
    | `snapshot_info` | — | info report |
    | `get_tree` | `path="/"`, `budget=60` (1–400), `min_share_percent=0.5` (0–100) | `summarize` |
    | `list_dir` | `path="/"`, `offset=0`, `limit=50` (1–500) | ls report |
-   | `top_files` | `n=20` (1–100), `under?`, `ext?` | `rank_files` |
-   | `ext_breakdown` | `n=20` (1–200), `under?` | extension stats |
+   | `top_files` | `n=20` (1–100), `under?`, `ext?` or `kind?` (mutually exclusive) | `rank_files` |
+   | `ext_breakdown` | `n=20` (1–200), `under?`, `by=extension\|kind` | `extension_stats_under`, `kind_stats` |
    | `search` | `pattern`, `under?`, `offset=0`, `limit=50` (1–500) | `search` |
    | `node_info` | `path` | `NodeView`, with NodeId, flags and hard-link count |
    | `scan_volume` | `volume` (`C:`, or an image path), `profile=balanced` | scan job (D11); not read-only |
@@ -100,7 +104,7 @@ Out of scope:
      - Every `*.adm` file directly inside `--snapshot-dir DIR`; symlinks are followed and subdirectories are not.
      - The directory defaults to the snapshot directory from [query-tui.md](query-tui.md) D4.
    - The server creates the default directory at startup if it is missing and treats it as empty when it cannot.
-   - Discovery is re-run on every call and reads only file metadata.
+   - Discovery is the D2 catalog, re-run on every call; it reads only file metadata.
    - `snapshots` lists, for each file:
      - its name, absolute path, byte length and modified time;
      - its scan time once loaded.
@@ -170,6 +174,7 @@ Out of scope:
       - Scan jobs on an image, including progress and outcome from the status file.
       - One subprocess test runs `adamite mcp` over stdio on Linux and Windows. It checks the handshake, `get_tree` on a fixture `.adm`, that stdout carries only protocol messages, and that the process exits 0 on EOF.
 11. D11. Scan jobs. This plan builds on `ElevatedProcess` and the status file from [elevation.md](elevation.md), which lands first.
+    - Jobs are the D2 `ScanJob`; MCP adds no scan code of its own.
     - `scan_volume` validates `volume` and builds the child arguments itself: the drive letter or the canonical image path, the profile, `-o <snapshot dir>/<stem>.adm --force` and `--status-file <snapshot dir>/.<stem>.status.jsonl`. No caller text reaches the elevated command line.
       - Images, and drives when the server is already elevated, scan in-process in `spawn_blocking` with the same job API.
       - The call returns after the UAC decision, with `running`, or with `elevation_declined`.
@@ -182,8 +187,9 @@ Out of scope:
 
 Each task ends with one reviewed commit, `deno task check` green and CI green. Each Codex run covers implementation and targeted verification and stays under 40 minutes; review and CI are separate.
 
-- [ ] M1a — `Snapshot::resolve_path` in core; the CLI uses it (D3).
-- [ ] M1b — Extract `adamite-access` (D2).
+- [x] M1a — `Snapshot::resolve_path` in core; the CLI uses it (D3).
+- [ ] M1b — Extract `adamite-access` with sources, reports and text rendering (D2).
+- [ ] M1c — Move publishing, the elevated scan, scan jobs and the snapshot catalog into `adamite-access`; `CliSources` adapts them (D2).
 - [ ] M2 — `Snapshot::summarize`, the tree report and `adamite tree` (D3, D4).
 - [ ] M4a — `adamite-mcp` discovery, selection and cache, without rmcp (D6).
 - [ ] M4b — The rmcp server, the `adamite mcp` subcommand, `snapshots`, `snapshot_info` and `list_dir`, with the handshake test (D1, D5, D7, D8).

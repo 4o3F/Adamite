@@ -13,7 +13,6 @@ mod command;
 mod elevated_scan;
 mod error;
 mod launcher;
-mod locate;
 mod render;
 mod report;
 mod save;

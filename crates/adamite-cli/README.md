@@ -66,7 +66,7 @@ Command-line image and supported drive scans show progress on standard error whe
 
 Image scans record the current scan timestamp; Windows drive scans also obtain the volume label and free bytes. Queries on snapshots reuse their saved metadata.
 
-For `ls`, `browse` and `--under`, PATH is relative to the snapshot root. `--under` must resolve to a directory and defaults to `/`. Both `/` and `\` separate components; empty components are skipped, so a leading separator is optional. `.` and `..` are literal names. Exact name matches take precedence; otherwise names are compared after Unicode lowercase expansion. Multiple matches produce `AmbiguousPath` with candidate NodeIds. A component such as `#1234` selects that decimal NodeId among the current directory's direct children. Synthetic directories such as `<NTFS metadata>` and `<orphaned>` use the same rules. Returned paths use `/` separators.
+For `ls`, `browse` and `--under`, PATH is relative to the snapshot root and resolved by core's `Snapshot::resolve_path`; the CLI requires the result to be a directory. `--under` defaults to `/`. Both `/` and `\` separate components; empty components are skipped, so a leading separator is optional. `.` and `..` are literal names. Exact name matches take precedence; otherwise names are compared after Unicode lowercase expansion. Multiple matches produce `AmbiguousPath` with candidate NodeIds. A component such as `#1234` selects that decimal NodeId among the current directory's direct children. Synthetic directories such as `<NTFS metadata>` and `<orphaned>` use the same rules. Returned paths use `/` separators.
 
 ## Text and JSON output
 

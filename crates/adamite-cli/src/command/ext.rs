@@ -1,7 +1,6 @@
 use crate::{
     cli::{ExtArgs, GroupBy},
-    error::CliError,
-    locate::Locator,
+    error::{CliError, DirectoryLookup},
     render::Renderer,
     report::{ExtReport, KindReport},
     source::Source,
@@ -19,7 +18,8 @@ impl Ext {
             let report = ExtReport::new(&args.source.source, &output, args.n);
             return renderer.write(&report, stdout);
         }
-        let under = Locator::new(&output.snapshot)
+        let under = output
+            .snapshot
             .resolve_directory(args.under.as_deref().unwrap_or("/"))?;
         match args.by {
             GroupBy::Extension => {

@@ -1,4 +1,4 @@
-use adamite_core::snapshot::{NodeId, PersistError, QueryError, SnapshotError};
+use adamite_core::snapshot::{NodeId, NodeView, PersistError, QueryError, Snapshot, SnapshotError};
 use adamite_io::error::VolumeError;
 use adamite_tui::TuiError;
 use snafu::Snafu;
@@ -186,6 +186,42 @@ impl CliError {
 
 impl From<QueryError> for CliError {
     fn from(source: QueryError) -> Self {
-        Self::Query { source }
+        match source {
+            QueryError::PathNotFound { path, component } => Self::PathNotFound { path, component },
+            QueryError::AmbiguousPath {
+                path,
+                component,
+                candidates,
+            } => Self::AmbiguousPath {
+                path,
+                component,
+                candidates,
+            },
+            source => Self::Query { source },
+        }
+    }
+}
+
+/// CLI path lookups that require a directory and report files by their canonical path.
+pub(crate) trait DirectoryLookup {
+    /// Resolves `path` and rejects nodes that are not directories.
+    fn resolve_directory(&self, path: &str) -> Result<NodeId, CliError>;
+}
+
+impl DirectoryLookup for Snapshot {
+    fn resolve_directory(&self, path: &str) -> Result<NodeId, CliError> {
+        let id = match self.resolve_path(path) {
+            Ok(id) if self.node(id).is_some_and(NodeView::is_dir) => return Ok(id),
+            Ok(id) | Err(QueryError::NotADirectory { node: id }) => id,
+            Err(source) => return Err(source.into()),
+        };
+        let path = self
+            .path(id)
+            .map_err(|source| CliError::Snapshot { source })?
+            .ok_or_else(|| CliError::PathNotFound {
+                path: format!("#{}", id.raw()),
+                component: format!("#{}", id.raw()),
+            })?;
+        Err(CliError::NotADirectory { path })
     }
 }

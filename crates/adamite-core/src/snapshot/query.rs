@@ -13,6 +13,32 @@ use std::collections::TryReserveError;
 #[derive(Debug, Snafu)]
 #[non_exhaustive]
 pub enum QueryError {
+    /// A component does not identify a child of the current directory.
+    #[snafu(display("path component {component:?} not found in {path:?}"))]
+    PathNotFound {
+        /// Full path supplied for resolution.
+        path: String,
+        /// Component that could not be resolved.
+        component: String,
+    },
+    /// A component matches multiple children at the same resolution step.
+    #[snafu(display(
+        "ambiguous path component {component:?} in {path:?}; candidate NodeIds: {candidates:?}"
+    ))]
+    AmbiguousPath {
+        /// Full path supplied for resolution.
+        path: String,
+        /// Component with multiple matching children.
+        component: String,
+        /// Matching direct children in stored child order.
+        candidates: Vec<NodeId>,
+    },
+    /// Path resolution attempted to descend through a file.
+    #[snafu(display("not a directory: node {}", node.raw()))]
+    NotADirectory {
+        /// File encountered before the end of the path.
+        node: NodeId,
+    },
     /// The subtree root does not exist in this snapshot.
     #[snafu(display("query node {} does not exist in the snapshot", node.raw()))]
     InvalidNode {

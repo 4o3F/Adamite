@@ -1,5 +1,8 @@
 use crate::{
-    cli::BrowseArgs, error::CliError, launcher::CliSources, locate::Locator, source::Source,
+    cli::BrowseArgs,
+    error::{CliError, DirectoryLookup},
+    launcher::CliSources,
+    source::Source,
 };
 use adamite_tui::{Browser, Launcher};
 use std::io::{self, IsTerminal};
@@ -20,9 +23,9 @@ impl Browse {
                 .map_err(|source| CliError::Terminal { source });
         };
         let output = Source::open(source)?.load(&args.limits)?;
-        let locator = Locator::new(&output.snapshot);
-        let id = locator.resolve(args.path.as_deref().unwrap_or("/"))?;
-        locator.directory(id)?;
+        let id = output
+            .snapshot
+            .resolve_directory(args.path.as_deref().unwrap_or("/"))?;
         Browser::new(&output, id)
             .run()
             .map_err(|source| CliError::Terminal { source })

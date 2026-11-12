@@ -37,6 +37,19 @@ impl<T: Copy> SliceExt<T> for [T] {
     }
 }
 
+pub(crate) trait StrExt {
+    fn try_copy(&self) -> Result<String, TryReserveError>;
+}
+
+impl StrExt for str {
+    fn try_copy(&self) -> Result<String, TryReserveError> {
+        let mut owned = String::new();
+        owned.try_reserve_exact(self.len())?;
+        owned.push_str(self);
+        Ok(owned)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CounterOverflow;
 

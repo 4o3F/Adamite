@@ -1,5 +1,8 @@
 use crate::{
-    cli::SearchArgs, error::CliError, locate::Locator, render::Renderer, report::SearchReport,
+    cli::SearchArgs,
+    error::{CliError, DirectoryLookup},
+    render::Renderer,
+    report::SearchReport,
     source::Source,
 };
 use adamite_core::snapshot::NamePattern;
@@ -12,7 +15,8 @@ impl Search {
         let args = &self.0;
         let pattern = NamePattern::glob(&args.pattern)?;
         let output = Source::open(&args.source.source)?.load(&args.source.limits)?;
-        let under = Locator::new(&output.snapshot)
+        let under = output
+            .snapshot
             .resolve_directory(args.under.as_deref().unwrap_or("/"))?;
         let page = output
             .snapshot
