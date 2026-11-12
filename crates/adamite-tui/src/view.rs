@@ -9,10 +9,14 @@ use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
-    widgets::{Block, Cell, Clear, Paragraph, Row, Table, Tabs},
+    widgets::{Block, Cell, Clear, Paragraph, Row, Table, Tabs, Wrap},
 };
 use std::fmt;
 use unicode_width::UnicodeWidthStr;
+
+const SEARCH_HINT: &str = "Press / or Enter to search names under the current scope. \
+Plain text matches anywhere in a name; globs such as *.mp4 or report-?.pdf also work. \
+Enter on a result jumps to it in Tree.";
 
 /// Renders borrowed application state without changing its cursors.
 pub(crate) struct View<'a> {
@@ -105,6 +109,10 @@ impl<'a> View<'a> {
             Tab::TopFiles => self.files(frame, content, self.app.top_files, &self.app.queries.top),
             Tab::Extensions => self.extensions(frame, content),
             Tab::Info => self.info(frame, content),
+            Tab::Search if self.app.queries.pattern.is_none() => frame.render_widget(
+                Paragraph::new(SEARCH_HINT).wrap(Wrap { trim: true }),
+                content,
+            ),
             Tab::Search => self.files(
                 frame,
                 content,

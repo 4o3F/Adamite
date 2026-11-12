@@ -218,6 +218,11 @@ impl<'a> App<'a> {
                     self.resize(self.page_rows);
                 }
                 Key::Enter => self.confirm_input(),
+                Key::NextTab => {
+                    self.input = None;
+                    self.show_tab(self.tab.next());
+                    self.resize(self.page_rows);
+                }
                 _ => {}
             }
             return Action::Continue;
@@ -228,8 +233,8 @@ impl<'a> App<'a> {
             Key::Escape if !self.help => return Action::Quit,
             Key::Help | Key::Escape => self.help = !self.help,
             _ if self.help => {}
-            Key::NextTab => self.tab = self.tab.next(),
-            Key::SelectTab(tab) => self.tab = tab,
+            Key::NextTab => self.show_tab(self.tab.next()),
+            Key::SelectTab(tab) => self.show_tab(tab),
             Key::Bytes => self.raw_bytes = !self.raw_bytes,
             Key::Scope => self.toggle_scope(),
             Key::Filter if self.tab == Tab::TopFiles => self.open_input(Prompt::Filter),
@@ -245,6 +250,9 @@ impl<'a> App<'a> {
             }
             Key::Enter if self.tab == Tab::Extensions => self.select_group(),
             Key::Enter | Key::Open if self.tab == Tab::Tree => self.enter(),
+            Key::Enter if self.tab == Tab::Search && self.queries.search_items().is_empty() => {
+                self.open_input(Prompt::Search);
+            }
             Key::Enter if self.tab == Tab::TopFiles || self.tab == Tab::Search => {
                 let id = if self.tab == Tab::TopFiles {
                     self.queries.top.get(self.top_files.selected)
@@ -347,6 +355,13 @@ impl<'a> App<'a> {
             self.top_files = Cursor::default();
             self.extensions = Cursor::default();
             self.search = Cursor::default();
+        }
+    }
+
+    fn show_tab(&mut self, tab: Tab) {
+        self.tab = tab;
+        if tab == Tab::Search && self.queries.pattern.is_none() {
+            self.open_input(Prompt::Search);
         }
     }
 

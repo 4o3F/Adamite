@@ -136,6 +136,7 @@ impl<P> InputLine<P> {
         match key.code {
             KeyCode::Esc if key.kind == KeyEventKind::Press => Some(Key::Escape),
             KeyCode::Enter if key.kind == KeyEventKind::Press => Some(Key::Enter),
+            KeyCode::Tab if key.kind == KeyEventKind::Press => Some(Key::NextTab),
             _ => {
                 self.editor.handle_event(event);
                 None

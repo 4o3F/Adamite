@@ -550,6 +550,7 @@ fn tabs_cycle_and_digits_preserve_independent_cursors_and_scroll() -> TestResult
         }
         let text = Case::text(&app, 120, 8)?;
         assert!(text.contains(tab.title()), "{text}");
+        assert_eq!(app.input.is_some(), tab == Tab::Search, "{tab:?}");
         saved.push((tab, cursor));
         Case::press(&mut app, KeyCode::Tab)?;
     }
@@ -560,6 +561,10 @@ fn tabs_cycle_and_digits_preserve_independent_cursors_and_scroll() -> TestResult
     {
         Case::press(&mut app, KeyCode::Char(code))?;
         assert_eq!(app.tab, tab);
+        if tab == Tab::Search {
+            assert!(app.input.is_some());
+            Case::press(&mut app, KeyCode::Esc)?;
+        }
         let retained = match tab {
             Tab::Tree => app.tree.cursor,
             Tab::TopFiles => app.top_files,
@@ -1157,6 +1162,37 @@ fn search_from_every_tab_handles_results_errors_and_directory_or_file_jumps() ->
         "not-present"
     );
     assert!(app.queries.search_items().is_empty());
+    Ok(())
+}
+
+#[test]
+fn search_tab_without_a_pattern_prompts_and_explains_itself() -> TestResult {
+    let case = Case::synthetic()?;
+    let mut app = case.app("/", 8)?;
+    terminal_key(&mut app, KeyCode::Char('5'));
+    assert_eq!(app.tab, Tab::Search);
+    assert!(app.input.is_some());
+    terminal_key(&mut app, KeyCode::Esc);
+    assert!(app.input.is_none());
+    let text = Case::text(&app, 120, 12)?;
+    assert!(text.contains("Press / or Enter to search"), "{text}");
+    terminal_key(&mut app, KeyCode::Enter);
+    assert!(app.input.is_some());
+    terminal_key(&mut app, KeyCode::Tab);
+    assert!(app.input.is_none());
+    assert_eq!(app.tab, Tab::Tree);
+    terminal_key(&mut app, KeyCode::Char('5'));
+    confirm_text(&mut app, "not-present");
+    assert!(app.queries.search_items().is_empty());
+    terminal_key(&mut app, KeyCode::Enter);
+    assert_eq!(
+        app.input.as_ref().ok_or("input")?.editor.value(),
+        "not-present"
+    );
+    terminal_key(&mut app, KeyCode::Esc);
+    terminal_key(&mut app, KeyCode::Char('2'));
+    terminal_key(&mut app, KeyCode::Char('5'));
+    assert!(app.input.is_none(), "an existing pattern keeps its results");
     Ok(())
 }
 

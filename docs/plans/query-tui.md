@@ -58,7 +58,7 @@ Out of scope:
      - The tab bar shows `under <path>` when the scope is not `/`.
    - Top files: `f` opens an input line that takes `mp4,mkv`, `kind:video` or empty to clear. Invalid input shows an error in the status line and keeps the old filter.
    - Extensions: `g` toggles between extension and kind grouping. Enter on a row opens Top files filtered by it, with the same scope.
-   - Search: a new tab 5. `/` opens its input from any tab, and Enter runs the search. It shows the first 1000 matches, plus `N more, refine the pattern` when there are more.
+   - Search: a new tab 5. `/` opens its input from any tab, and Enter runs the search. Reaching the tab with no pattern opens the input; after Esc the empty tab shows a usage hint, and Enter on it, or on an empty result, reopens the input. Tab in an input closes it and moves to the next tab. It shows the first 1000 matches, plus `N more, refine the pattern` when there are more.
    - Enter on a Top files or Search row jumps to the file in Tree. The existing `jump_to_file` becomes a general `jump_to(node)`.
    - Input lines use the `tui-input` crate when it supports ratatui 0.30. Otherwise `input.rs` gains a minimal line editor: insert, backspace, left/right, Enter, Esc.
    - Queries run synchronously when the input is confirmed. Each must take under 200 ms in release on the bench synthetic volume.
