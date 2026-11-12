@@ -1,4 +1,4 @@
-use crate::status_file::StatusFile;
+use adamite_access::StatusFile;
 use adamite_core::scan::ScanPhase;
 use adamite_io::driver::DriverProgress;
 use indicatif::{HumanBytes, ProgressBar, ProgressState, ProgressStyle, style::TemplateError};

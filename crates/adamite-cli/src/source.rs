@@ -1,8 +1,5 @@
-use crate::{
-    cli::LimitArgs, elevated_scan::ElevatedScan, error::CliError, save::PublishMode,
-    scan_progress_view::ScanProgressView, status_file::StatusFile,
-};
-use adamite_access::Source;
+use crate::{cli::LimitArgs, error::CliError, scan_progress_view::ScanProgressView};
+use adamite_access::{ElevatedScan, PublishMode, Source, StatusFile};
 use adamite_core::scan::ScanOutput;
 use adamite_io::driver::DriverProgress;
 use std::path::Path;
@@ -35,8 +32,10 @@ impl SourceExt for Source {
         limits: &LimitArgs,
         destination: Option<(&Path, PublishMode)>,
     ) -> Result<Option<ElevatedScan>, CliError> {
-        if matches!(self, Source::Drive { .. }) && ElevatedScan::required(limits)? {
-            ElevatedScan::new(destination).map(Some)
+        if matches!(self, Source::Drive { .. }) && ElevatedScan::required(&limits.into())? {
+            ElevatedScan::new(destination)
+                .map(Some)
+                .map_err(CliError::from)
         } else {
             Ok(None)
         }
@@ -46,7 +45,11 @@ impl SourceExt for Source {
         if let Some(elevated) = self.elevation(limits, None)?
             && let Source::Drive { path, .. } = &self
         {
-            return elevated.run(path, limits, || ScanProgressView::observer(path, None));
+            return elevated
+                .run(path, &limits.into(), || {
+                    ScanProgressView::observer(path, None)
+                })
+                .map_err(CliError::from);
         }
         self.load_cli(limits, None)
     }

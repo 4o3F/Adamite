@@ -1,5 +1,4 @@
-use crate::error::CliError;
-use adamite_access::Source;
+use crate::{ScanJobError, Source};
 use adamite_core::scan::ScanOutput;
 use adamite_format::Escaped;
 use adamite_io::snapshot::{SnapshotIoError, SnapshotWriter};
@@ -14,43 +13,54 @@ use std::{
 /// Number of retries after a temporary filename collision.
 const TEMP_RETRIES: u8 = 16;
 
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum PublishMode {
+/// Whether publication must preserve an existing destination or replace it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PublishMode {
+    /// Refuse an existing destination, including one created during the scan.
     NoClobber,
+    /// Replace the destination with the completed temporary snapshot.
     Replace,
 }
 
 /// Owns the destination and publishes a fully written snapshot beside its temporary file.
 #[derive(Debug)]
-pub(crate) struct SnapshotFile {
+pub struct SnapshotFile {
     path: PathBuf,
     mode: PublishMode,
 }
 
 impl SnapshotFile {
-    pub(crate) fn new(path: PathBuf, mode: PublishMode) -> Self {
+    /// Selects a destination and publication mode without creating a file.
+    pub fn new(path: PathBuf, mode: PublishMode) -> Self {
         Self { path, mode }
     }
 
-    pub(crate) fn len(&self) -> Result<usize, CliError> {
+    /// Reads the published snapshot length in bytes.
+    ///
+    /// # Errors
+    /// Returns an I/O error or a length that exceeds the platform's address space.
+    pub fn length(&self) -> Result<usize, ScanJobError> {
         let bytes = fs::metadata(&self.path)
             .map_err(|source| self.io_error("read saved snapshot length", source))?
             .len();
-        usize::try_from(bytes).map_err(|_| CliError::SnapshotLength {
+        usize::try_from(bytes).map_err(|_| ScanJobError::SnapshotLength {
             path: self.path.clone(),
         })
     }
 
     /// Rejects conflicting destinations before scanning an image or drive.
-    pub(crate) fn preflight(&self, source: &Source) -> Result<(), CliError> {
+    ///
+    /// # Errors
+    /// Returns destination inspection errors, existing outputs in no-clobber mode, directories or replacement of the source image.
+    pub fn preflight(&self, source: &Source) -> Result<(), ScanJobError> {
         if fs::metadata(&self.path).is_ok_and(|metadata| metadata.is_dir()) {
-            return Err(CliError::OutputIsDirectory {
+            return Err(ScanJobError::OutputIsDirectory {
                 path: self.path.clone(),
             });
         }
         if matches!(self.mode, PublishMode::NoClobber) {
             return match fs::symlink_metadata(&self.path) {
-                Ok(_) => Err(CliError::OutputExists {
+                Ok(_) => Err(ScanJobError::OutputExists {
                     path: self.path.clone(),
                 }),
                 Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
@@ -65,13 +75,13 @@ impl SnapshotFile {
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
             Err(source) => return Err(self.io_error("resolve output", source)),
         };
-        let image = fs::canonicalize(path).map_err(|source| CliError::Io {
+        let image = fs::canonicalize(path).map_err(|source| ScanJobError::Io {
             operation: "resolve source image",
             path: path.clone(),
             source,
         })?;
         if image == destination {
-            return Err(CliError::SameAsSource {
+            return Err(ScanJobError::SameAsSource {
                 path: self.path.clone(),
             });
         }
@@ -79,7 +89,10 @@ impl SnapshotFile {
     }
 
     /// Encodes, writes, synchronizes and closes the temporary file before publishing it.
-    pub(crate) fn save(&self, output: &ScanOutput) -> Result<usize, CliError> {
+    ///
+    /// # Errors
+    /// Returns encoding, file I/O or publication errors. Temporary files are removed on failure.
+    pub fn save(&self, output: &ScanOutput) -> Result<usize, ScanJobError> {
         let _entered = tracing::info_span!("snapshot_save").entered();
         let (mut temporary, mut file) = self.create_temporary()?;
         let written = SnapshotWriter::write(output, &mut file);
@@ -89,12 +102,12 @@ impl SnapshotFile {
         });
         drop(file);
         let length = result.map_err(|error| match error {
-            SnapshotIoError::Persist { source } => CliError::Persist {
+            SnapshotIoError::Persist { source } => ScanJobError::Persist {
                 operation: "encode",
                 path: self.path.clone(),
                 source,
             },
-            SnapshotIoError::Io { source } => CliError::Io {
+            SnapshotIoError::Io { source } => ScanJobError::Io {
                 operation: "write and sync snapshot",
                 path: temporary.path.clone(),
                 source,
@@ -116,7 +129,7 @@ impl SnapshotFile {
         Ok(length)
     }
 
-    fn create_temporary(&self) -> Result<(TemporaryFile, File), CliError> {
+    fn create_temporary(&self) -> Result<(TemporaryFile, File), ScanJobError> {
         let name = self.path.file_name().ok_or_else(|| {
             self.io_error(
                 "create temporary snapshot",
@@ -140,7 +153,7 @@ impl SnapshotFile {
                 }
                 Err(source) if source.kind() == io::ErrorKind::AlreadyExists => {}
                 Err(source) => {
-                    return Err(CliError::Io {
+                    return Err(ScanJobError::Io {
                         operation: "create temporary snapshot",
                         path,
                         source,
@@ -154,9 +167,9 @@ impl SnapshotFile {
         ))
     }
 
-    fn link_error(&self, source: io::Error) -> CliError {
+    fn link_error(&self, source: io::Error) -> ScanJobError {
         if source.kind() == io::ErrorKind::AlreadyExists {
-            return CliError::OutputExists {
+            return ScanJobError::OutputExists {
                 path: self.path.clone(),
             };
         }
@@ -166,7 +179,7 @@ impl SnapshotFile {
         #[cfg(windows)]
         let unsupported = unsupported || matches!(source.raw_os_error(), Some(1 | 50));
         if unsupported {
-            CliError::UnsupportedNoClobber {
+            ScanJobError::UnsupportedNoClobber {
                 path: self.path.clone(),
                 source,
             }
@@ -175,8 +188,8 @@ impl SnapshotFile {
         }
     }
 
-    fn io_error(&self, operation: &'static str, source: io::Error) -> CliError {
-        CliError::Io {
+    fn io_error(&self, operation: &'static str, source: io::Error) -> ScanJobError {
+        ScanJobError::Io {
             operation,
             path: self.path.clone(),
             source,

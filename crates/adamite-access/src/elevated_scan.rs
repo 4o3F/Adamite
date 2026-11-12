@@ -1,5 +1,4 @@
-use crate::{cli::LimitArgs, error::CliError, save::PublishMode, source::SourceExt};
-use adamite_access::Source;
+use crate::{PublishMode, ScanJobError, ScanOptions, Source};
 use adamite_core::scan::ScanOutput;
 use adamite_io::{
     driver::DriverProgress,
@@ -16,8 +15,11 @@ use std::{
 
 static NEXT_SCAN: AtomicU64 = AtomicU64::new(0);
 
+/// Owns snapshot and status paths for a child running the current executable's `scan` command.
+///
+/// Dropping the owner removes the status file and any automatically selected temporary snapshot. Explicit snapshot destinations are preserved.
 #[derive(Debug)]
-pub(crate) struct ElevatedScan {
+pub struct ElevatedScan {
     snapshot: PathBuf,
     status: PathBuf,
     mode: PublishMode,
@@ -25,7 +27,11 @@ pub(crate) struct ElevatedScan {
 }
 
 impl ElevatedScan {
-    pub(crate) fn required(limits: &LimitArgs) -> Result<bool, CliError> {
+    /// Checks whether Windows administrator access is needed and elevation is permitted.
+    ///
+    /// # Errors
+    /// Returns an elevation error if querying the Windows process token fails.
+    pub fn required(limits: &ScanOptions) -> Result<bool, ScanJobError> {
         if limits.no_elevate {
             return Ok(false);
         }
@@ -33,7 +39,7 @@ impl ElevatedScan {
         {
             adamite_io::elevation::ElevatedProcess::is_current()
                 .map(|elevated| !elevated)
-                .map_err(CliError::elevation)
+                .map_err(ScanJobError::from)
         }
         #[cfg(not(windows))]
         {
@@ -41,12 +47,16 @@ impl ElevatedScan {
         }
     }
 
-    pub(crate) fn new(destination: Option<(&Path, PublishMode)>) -> Result<Self, CliError> {
+    /// Selects unique status paths and an optional explicit snapshot destination.
+    ///
+    /// # Errors
+    /// Returns path resolution or inspection errors, or exhausts the path collision retries.
+    pub fn new(destination: Option<(&Path, PublishMode)>) -> Result<Self, ScanJobError> {
         let destination = destination
             .map(|(path, mode)| {
                 std::path::absolute(path)
                     .map(|path| (path, mode))
-                    .map_err(|source| CliError::Io {
+                    .map_err(|source| ScanJobError::Io {
                         operation: "resolve snapshot destination",
                         path: path.to_owned(),
                         source,
@@ -72,7 +82,7 @@ impl ElevatedScan {
                 remove_snapshot: destination.is_none(),
             });
         }
-        Err(CliError::Io {
+        Err(ScanJobError::Io {
             operation: "choose elevated scan paths",
             path: std::env::temp_dir(),
             source: io::Error::from(io::ErrorKind::AlreadyExists),
@@ -91,11 +101,11 @@ impl ElevatedScan {
         (snapshot, status)
     }
 
-    fn exists(path: &Path) -> Result<bool, CliError> {
+    fn exists(path: &Path) -> Result<bool, ScanJobError> {
         match fs::symlink_metadata(path) {
             Ok(_) => Ok(true),
             Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(false),
-            Err(source) => Err(CliError::Io {
+            Err(source) => Err(ScanJobError::Io {
                 operation: "inspect elevated scan path",
                 path: path.to_owned(),
                 source,
@@ -103,7 +113,7 @@ impl ElevatedScan {
         }
     }
 
-    fn child_arguments(&self, drive: &Path, limits: &LimitArgs) -> Vec<OsString> {
+    fn child_arguments(&self, drive: &Path, limits: &ScanOptions) -> Vec<OsString> {
         let mut args = vec![
             "scan".into(),
             drive.as_os_str().to_owned(),
@@ -120,18 +130,27 @@ impl ElevatedScan {
         args
     }
 
-    /// Launches with the explicit destination and publication mode selected by `new`.
-    pub(crate) fn launch(self, drive: &Path, limits: &LimitArgs) -> Result<ElevatedJob, CliError> {
-        let process = launch_process(self.child_arguments(drive, limits))?;
+    /// Launches with the destination and publication mode selected by [`Self::new`].
+    ///
+    /// # Errors
+    /// Returns an elevation error if administrator access is declined or launching fails.
+    pub fn launch(self, drive: &Path, limits: &ScanOptions) -> Result<ElevatedJob, ScanJobError> {
+        let process = Self::launch_process(self.child_arguments(drive, limits))?;
         Ok(ElevatedJob::new(self, process))
     }
 
-    pub(crate) fn run<O: FnMut(DriverProgress)>(
+    /// Launches, monitors and waits for the child, then loads its saved snapshot.
+    ///
+    /// Prints the administrator-access request before launching. The observer factory runs only after launch succeeds.
+    ///
+    /// # Errors
+    /// Returns elevation, status, child outcome or completed-snapshot loading errors.
+    pub fn run<O: FnMut(DriverProgress)>(
         self,
         drive: &Path,
-        limits: &LimitArgs,
+        limits: &ScanOptions,
         observer: impl FnOnce() -> O,
-    ) -> Result<ScanOutput, CliError> {
+    ) -> Result<ScanOutput, ScanJobError> {
         let _ = writeln!(
             io::stderr().lock(),
             "requesting administrator access for {}…",
@@ -144,60 +163,71 @@ impl ElevatedScan {
             waited?;
         }
         let completed = result?;
-        Source::open(&completed.snapshot)?.load_observed_cli(limits, |_| {})
+        Source::open(&completed.snapshot)?
+            .load_observed(&limits.limits(), |_| {})
+            .map_err(ScanJobError::from)
+    }
+}
+
+impl ElevatedScan {
+    fn launch_process(arguments: Vec<OsString>) -> Result<Box<dyn ChildProcess>, ScanJobError> {
+        #[cfg(windows)]
+        {
+            let process = adamite_io::elevation::ElevatedProcess::launch(arguments)
+                .map_err(ScanJobError::from)?;
+            Ok(Box::new(process))
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = arguments;
+            Err(ScanJobError::from(
+                adamite_io::elevation::ElevationError::Launch {
+                    source: io::Error::from(io::ErrorKind::Unsupported),
+                },
+            ))
+        }
     }
 }
 
 /// Process operations needed by a polling scan, independent of any terminal view.
 trait ChildProcess: std::fmt::Debug {
-    fn try_wait(&mut self) -> Result<Option<u32>, CliError>;
-    fn wait(&mut self) -> Result<u32, CliError>;
-}
-
-fn launch_process(arguments: Vec<OsString>) -> Result<Box<dyn ChildProcess>, CliError> {
-    #[cfg(windows)]
-    {
-        let process = adamite_io::elevation::ElevatedProcess::launch(arguments)
-            .map_err(CliError::elevation)?;
-        Ok(Box::new(process))
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = arguments;
-        Err(CliError::elevation(
-            adamite_io::elevation::ElevationError::Launch {
-                source: io::Error::from(io::ErrorKind::Unsupported),
-            },
-        ))
-    }
+    fn try_wait(&mut self) -> Result<Option<u32>, ScanJobError>;
+    fn wait(&mut self) -> Result<u32, ScanJobError>;
 }
 
 #[cfg(windows)]
 impl ChildProcess for adamite_io::elevation::ElevatedProcess {
-    fn try_wait(&mut self) -> Result<Option<u32>, CliError> {
-        adamite_io::elevation::ElevatedProcess::try_wait(self).map_err(CliError::elevation)
+    fn try_wait(&mut self) -> Result<Option<u32>, ScanJobError> {
+        adamite_io::elevation::ElevatedProcess::try_wait(self).map_err(ScanJobError::from)
     }
-    fn wait(&mut self) -> Result<u32, CliError> {
-        adamite_io::elevation::ElevatedProcess::wait(self).map_err(CliError::elevation)
+    fn wait(&mut self) -> Result<u32, ScanJobError> {
+        adamite_io::elevation::ElevatedProcess::wait(self).map_err(ScanJobError::from)
     }
 }
 
+/// The snapshot location and save confirmation reported by a completed child.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct CompletedScan {
-    pub(crate) snapshot: PathBuf,
-    pub(crate) saved: String,
-    pub(crate) bytes: u64,
+pub struct CompletedScan {
+    /// Native path owned by the job; a temporary snapshot is removed when the job drops.
+    pub snapshot: PathBuf,
+    /// Destination text reported by the child.
+    pub saved: String,
+    /// Encoded snapshot length reported by the child.
+    pub bytes: u64,
 }
 
+/// The latest progress or successful outcome of an elevated child.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum JobState {
+pub enum JobState {
+    /// The child is running, with the latest progress from this poll if available.
     Running(Option<DriverProgress>),
+    /// The child exited and reported a saved snapshot.
     Done(CompletedScan),
 }
 
 /// Owns the child and scan paths; polling neither sleeps nor renders a terminal view.
 #[derive(Debug)]
-pub(crate) struct ElevatedJob {
+pub struct ElevatedJob {
     // Close file and process handles before the path owner attempts cleanup.
     reader: Option<ScanStatusReader>,
     process: Box<dyn ChildProcess>,
@@ -219,7 +249,13 @@ impl ElevatedJob {
         }
     }
 
-    pub(crate) fn poll(&mut self) -> Result<JobState, CliError> {
+    /// Reads available status lines and checks process exit without sleeping.
+    ///
+    /// After exit, closes the status reader and returns the same terminal outcome on later polls.
+    ///
+    /// # Errors
+    /// Returns status I/O or decoding errors, process errors, the child's reported failure or an exit without a final status line.
+    pub fn poll(&mut self) -> Result<JobState, ScanJobError> {
         self.progress.clear();
         if let Some(exit_code) = self.exit_code {
             return self.completed(exit_code);
@@ -230,7 +266,7 @@ impl ElevatedJob {
                 Ok(reader) => self.reader = Some(reader),
                 Err(source) if source.kind() == io::ErrorKind::NotFound => {}
                 Err(source) => {
-                    return Err(CliError::Io {
+                    return Err(ScanJobError::Io {
                         operation: "open scan status",
                         path: self.scan.status.clone(),
                         source,
@@ -241,7 +277,7 @@ impl ElevatedJob {
         if let Some(reader) = &mut self.reader {
             for line in reader
                 .poll()
-                .map_err(|source| CliError::Status { source })?
+                .map_err(|source| ScanJobError::Status { source })?
             {
                 if let Some(progress) = line.driver_progress() {
                     self.progress.push(progress);
@@ -259,25 +295,25 @@ impl ElevatedJob {
         }
     }
 
-    fn completed(&self, exit_code: u32) -> Result<JobState, CliError> {
+    fn completed(&self, exit_code: u32) -> Result<JobState, ScanJobError> {
         match &self.outcome {
             Some(ScanStatus::Done { saved, bytes }) => Ok(JobState::Done(CompletedScan {
                 snapshot: self.scan.snapshot.clone(),
                 saved: saved.clone(),
                 bytes: *bytes,
             })),
-            Some(ScanStatus::Failed { message, exit_code }) => Err(CliError::ChildFailed {
+            Some(ScanStatus::Failed { message, exit_code }) => Err(ScanJobError::ChildFailed {
                 message: message.clone(),
                 exit_code: *exit_code,
             }),
-            _ => Err(CliError::ChildExited { exit_code }),
+            _ => Err(ScanJobError::ChildExited { exit_code }),
         }
     }
 
     fn monitor(
         &mut self,
         mut observer: impl FnMut(DriverProgress),
-    ) -> Result<CompletedScan, CliError> {
+    ) -> Result<CompletedScan, ScanJobError> {
         loop {
             let state = self.poll();
             for progress in &self.progress {
@@ -303,19 +339,14 @@ impl Drop for ElevatedScan {
 #[cfg(test)]
 mod tests {
     use super::{ChildProcess, ElevatedJob, ElevatedScan, JobState};
-    use crate::{
-        cli::{Cli, Command, LimitArgs},
-        error::CliError,
-        save::PublishMode,
-        scan_progress_view::ScanProgressView,
-        status_file::StatusFile,
-    };
+    use crate::{PublishMode, ReadRate, ScanJobError, ScanOptions, StatusFile};
     use adamite_core::scan::{ScanPhase, ScanProgress};
+    use adamite_io::limits::ScanProfile;
     use adamite_io::{
         driver::DriverProgress,
         status::{ScanStatus, ScanStatusReader, ScanStatusWriter},
     };
-    use clap::Parser;
+    use std::num::{NonZeroU64, NonZeroUsize};
     use std::{cell::Cell, error::Error, ffi::OsString, fmt, fs, path::Path, rc::Rc};
 
     struct TestProcess<F>(F);
@@ -326,34 +357,22 @@ mod tests {
         }
     }
 
-    impl<F: FnMut() -> Result<Option<u32>, CliError>> ChildProcess for TestProcess<F> {
-        fn try_wait(&mut self) -> Result<Option<u32>, CliError> {
+    impl<F: FnMut() -> Result<Option<u32>, ScanJobError>> ChildProcess for TestProcess<F> {
+        fn try_wait(&mut self) -> Result<Option<u32>, ScanJobError> {
             (self.0)()
         }
 
-        fn wait(&mut self) -> Result<u32, CliError> {
+        fn wait(&mut self) -> Result<u32, ScanJobError> {
             self.try_wait()?
-                .ok_or(CliError::ChildExited { exit_code: 1 })
+                .ok_or(ScanJobError::ChildExited { exit_code: 1 })
         }
     }
 
     fn job<F>(scan: ElevatedScan, poll: F) -> ElevatedJob
     where
-        F: FnMut() -> Result<Option<u32>, CliError> + 'static,
+        F: FnMut() -> Result<Option<u32>, ScanJobError> + 'static,
     {
         ElevatedJob::new(scan, Box::new(TestProcess(poll)))
-    }
-
-    fn limits(flags: &[&str]) -> Result<LimitArgs, Box<dyn Error>> {
-        let cli = Cli::try_parse_from(
-            ["adamite", "scan", "C:"]
-                .into_iter()
-                .chain(flags.iter().copied()),
-        )?;
-        let Some(Command::Scan(args)) = cli.command else {
-            return Err("missing scan".into());
-        };
-        Ok(args.source.limits)
     }
 
     #[test]
@@ -368,17 +387,19 @@ mod tests {
             scan.status.as_os_str().to_owned(),
             "--no-elevate".into(),
         ];
-        assert_eq!(scan.child_arguments(Path::new("C:"), &limits(&[])?), base);
-        let options = limits(&[
-            "--profile",
-            "background",
-            "--max-read-rate",
-            "128MiB",
-            "--threads",
-            "7",
-            "--trace-chrome",
-            "parent.json",
-        ])?;
+        assert_eq!(
+            scan.child_arguments(Path::new("C:"), &ScanOptions::default()),
+            base
+        );
+        let options = ScanOptions {
+            profile: Some(ScanProfile::Background),
+            max_read_rate: Some(ReadRate::new(
+                "128MiB".into(),
+                NonZeroU64::new(128 << 20).ok_or("rate")?,
+            )),
+            threads: NonZeroUsize::new(7),
+            ..ScanOptions::default()
+        };
         let mut expected = base;
         expected.extend(
             [
@@ -392,7 +413,11 @@ mod tests {
             .map(OsString::from),
         );
         assert_eq!(scan.child_arguments(Path::new("C:"), &options), expected);
-        let options = limits(&["--profile", "balanced", "--threads", "1"])?;
+        let options = ScanOptions {
+            profile: Some(ScanProfile::Balanced),
+            threads: NonZeroUsize::new(1),
+            ..ScanOptions::default()
+        };
         assert_eq!(
             options.child_arguments(),
             ["--profile", "balanced", "--threads", "1"].map(OsString::from)
@@ -408,7 +433,7 @@ mod tests {
             (PublishMode::Replace, true),
         ] {
             let scan = ElevatedScan::new(Some((&temporary.snapshot, mode)))?;
-            let args = scan.child_arguments(Path::new("C:"), &limits(&[])?);
+            let args = scan.child_arguments(Path::new("C:"), &ScanOptions::default());
             assert_eq!(args.iter().any(|arg| arg == "--force"), force);
             assert!(!scan.remove_snapshot);
         }
@@ -454,12 +479,11 @@ mod tests {
             drop(writer);
             let process_code = u32::try_from(exit_code)?;
             let mut job = job(scan, move || Ok(Some(process_code)));
-            let error = job
-                .monitor(ScanProgressView::observer(Path::new("C:"), None))
-                .err()
-                .ok_or("child failure accepted")?;
-            assert_eq!(error.message(), "child message");
-            assert_eq!(i32::from(error.exit_code()), exit_code);
+            let error = job.monitor(|_| {}).err().ok_or("child failure accepted")?;
+            assert_eq!(error.to_string(), "child message");
+            assert!(
+                matches!(error, ScanJobError::ChildFailed { exit_code: code, .. } if code == exit_code)
+            );
             let snapshot = job.scan.snapshot.clone();
             let status = job.scan.status.clone();
             drop(job);
@@ -469,11 +493,11 @@ mod tests {
         let scan = ElevatedScan::new(None)?;
         let mut job = job(scan, || Ok(Some(9)));
         let error = job
-            .monitor(ScanProgressView::observer(Path::new("C:"), None))
+            .monitor(|_| {})
             .err()
             .ok_or("missing outcome accepted")?;
-        assert_eq!(error.exit_code(), 1);
-        assert!(error.message().contains("code 9"));
+        assert!(matches!(error, ScanJobError::ChildExited { exit_code: 9 }));
+        assert!(error.to_string().contains("code 9"));
         Ok(())
     }
 
@@ -501,7 +525,7 @@ mod tests {
             polled.set(polls);
             if polls == 2 {
                 let mut writer =
-                    ScanStatusWriter::create(&status_path).map_err(|source| CliError::Io {
+                    ScanStatusWriter::create(&status_path).map_err(|source| ScanJobError::Io {
                         operation: "create test status",
                         path: status_path.clone(),
                         source,
@@ -515,15 +539,12 @@ mod tests {
                 ] {
                     writer
                         .write(&status)
-                        .map_err(|source| CliError::Status { source })?;
+                        .map_err(|source| ScanJobError::Status { source })?;
                 }
             }
             Ok((polls >= 3).then_some(0))
         });
-        job.monitor(ScanProgressView::observer(
-            Path::new("C:"),
-            Some(&mut relay),
-        ))?;
+        job.monitor(|progress| relay.progress(&progress))?;
         let polls = counter.get();
         assert_eq!(polls, 3);
         drop(relay);
@@ -629,10 +650,7 @@ mod tests {
         })?;
         drop(writer);
         let mut job = job(scan, || Ok(Some(0)));
-        job.monitor(ScanProgressView::observer(
-            Path::new("C:"),
-            Some(&mut relay),
-        ))?;
+        job.monitor(|progress| relay.progress(&progress))?;
         drop(relay);
         let mut reader = ScanStatusReader::open(&relay_paths.status)?;
         assert_eq!(reader.poll()?, expected);
@@ -648,7 +666,7 @@ mod tests {
         fs::write(&snapshot_path, b"temporary snapshot")?;
         fs::write(&status_path, b"invalid json\n")?;
         let mut job = job(scan, || Ok(None));
-        assert!(matches!(job.poll(), Err(CliError::Status { .. })));
+        assert!(matches!(job.poll(), Err(ScanJobError::Status { .. })));
         drop(job);
         assert!(!status_path.exists());
         assert!(!snapshot_path.exists());
@@ -656,13 +674,13 @@ mod tests {
     }
 
     #[test]
-    fn decline_and_launch_failures_use_permission_exit_code() {
-        let declined = CliError::elevation(adamite_io::elevation::ElevationError::Declined);
-        assert_eq!(declined.message(), "elevation was declined");
-        assert_eq!(declined.exit_code(), 4);
-        let launch = CliError::elevation(adamite_io::elevation::ElevationError::Launch {
+    fn decline_and_launch_failures_remain_distinct() {
+        let declined = ScanJobError::from(adamite_io::elevation::ElevationError::Declined);
+        assert_eq!(declined.to_string(), "elevation was declined");
+        assert!(matches!(declined, ScanJobError::ElevationDeclined));
+        let launch = ScanJobError::from(adamite_io::elevation::ElevationError::Launch {
             source: std::io::Error::other("system launch error"),
         });
-        assert_eq!(launch.exit_code(), 4);
+        assert!(matches!(launch, ScanJobError::Elevation { .. }));
     }
 }

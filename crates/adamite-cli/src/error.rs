@@ -1,4 +1,4 @@
-use adamite_access::{ReportError, SourceError};
+use adamite_access::{ReportError, ScanJobError, SourceError};
 use adamite_core::snapshot::{NodeId, PersistError, QueryError, SnapshotError};
 use adamite_io::error::VolumeError;
 use adamite_tui::TuiError;
@@ -175,14 +175,6 @@ impl CliError {
         }
         message
     }
-
-    pub(crate) fn elevation(source: adamite_io::elevation::ElevationError) -> Self {
-        if matches!(source, adamite_io::elevation::ElevationError::Declined) {
-            Self::ElevationDeclined
-        } else {
-            Self::Elevation { source }
-        }
-    }
 }
 
 impl From<QueryError> for CliError {
@@ -253,6 +245,203 @@ impl From<ReportError> for CliError {
             ReportError::Snapshot { source } => Self::Snapshot { source },
             ReportError::Json { source } => Self::Json { source },
             ReportError::Output { source } => Self::Output { source },
+        }
+    }
+}
+
+impl From<ScanJobError> for CliError {
+    fn from(error: ScanJobError) -> Self {
+        match error {
+            ScanJobError::StatusExists { path } => Self::StatusExists { path },
+            ScanJobError::Status { source } => Self::Status { source },
+            ScanJobError::ElevationDeclined => Self::ElevationDeclined,
+            ScanJobError::Elevation { source } => Self::Elevation { source },
+            ScanJobError::ChildFailed { message, exit_code } => {
+                Self::ChildFailed { message, exit_code }
+            }
+            ScanJobError::ChildExited { exit_code } => Self::ChildExited { exit_code },
+            ScanJobError::Io {
+                operation,
+                path,
+                source,
+            } => Self::Io {
+                operation,
+                path,
+                source,
+            },
+            ScanJobError::Persist {
+                operation,
+                path,
+                source,
+            } => Self::Persist {
+                operation,
+                path,
+                source,
+            },
+            ScanJobError::OutputExists { path } => Self::OutputExists { path },
+            ScanJobError::OutputIsDirectory { path } => Self::OutputIsDirectory { path },
+            ScanJobError::UnsupportedNoClobber { path, source } => {
+                Self::UnsupportedNoClobber { path, source }
+            }
+            ScanJobError::SameAsSource { path } => Self::SameAsSource { path },
+            ScanJobError::SnapshotLength { path } => Self::SnapshotLength { path },
+            ScanJobError::Source { source } => source.into(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CliError;
+    use adamite_access::{ScanJobError, SourceError};
+    use adamite_core::snapshot::PersistError;
+    use adamite_io::{elevation::ElevationError, status::StatusError};
+    use std::{error::Error, io};
+
+    #[test]
+    fn scan_job_errors_preserve_existing_messages_and_exit_codes() {
+        let cases = [
+            (
+                ScanJobError::OutputIsDirectory {
+                    path: "out.adm".into(),
+                },
+                "output out.adm is a directory",
+                1,
+            ),
+            (
+                ScanJobError::OutputExists {
+                    path: "out.adm".into(),
+                },
+                "output out.adm already exists; use --force to replace it",
+                1,
+            ),
+            (
+                ScanJobError::SameAsSource {
+                    path: "out.adm".into(),
+                },
+                "output out.adm resolves to the source image",
+                1,
+            ),
+            (
+                ScanJobError::UnsupportedNoClobber {
+                    path: "out.adm".into(),
+                    source: io::Error::other("unsupported"),
+                },
+                "cannot save out.adm without replacement: hard links are unsupported; use --force\ncaused by: unsupported",
+                1,
+            ),
+            (
+                ScanJobError::StatusExists {
+                    path: "status.jsonl".into(),
+                },
+                "status file status.jsonl already exists",
+                2,
+            ),
+            (
+                ScanJobError::Status {
+                    source: StatusError::Io {
+                        source: io::Error::other("write failed"),
+                    },
+                },
+                "cannot report scan status\ncaused by: status file I/O failed: write failed\ncaused by: write failed",
+                1,
+            ),
+            (
+                ScanJobError::Io {
+                    operation: "publish snapshot",
+                    path: "out.adm".into(),
+                    source: io::Error::other("write failed"),
+                },
+                "cannot publish snapshot out.adm\ncaused by: write failed",
+                1,
+            ),
+            (
+                ScanJobError::SnapshotLength {
+                    path: "out.adm".into(),
+                },
+                "snapshot out.adm is too large for this platform",
+                1,
+            ),
+            (
+                ScanJobError::Persist {
+                    operation: "encode",
+                    path: "out.adm".into(),
+                    source: PersistError::BadMagic,
+                },
+                "cannot encode snapshot out.adm\ncaused by: invalid snapshot magic",
+                3,
+            ),
+            (
+                ScanJobError::from(ElevationError::Declined),
+                "elevation was declined",
+                4,
+            ),
+            (
+                ScanJobError::from(ElevationError::Launch {
+                    source: io::Error::other("system launch error"),
+                }),
+                "cannot run elevated scan\ncaused by: failed to launch elevated process: system launch error\ncaused by: system launch error",
+                4,
+            ),
+            (
+                ScanJobError::ChildExited { exit_code: 9 },
+                "elevated scan exited with code 9 without a final status line",
+                1,
+            ),
+            (
+                ScanJobError::from(SourceError::Persist {
+                    operation: "decode",
+                    path: "out.adm".into(),
+                    source: PersistError::BadMagic,
+                }),
+                "cannot decode snapshot out.adm\ncaused by: invalid snapshot magic",
+                3,
+            ),
+        ];
+        for (error, message, exit_code) in cases {
+            let display = error.to_string();
+            let error = CliError::from(error);
+            assert_eq!(error.to_string(), display);
+            assert_eq!(error.message(), message);
+            assert_eq!(error.exit_code(), exit_code);
+        }
+        let denied = CliError::from(ScanJobError::Io {
+            operation: "publish snapshot",
+            path: "out.adm".into(),
+            source: io::Error::from(io::ErrorKind::PermissionDenied),
+        });
+        assert_eq!(denied.exit_code(), 4);
+        // Error printing selects the elevation hint by the existing CLI variant.
+        let launch = CliError::from(ScanJobError::from(ElevationError::Launch {
+            source: io::Error::other("launch failed"),
+        }));
+        assert!(matches!(launch, CliError::Elevation { .. }));
+        assert!(matches!(
+            CliError::from(ScanJobError::from(ElevationError::Declined)),
+            CliError::ElevationDeclined
+        ));
+    }
+
+    #[test]
+    fn child_failures_preserve_multiline_messages_and_exit_code_fallbacks() {
+        for (exit_code, expected) in [
+            (0, 0),
+            (1, 1),
+            (2, 2),
+            (3, 3),
+            (4, 4),
+            (9, 9),
+            (255, 255),
+            (-1, 1),
+            (256, 1),
+        ] {
+            let error = CliError::from(ScanJobError::ChildFailed {
+                message: "child message\ncaused by: child cause".into(),
+                exit_code,
+            });
+            assert!(error.source().is_none());
+            assert_eq!(error.message(), "child message\ncaused by: child cause");
+            assert_eq!(error.exit_code(), expected);
         }
     }
 }

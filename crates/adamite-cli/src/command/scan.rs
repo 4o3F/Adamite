@@ -1,15 +1,9 @@
 use crate::{
-    cli::ScanArgs,
-    command::info::Info,
-    error::CliError,
-    render::Renderer,
-    save::{PublishMode, SnapshotFile},
-    scan_progress_view::ScanProgressView,
-    source::SourceExt,
-    status_file::StatusFile,
+    cli::ScanArgs, command::info::Info, error::CliError, render::Renderer,
+    scan_progress_view::ScanProgressView, source::SourceExt,
 };
-use adamite_access::Source;
 use adamite_access::report::SavedReport;
+use adamite_access::{PublishMode, SnapshotFile, Source, StatusFile};
 use adamite_io::status::ScanStatus;
 use std::io::Write;
 
@@ -25,9 +19,15 @@ impl Scan {
             .transpose()?;
         let result = self.execute(&mut status, stdout);
         if let Some(status) = &mut status {
-            let finished = status.finish(&result);
-            if result.is_ok() {
-                finished?;
+            match &result {
+                Ok(Some(outcome)) => status.finish(outcome)?,
+                Ok(None) => {}
+                Err(error) => {
+                    let _ = status.finish(&ScanStatus::Failed {
+                        message: error.message(),
+                        exit_code: i32::from(error.exit_code()),
+                    });
+                }
             }
         }
         result.map(|_| ())
@@ -60,7 +60,7 @@ impl Scan {
         let elevated = source.elevation(&args.source.limits, Some((&destination, mode)))?;
         let saved_by_child = elevated.is_some();
         let output = if let Some(elevated) = elevated {
-            elevated.run(&args.source.source, &args.source.limits, || {
+            elevated.run(&args.source.source, &(&args.source.limits).into(), || {
                 ScanProgressView::observer(&args.source.source, status.as_mut())
             })?
         } else {
@@ -70,7 +70,7 @@ impl Scan {
             status.check()?;
         }
         let bytes = if saved_by_child {
-            file.len()?
+            file.length()?
         } else {
             file.save(&output)?
         };

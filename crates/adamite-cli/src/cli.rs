@@ -2,6 +2,7 @@ use crate::{
     command::{browse::Browse, ext::Ext, info::Info, ls::Ls, scan::Scan, search::Search, top::Top},
     error::CliError,
 };
+use adamite_access::{ReadRate, ScanOptions};
 use adamite_core::snapshot::FileKind;
 use adamite_io::limits::{ScanLimits, ScanProfile};
 use clap::{
@@ -10,11 +11,7 @@ use clap::{
     error::{ContextKind, ContextValue},
 };
 use std::num::{NonZeroU64, NonZeroUsize};
-use std::{
-    ffi::{OsStr, OsString},
-    io::Write,
-    path::PathBuf,
-};
+use std::{ffi::OsStr, io::Write, path::PathBuf};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -225,39 +222,9 @@ pub(crate) struct LimitArgs {
     pub(crate) no_elevate: bool,
 }
 
-#[derive(Debug, Clone)]
-struct ReadRate {
-    argument: String,
-    bytes: NonZeroU64,
-}
-
 impl LimitArgs {
     pub(crate) fn limits(&self) -> ScanLimits {
-        let mut limits = self.profile.unwrap_or_default().limits();
-        if let Some(rate) = &self.max_read_rate {
-            limits.max_read_bytes_per_sec = Some(rate.bytes);
-        }
-        if let Some(threads) = self.threads {
-            limits.threads = threads;
-        }
-        limits
-    }
-
-    pub(crate) fn child_arguments(&self) -> Vec<OsString> {
-        let mut args = Vec::new();
-        if let Some(profile) = self.profile {
-            args.extend([OsString::from("--profile"), profile.to_string().into()]);
-        }
-        if let Some(rate) = &self.max_read_rate {
-            args.extend([
-                OsString::from("--max-read-rate"),
-                rate.argument.clone().into(),
-            ]);
-        }
-        if let Some(threads) = self.threads {
-            args.extend([OsString::from("--threads"), threads.to_string().into()]);
-        }
-        args
+        ScanOptions::from(self).limits()
     }
 
     fn parse_rate(value: &str) -> Result<ReadRate, String> {
@@ -268,10 +235,18 @@ impl LimitArgs {
         let bytes = NonZeroU64::new(bytes).ok_or_else(|| {
             "rate must be positive; use --profile max for uncapped reads".to_owned()
         })?;
-        Ok(ReadRate {
-            argument: value.to_owned(),
-            bytes,
-        })
+        Ok(ReadRate::new(value.to_owned(), bytes))
+    }
+}
+
+impl From<&LimitArgs> for ScanOptions {
+    fn from(args: &LimitArgs) -> Self {
+        Self {
+            profile: args.profile,
+            max_read_rate: args.max_read_rate.clone(),
+            threads: args.threads,
+            no_elevate: args.no_elevate,
+        }
     }
 }
 
@@ -281,6 +256,48 @@ mod tests {
     use adamite_io::limits::ScanProfile;
     use clap::Parser;
     use std::error::Error;
+
+    #[test]
+    fn access_options_preserve_explicit_arguments_and_omit_parent_flags()
+    -> Result<(), Box<dyn Error>> {
+        let cli = Cli::try_parse_from([
+            "adamite",
+            "scan",
+            "C:",
+            "--profile",
+            "balanced",
+            "--max-read-rate",
+            "128MiB",
+            "--threads",
+            "1",
+            "--no-elevate",
+            "--trace-chrome",
+            "parent.json",
+        ])?;
+        let Some(Command::Scan(args)) = cli.command else {
+            return Err("missing scan".into());
+        };
+        let options = adamite_access::ScanOptions::from(&args.source.limits);
+        assert!(options.no_elevate);
+        assert_eq!(
+            options.child_arguments(),
+            [
+                "--profile",
+                "balanced",
+                "--max-read-rate",
+                "128MiB",
+                "--threads",
+                "1",
+            ]
+            .map(std::ffi::OsString::from)
+        );
+        assert!(
+            adamite_access::ScanOptions::from(&super::LimitArgs::default())
+                .child_arguments()
+                .is_empty()
+        );
+        Ok(())
+    }
 
     #[test]
     fn every_source_command_shares_limits() -> Result<(), Box<dyn Error>> {

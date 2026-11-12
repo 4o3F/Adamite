@@ -1,14 +1,9 @@
 //! CLI source I/O behind the TUI's home and nonblocking job interfaces.
 
 use crate::{
-    cli::LimitArgs,
-    elevated_scan::{ElevatedScan, JobState as ElevatedState},
-    error::CliError,
-    save::{PublishMode, SnapshotFile},
-    scan_progress_view::ScanProgressView,
-    source::SourceExt,
+    cli::LimitArgs, error::CliError, scan_progress_view::ScanProgressView, source::SourceExt,
 };
-use adamite_access::Source;
+use adamite_access::{ElevatedScan, JobState as ElevatedState, PublishMode, SnapshotFile, Source};
 use adamite_core::scan::ScanOutput;
 use adamite_io::{driver::DriverProgress, snapshot_dir::SnapshotDir};
 use adamite_tui::{Entry, JobProgress, JobState, ScanJob, SnapshotInfo, Sources};
@@ -89,7 +84,8 @@ impl CliSources {
         let destination = directory.drive_snapshot(letter);
         let source = Source::open(&path).map_err(|error| CliError::from(error).message())?;
         let file = SnapshotFile::new(destination.clone(), PublishMode::Replace);
-        file.preflight(&source).map_err(|error| error.message())?;
+        file.preflight(&source)
+            .map_err(|error| CliError::from(error).message())?;
         let limits = self.limits.clone();
         let label = format!("Scanning {}", path.display());
         if let Some(scan) = source
@@ -279,15 +275,15 @@ impl ElevatedWorker {
         let worker = thread::Builder::new()
             .name("adamite-elevation".to_owned())
             .spawn(move || {
-                let mut job = match scan.launch(&path, &limits) {
+                let mut job = match scan.launch(&path, &(&limits).into()) {
                     Ok(job) => job,
                     Err(error) => {
-                        let _ = outgoing.send(Err(error.message()));
+                        let _ = outgoing.send(Err(CliError::from(error).message()));
                         return;
                     }
                 };
                 while incoming.recv().is_ok() {
-                    let state = job.poll().map_err(|error| error.message());
+                    let state = job.poll().map_err(|error| CliError::from(error).message());
                     let terminal = !matches!(state, Ok(ElevatedState::Running(_)));
                     if outgoing.send(state).is_err() || terminal {
                         break;

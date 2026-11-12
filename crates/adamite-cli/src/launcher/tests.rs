@@ -1,11 +1,10 @@
 use super::{CliSources, DriveJob, DriveState, ElevatedWorker, WorkerJob, progress};
 use crate::{
     cli::{BrowseArgs, Cli, Command, LimitArgs},
-    elevated_scan::{CompletedScan, JobState as ElevatedState},
-    save::{PublishMode, SnapshotFile},
     source::SourceExt,
 };
 use adamite_access::Source;
+use adamite_access::{CompletedScan, JobState as ElevatedState, PublishMode, SnapshotFile};
 use adamite_core::scan::{ScanOutput, ScanPhase, ScanProgress};
 use adamite_fixtures::Fixture;
 use adamite_io::{driver::DriverProgress, snapshot_dir::SnapshotDir};
