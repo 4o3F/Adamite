@@ -23,6 +23,17 @@ pub(crate) struct Response {
 }
 
 impl Response {
+    pub(crate) fn scan(text: String, mut json: Value) -> Self {
+        json["schema"] = json!("adamite/1");
+        json["truncated"] = json!(false);
+        json["next_offset"] = Value::Null;
+        Self {
+            text,
+            json,
+            paging: None,
+        }
+    }
+
     pub(crate) fn report(
         report: &impl Serialize,
         envelope: &Envelope<'_>,

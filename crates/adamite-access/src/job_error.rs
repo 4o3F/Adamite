@@ -1,13 +1,16 @@
 use crate::{ScanJobError, SourceError};
-use std::{error::Error, fmt};
+use snafu::Snafu;
+use std::error::Error;
 
 /// A scan job's complete human-readable failure and optional child exit code.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Snafu)]
+#[snafu(module, display("{message}"))]
 pub struct JobError {
     /// Message including any underlying causes.
     pub message: String,
     /// Reported child exit code, preserving both signed status codes and Windows process codes.
     pub exit_code: Option<i64>,
+    elevation_declined: bool,
 }
 
 impl JobError {
@@ -16,7 +19,14 @@ impl JobError {
         Self {
             message: message.into(),
             exit_code: None,
+            elevation_declined: false,
         }
+    }
+
+    /// Reports whether the user declined the administrator-access prompt.
+    #[must_use]
+    pub const fn is_elevation_declined(&self) -> bool {
+        self.elevation_declined
     }
 
     /// Formats an error and its causes, retaining the supplied child exit code when available.
@@ -28,17 +38,13 @@ impl JobError {
             message.push_str(&cause.to_string());
             source = cause.source();
         }
-        Self { message, exit_code }
+        Self {
+            message,
+            exit_code,
+            elevation_declined: false,
+        }
     }
 }
-
-impl fmt::Display for JobError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.message)
-    }
-}
-
-impl Error for JobError {}
 
 impl From<SourceError> for JobError {
     fn from(error: SourceError) -> Self {
@@ -53,6 +59,8 @@ impl From<ScanJobError> for JobError {
             ScanJobError::ChildExited { exit_code } => Some(i64::from(*exit_code)),
             _ => None,
         };
-        Self::from_error(&error, exit_code)
+        let mut result = Self::from_error(&error, exit_code);
+        result.elevation_declined = matches!(error, ScanJobError::ElevationDeclined);
+        result
     }
 }

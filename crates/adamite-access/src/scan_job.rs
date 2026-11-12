@@ -1,9 +1,9 @@
 use crate::{
     ElevatedScan, JobError, JobState as ElevatedState, PublishMode, ScanOptions, SnapshotCatalog,
-    SnapshotFile, Source,
+    SnapshotFile, Source, StatusFile,
 };
 use adamite_core::scan::ScanOutput;
-use adamite_io::{driver::DriverProgress, snapshot_dir::SnapshotDir};
+use adamite_io::{driver::DriverProgress, snapshot_dir::SnapshotDir, status::ScanStatus};
 use std::{
     path::{Path, PathBuf},
     sync::{
@@ -18,7 +18,7 @@ use std::{
 pub enum JobStatus {
     /// Work continues, with only the latest progress received during this poll.
     Running(Option<DriverProgress>),
-    /// Transfers the completed output and, for drive scans, its published snapshot path.
+    /// Transfers the completed output and its snapshot path when publication was requested.
     Done(Arc<ScanOutput>, Option<PathBuf>),
     /// Work failed with its human message and any child exit code.
     Failed(JobError),
@@ -90,6 +90,43 @@ impl ScanJob {
             path,
             loading: false,
         }
+    }
+
+    /// Scans a drive or image on a worker and replaces an explicit snapshot destination.
+    ///
+    /// Writes progress and the terminal outcome to a new status file. Snapshots are rejected.
+    /// Drive elevation uses the same worker and publication logic as [`Self::scan_drive`].
+    ///
+    /// # Errors
+    /// Returns source inspection, directory creation, publication preflight or status creation errors.
+    /// Elevation decisions and scan outcomes arrive through [`Self::poll`].
+    pub fn scan_to(
+        path: PathBuf,
+        options: ScanOptions,
+        destination: PathBuf,
+        status: PathBuf,
+    ) -> Result<Self, JobError> {
+        let source = Source::open(&path)?;
+        if source.is_snapshot() {
+            return Err(JobError::new("source is already a snapshot"));
+        }
+        if let Some(parent) = destination.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| JobError::new(error.to_string()))?;
+        }
+        let state = Self::scan_state(source, options, destination, Some(status))?;
+        Ok(Self {
+            state,
+            path,
+            loading: false,
+        })
+    }
+
+    /// Reports whether a drive scan is still waiting for its elevation launch decision.
+    ///
+    /// Call [`Self::poll`] to receive the launch acknowledgement or failure.
+    #[must_use]
+    pub fn is_launching(&self) -> bool {
+        matches!(&self.state, State::Elevated(worker, _) if !worker.launched)
     }
 
     /// Borrows the current scan source or the snapshot being loaded after an elevated scan.
@@ -180,18 +217,66 @@ impl ScanJob {
         directory
             .create()
             .map_err(|error| JobError::new(error.to_string()))?;
-        let source = Source::open(path)?;
-        let destination = directory.drive_snapshot(letter);
+        Self::scan_state(
+            Source::open(path)?,
+            options,
+            directory.drive_snapshot(letter),
+            None,
+        )
+    }
+
+    fn scan_state(
+        source: Source,
+        options: ScanOptions,
+        destination: PathBuf,
+        status: Option<PathBuf>,
+    ) -> Result<State, JobError> {
         let file = SnapshotFile::new(destination.clone(), PublishMode::Replace);
         file.preflight(&source)?;
-        if ElevatedScan::required(&options)? {
-            let scan = ElevatedScan::new(Some((&destination, PublishMode::Replace)))?;
+        if matches!(source, Source::Drive { .. }) && ElevatedScan::required(&options)? {
+            let scan = match status {
+                Some(status) => {
+                    ElevatedScan::with_status(&destination, PublishMode::Replace, &status)?
+                }
+                None => ElevatedScan::new(Some((&destination, PublishMode::Replace)))?,
+            };
             Ok(State::Elevated(
-                ElevatedWorker::spawn(scan, path.to_owned(), options.clone())?,
+                ElevatedWorker::spawn(scan, source.path().to_owned(), options.clone())?,
                 options,
             ))
         } else {
-            Ok(Self::load(source, options, Some((file, destination))))
+            let status = status.map(|path| StatusFile::create(&path)).transpose()?;
+            Ok(WorkerJob::spawn(move |progress| {
+                let mut status = status;
+                let result: WorkerResult = (|| {
+                    let output = source.load_observed(&options.limits(), |report| {
+                        if let Some(status) = &mut status {
+                            status.progress(&report);
+                        }
+                        let _ = progress.send(report);
+                    })?;
+                    if let Some(status) = &mut status {
+                        status.check()?;
+                    }
+                    let bytes = file.save(&output)?;
+                    if let Some(status) = &mut status {
+                        status.finish(&ScanStatus::Done {
+                            saved: destination.to_string_lossy().into_owned(),
+                            bytes: bytes as u64,
+                        })?;
+                    }
+                    Ok((output, Some(destination)))
+                })();
+                if let (Some(status), Err(error)) = (&mut status, &result) {
+                    let _ = status.finish(&ScanStatus::Failed {
+                        message: error.to_string(),
+                        exit_code: 1,
+                    });
+                }
+                // Close the status writer before making the terminal result observable.
+                drop(status);
+                result
+            }))
         }
     }
 }
@@ -244,6 +329,7 @@ impl WorkerJob {
 struct ElevatedWorker {
     requests: SyncSender<()>,
     responses: Receiver<Result<ElevatedState, JobError>>,
+    launched: bool,
 }
 
 impl ElevatedWorker {
@@ -260,10 +346,19 @@ impl ElevatedWorker {
                         return;
                     }
                 };
+                if outgoing.send(Ok(ElevatedState::Running(None))).is_err() {
+                    return;
+                }
                 while incoming.recv().is_ok() {
                     let state = job.poll().map_err(JobError::from);
                     let terminal = !matches!(state, Ok(ElevatedState::Running(_)));
-                    if outgoing.send(state).is_err() || terminal {
+                    if terminal {
+                        // Release the status path before a caller can start its replacement.
+                        drop(job);
+                        let _ = outgoing.send(state);
+                        break;
+                    }
+                    if outgoing.send(state).is_err() {
                         break;
                     }
                 }
@@ -273,12 +368,14 @@ impl ElevatedWorker {
         Ok(Self {
             requests,
             responses,
+            launched: false,
         })
     }
 
     fn poll(&mut self) -> Result<ElevatedState, JobError> {
         match self.responses.try_recv() {
             Ok(state) => {
+                self.launched = true;
                 if matches!(state, Ok(ElevatedState::Running(_))) {
                     let _ = self.requests.try_send(());
                 }

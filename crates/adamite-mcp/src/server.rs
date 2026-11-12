@@ -1,13 +1,14 @@
 use crate::{
     McpError, SnapshotOptions, SnapshotStore,
     parameters::{
-        BreakdownParams, Format, GroupBy, ListDirParams, NodeParams, SearchParams, SnapshotParams,
-        TopParams, TreeParams,
+        BreakdownParams, Format, GroupBy, ListDirParams, NodeParams, ScanParams, ScanStatusParams,
+        SearchParams, SnapshotParams, TopParams, TreeParams,
     },
     response::Response,
+    scan::ScanJobs,
 };
 use adamite_access::{
-    AllocationShare, BreakdownBy, BreakdownStats, DirectoryLookup,
+    AllocationShare, BreakdownBy, BreakdownStats, DirectoryLookup, ScanOptions,
     report::{
         ExtReport, InfoReport, KindReport, LsReport, NodeReport, SearchReport, TopReport,
         TreeReport,
@@ -24,7 +25,7 @@ use rmcp::{
 use std::{io, sync::Arc, time::Duration};
 use tokio::sync::Semaphore;
 
-const INSTRUCTIONS: &str = "Start with snapshots. If no snapshot exists or it is stale, tell the user a Windows UAC prompt will appear and ask for consent before scan_volume. Poll scan_status until done. Use snapshot_info, get_tree at /, then list_dir, top_files, ext_breakdown or search to inspect usage. Call node_info before recommending candidates, and present their size and age for the user to decide. Sizes describe on-disk allocation. Never delete, move or run cleanup commands. Elevate only through scan_volume after consent. Never retry a declined UAC prompt on your own; ask the user whether to retry.";
+const INSTRUCTIONS: &str = "Start with snapshots. If no snapshot exists or it is stale, ask for consent before scan_volume; for a Windows drive, explain that a UAC prompt may appear. Poll scan_status until done. Use snapshot_info, get_tree at /, then list_dir, top_files, ext_breakdown or search to inspect usage. Call node_info before recommending candidates, and present their size and age for the user to decide. Sizes describe on-disk allocation. Never delete, move or run cleanup commands. Elevate only through scan_volume after consent. Never retry a declined UAC prompt on your own; ask the user whether to retry.";
 
 /// Snapshot sources, cache capacity and the age at which a snapshot becomes stale.
 #[derive(Debug, Clone)]
@@ -44,13 +45,15 @@ impl Default for ServerOptions {
     }
 }
 
-/// Read-only snapshot tools served through rmcp with at most two blocking queries.
+/// Scan and snapshot tools served through rmcp with at most two blocking queries.
 #[derive(Debug, Clone)]
 pub struct McpServer {
     store: Arc<SnapshotStore>,
     stale_after: Duration,
     query_permits: Arc<Semaphore>,
     tool_router: ToolRouter<Self>,
+    scans: Arc<ScanJobs>,
+    launch_permit: Arc<Semaphore>,
 }
 
 impl McpServer {
@@ -64,6 +67,8 @@ impl McpServer {
             stale_after: options.stale_after,
             query_permits: Arc::new(Semaphore::new(2)),
             tool_router: Self::tool_router(),
+            scans: Arc::default(),
+            launch_permit: Arc::new(Semaphore::new(1)),
         })
     }
 
@@ -126,6 +131,45 @@ impl McpServer {
 
 #[tool_router]
 impl McpServer {
+    /// Starts one scan and replaces its saved snapshot after successful completion. Request user consent before calling; never retry declined elevation without asking.
+    #[tool(annotations(
+        read_only_hint = false,
+        destructive_hint = false,
+        idempotent_hint = false,
+        open_world_hint = false
+    ))]
+    async fn scan_volume(&self, Parameters(params): Parameters<ScanParams>) -> CallToolResult {
+        let Ok(launch) = Arc::clone(&self.launch_permit).try_acquire_owned() else {
+            return Response::error(McpError::ScanBusy, params.format);
+        };
+        let scans = Arc::clone(&self.scans);
+        self.query(params.format, move |store, _| {
+            let _launch = launch;
+            scans.start(
+                &params.volume,
+                ScanOptions {
+                    profile: Some(params.profile.into()),
+                    ..ScanOptions::default()
+                },
+                store.directory(),
+            )
+        })
+        .await
+    }
+
+    /// Reports the current or last scan's progress and retained outcome. A volume mismatch is invalid_argument.
+    #[tool(annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false))]
+    async fn scan_status(
+        &self,
+        Parameters(params): Parameters<ScanStatusParams>,
+    ) -> CallToolResult {
+        let scans = Arc::clone(&self.scans);
+        self.query(params.format, move |_, _| {
+            scans.status(params.volume.as_deref())
+        })
+        .await
+    }
+
     /// Lists discovered snapshot metadata, including scan times for cached snapshots.
     #[tool(annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false))]
     async fn snapshots(&self, Parameters(params): Parameters<SnapshotParams>) -> CallToolResult {

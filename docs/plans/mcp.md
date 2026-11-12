@@ -194,7 +194,7 @@ Each task ends with one reviewed commit, `deno task check` green and CI green. E
 - [x] M4a — `adamite-mcp` discovery, selection and cache, without rmcp (D6).
 - [x] M4b — The rmcp server, the `adamite mcp` subcommand, `snapshots`, `snapshot_info` and `list_dir`, with the handshake test (D1, D5, D7, D8).
 - [x] M4c — The remaining tools, the output cap, every error code and the subprocess test (D5, D7, D8, D10).
-- [ ] M4d — MCP `scan_volume` and `scan_status` (D5, D8, D11).
+- [x] M4d — MCP `scan_volume` and `scan_status` (D5, D8, D11).
 - [ ] M5 — The plugin and Skill (D9), plus ARCHITECTURE §1, §4 and §6 and the root, core, CLI and MCP READMEs.
 
 ## Acceptance criteria

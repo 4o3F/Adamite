@@ -135,3 +135,43 @@ pub(crate) struct NodeParams {
     /// Volume-relative file or directory path; #id selects a direct child.
     pub(crate) path: String,
 }
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum Profile {
+    Background,
+    #[default]
+    Balanced,
+    Max,
+}
+
+impl From<Profile> for adamite_io::limits::ScanProfile {
+    fn from(value: Profile) -> Self {
+        match value {
+            Profile::Background => Self::Background,
+            Profile::Balanced => Self::Balanced,
+            Profile::Max => Self::Max,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(crate) struct ScanParams {
+    /// Single ASCII drive letter with optional colon (Windows), or an existing NTFS image file.
+    pub(crate) volume: String,
+    /// Resource profile: background, balanced (default), or max.
+    #[serde(default)]
+    pub(crate) profile: Profile,
+    /// Output representation: text (default) or json with matching structured content.
+    #[serde(default)]
+    pub(crate) format: Format,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(crate) struct ScanStatusParams {
+    /// Current or last scan's drive letter or image path; a mismatch is invalid_argument.
+    pub(crate) volume: Option<String>,
+    /// Output representation: text (default) or json with matching structured content.
+    #[serde(default)]
+    pub(crate) format: Format,
+}

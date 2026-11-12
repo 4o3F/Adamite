@@ -1,4 +1,4 @@
-use adamite_access::SourceError;
+use adamite_access::{JobError, SourceError};
 use snafu::Snafu;
 use std::{io, path::PathBuf, sync::Arc};
 
@@ -6,6 +6,26 @@ use std::{io, path::PathBuf, sync::Arc};
 #[derive(Debug, Clone, Snafu)]
 #[non_exhaustive]
 pub enum McpError {
+    /// A scan source is unsupported, with a source-specific recovery step.
+    #[snafu(display("{message}"))]
+    UnsupportedScanSource {
+        /// Reason the source cannot be scanned.
+        message: String,
+        /// Query or image scan command to use next.
+        next: String,
+    },
+    /// A scan job is already active.
+    #[snafu(display("a scan job is already running"))]
+    ScanBusy,
+    /// The user declined the administrator-access prompt.
+    #[snafu(display("elevation was declined"))]
+    ElevationDeclined,
+    /// A scan worker or elevated child failed.
+    #[snafu(display("scan failed: {source} (exit code {})", source.exit_code.map_or_else(|| "unavailable".into(), |code| code.to_string()))) ]
+    ScanFailed {
+        /// Complete access-layer error and optional child exit code.
+        source: JobError,
+    },
     /// A snapshot path could not be resolved.
     #[snafu(display("path not found: {path:?}"))]
     PathNotFound {
@@ -87,6 +107,10 @@ impl McpError {
     #[must_use]
     pub const fn code(&self) -> &'static str {
         match self {
+            Self::ScanBusy => "scan_busy",
+            Self::ElevationDeclined => "elevation_declined",
+            Self::ScanFailed { .. } => "scan_failed",
+            Self::UnsupportedScanSource { .. } => "unsupported_source",
             Self::PathNotFound { .. } => "path_not_found",
             Self::AmbiguousPath { .. } => "ambiguous_path",
             Self::NotADirectory { .. } => "not_a_directory",
@@ -104,6 +128,17 @@ impl McpError {
     #[must_use]
     pub fn next_step(&self) -> String {
         match self {
+            Self::ScanBusy => "Call scan_status.".into(),
+            Self::ElevationDeclined => {
+                "Ask the user whether to retry; never retry on your own.".into()
+            }
+            Self::ScanFailed { source } => format!(
+                "Inspect the scan error: {source}; exit code {}.",
+                source
+                    .exit_code
+                    .map_or_else(|| "unavailable".into(), |code| code.to_string())
+            ),
+            Self::UnsupportedScanSource { next, .. } => next.clone(),
             Self::PathNotFound { directory, .. } => {
                 format!("Call list_dir with path {directory:?}.")
             }
@@ -186,5 +221,15 @@ impl McpError {
             PathBuf::new(),
             io::Error::other("snapshot synchronization lock poisoned"),
         )
+    }
+}
+
+impl From<JobError> for McpError {
+    fn from(source: JobError) -> Self {
+        if source.is_elevation_declined() {
+            Self::ElevationDeclined
+        } else {
+            Self::ScanFailed { source }
+        }
     }
 }

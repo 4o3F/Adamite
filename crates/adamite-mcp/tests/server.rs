@@ -130,7 +130,7 @@ fn tool_error(result: &CallToolResult, format: &str, code: &str) -> TestResult<S
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn handshake_lists_eight_annotated_tools_and_baseline_reports() -> TestResult {
+async fn handshake_lists_ten_annotated_tools_and_baseline_reports() -> TestResult {
     let session = Session::new().await?;
     let info = session.client.peer_info().ok_or("server info")?;
     let identity = info.server_info.as_ref().ok_or("server identity")?;
@@ -163,6 +163,8 @@ async fn handshake_lists_eight_annotated_tools_and_baseline_reports() -> TestRes
             "get_tree",
             "list_dir",
             "node_info",
+            "scan_status",
+            "scan_volume",
             "search",
             "snapshot_info",
             "snapshots",
@@ -171,11 +173,20 @@ async fn handshake_lists_eight_annotated_tools_and_baseline_reports() -> TestRes
     );
     for tool in tools {
         let annotations = tool.annotations.ok_or("annotations")?;
-        assert_eq!(annotations.read_only_hint, Some(true));
-        assert_eq!(annotations.idempotent_hint, Some(true));
+        let is_scan = tool.name == "scan_volume";
+        assert_eq!(annotations.read_only_hint, Some(!is_scan));
+        assert_eq!(annotations.idempotent_hint, Some(!is_scan));
+        if is_scan {
+            assert_eq!(annotations.destructive_hint, Some(false));
+        }
         assert_eq!(annotations.open_world_hint, Some(false));
         assert!(tool.output_schema.is_none());
-        assert!(tool.input_schema["properties"].get("snapshot").is_some());
+        let selector = if tool.name.starts_with("scan_") {
+            "volume"
+        } else {
+            "snapshot"
+        };
+        assert!(tool.input_schema["properties"].get(selector).is_some());
         assert!(tool.input_schema["properties"].get("format").is_some());
     }
     let catalog = session.call("snapshots", json!({"format":"json"})).await?;
@@ -1212,5 +1223,262 @@ async fn node_metadata_preserves_named_flags_hard_links_and_recorded_timestamps(
             assert!(text(&result).contains("      d03"));
         }
     }
+    session.close().await
+}
+
+impl Session {
+    fn image(&self, name: &str) -> TestResult<std::path::PathBuf> {
+        let fixture = Fixture::load(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/ntfs/basic-4k.json"),
+        )?;
+        let path = self.directory.path().join(name);
+        fs::write(&path, fixture.image())?;
+        Ok(fs::canonicalize(path)?)
+    }
+
+    async fn scan_finished(&self) -> TestResult<CallToolResult> {
+        let started = std::time::Instant::now();
+        loop {
+            let result = self.call("scan_status", json!({"format":"json"})).await?;
+            if result.is_error == Some(true) || structured(&result)?["status"] != "running" {
+                return Ok(result);
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(20),
+                "scan timed out"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn scan_image_publishes_discovers_queries_and_retains_done() -> TestResult {
+    let session = Session::new().await?;
+    for format in ["text", "json"] {
+        let idle = session
+            .call("scan_status", json!({"format":format}))
+            .await?;
+        assert!(!idle.is_error.unwrap_or(false));
+        if format == "json" {
+            assert_eq!(structured(&idle)?["status"], "idle");
+        } else {
+            assert_eq!(text(&idle), "idle\n");
+        }
+    }
+    let image = session.image("source image.img")?;
+    let target = session.directory.path().join("source image.adm");
+    fs::write(&target, "old snapshot")?;
+    for profile in ["balanced", "background", "max"] {
+        let running = session
+            .call(
+                "scan_volume",
+                json!({"volume":image,"profile":profile,"format":"json"}),
+            )
+            .await?;
+        assert!(!running.is_error.unwrap_or(false), "{}", text(&running));
+        let running = structured(&running)?;
+        assert_eq!(running["status"], "running");
+        assert_eq!(running["volume"], json!(image));
+        assert_eq!(running["snapshot"]["path"], json!(target));
+        let done = session.scan_finished().await?;
+        assert!(!done.is_error.unwrap_or(false), "{}", text(&done));
+        let done = structured(&done)?;
+        assert_eq!(done["status"], "done");
+        assert_eq!(done["snapshot"]["path"], json!(target));
+        for _ in 0..3 {
+            let repeated = session
+                .call("scan_status", json!({"volume":image,"format":"json"}))
+                .await?;
+            assert_eq!(structured(&repeated)?, done);
+        }
+        let plain = session.call("scan_status", json!({})).await?;
+        assert!(text(&plain).starts_with("done · "));
+        assert!(text(&plain).contains(target.to_str().ok_or("target path")?));
+        let catalog = session.call("snapshots", json!({"format":"json"})).await?;
+        assert!(
+            structured(&catalog)?["items"]
+                .as_array()
+                .ok_or("items")?
+                .iter()
+                .any(|item| item["path"] == json!(target))
+        );
+        let tree = session
+            .call("get_tree", json!({"snapshot":target,"format":"json"}))
+            .await?;
+        assert!(!tree.is_error.unwrap_or(false), "{}", text(&tree));
+        assert!(
+            !structured(&tree)?["rows"]
+                .as_array()
+                .ok_or("rows")?
+                .is_empty()
+        );
+        let statuses =
+            fs::read_to_string(session.directory.path().join(".source image.status.jsonl"))?;
+        let final_line: Value =
+            serde_json::from_str(statuses.lines().last().ok_or("terminal status")?)?;
+        assert_eq!(final_line["done"]["saved"], json!(target));
+    }
+    session.close().await
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn scan_rejects_invalid_sources_and_volume_mismatches() -> TestResult {
+    let session = Session::new().await?;
+    for format in ["text", "json"] {
+        for (volume, code) in [
+            (session.directory.path().join("C.adm"), "unsupported_source"),
+            (
+                session.directory.path().join("missing.img"),
+                "invalid_argument",
+            ),
+            (session.directory.path().to_owned(), "invalid_argument"),
+            (
+                session.directory.path().join("C: --force"),
+                "invalid_argument",
+            ),
+        ] {
+            let result = session
+                .call("scan_volume", json!({"volume":volume,"format":format}))
+                .await?;
+            let message = tool_error(&result, format, code)?;
+            if code == "unsupported_source" {
+                assert!(message.contains("Query it with get_tree"));
+            }
+        }
+        if !cfg!(windows) {
+            for volume in ["C", "c:"] {
+                let result = session
+                    .call("scan_volume", json!({"volume":volume,"format":format}))
+                    .await?;
+                let message = tool_error(&result, format, "unsupported_source")?;
+                assert!(message.contains("adamite scan \"<image-file>\""));
+            }
+        }
+        let mismatch = session
+            .call("scan_status", json!({"volume":"C:","format":format}))
+            .await?;
+        tool_error(&mismatch, format, "invalid_argument")?;
+    }
+    assert!(
+        session
+            .call("scan_volume", json!({"volume":"C:","profile":"injected"}))
+            .await
+            .is_err()
+    );
+    let image = session.image("valid.img")?;
+    let other = session.image("other.img")?;
+    session.call("scan_volume", json!({"volume":image})).await?;
+    let done = session.scan_finished().await?;
+    assert!(!done.is_error.unwrap_or(false));
+    let mismatch = session.call("scan_status", json!({"volume":other})).await?;
+    tool_error(&mismatch, "text", "invalid_argument")?;
+    session.close().await
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn scan_failure_keeps_message_and_repeated_terminal_status_and_can_restart() -> TestResult {
+    let session = Session::new().await?;
+    let image = session.directory.path().join("corrupt.img");
+    fs::write(&image, "not an NTFS volume")?;
+    let started = session.call("scan_volume", json!({"volume":image})).await?;
+    assert!(!started.is_error.unwrap_or(false));
+    assert!(text(&started).starts_with("running"));
+    let failed = session.scan_finished().await?;
+    let message = tool_error(&failed, "json", "scan_failed")?;
+    assert!(
+        message.contains("cannot scan") && message.contains("corrupt.img"),
+        "{message}"
+    );
+    assert!(message.contains("exit code"));
+    assert!(!message.contains("worker stopped without a result"));
+    for _ in 0..3 {
+        let repeated = session
+            .call("scan_status", json!({"format":"json"}))
+            .await?;
+        assert_eq!(structured(&repeated)?, structured(&failed)?);
+    }
+    let plain = session.call("scan_status", json!({})).await?;
+    tool_error(&plain, "text", "scan_failed")?;
+    let image = session.image("corrupt.img")?;
+    let running = session.call("scan_volume", json!({"volume":image})).await?;
+    assert!(!running.is_error.unwrap_or(false), "{}", text(&running));
+    let done = session.scan_finished().await?;
+    assert_eq!(structured(&done)?["status"], "done");
+    session.close().await
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn scan_busy_and_progress_use_the_running_job() -> TestResult {
+    let session = Session::new().await?;
+    let image = session.directory.path().join("large.img");
+    let volume = SyntheticVolume::new(SyntheticConfig::reference(100_002)?)?;
+    let mut file = fs::File::create(&image)?;
+    volume.write(&mut file)?;
+    drop(file);
+    let running = session
+        .call(
+            "scan_volume",
+            json!({"volume":image,"profile":"background","format":"json"}),
+        )
+        .await?;
+    assert_eq!(structured(&running)?["status"], "running");
+    let busy = session.call("scan_volume", json!({"volume":image})).await?;
+    let message = tool_error(&busy, "text", "scan_busy")?;
+    assert!(message.contains("Call scan_status"));
+    let mut observed_progress = false;
+    loop {
+        let progress = session
+            .call("scan_status", json!({"format":"json"}))
+            .await?;
+        assert!(!progress.is_error.unwrap_or(false), "{}", text(&progress));
+        let progress = structured(&progress)?;
+        if progress["status"] == "done" {
+            break;
+        }
+        assert_eq!(progress["status"], "running");
+        assert!(progress["phase"].is_string());
+        assert!(
+            progress["elapsed_seconds"]
+                .as_f64()
+                .is_some_and(|elapsed| elapsed >= 0.0)
+        );
+        assert!(progress["bytes_read"].is_u64());
+        if let (Some(records), Some(planned)) = (
+            progress["records_processed"].as_u64(),
+            progress["records_planned"].as_u64(),
+        ) && planned > 0
+        {
+            let expected = records as f64 / planned as f64 * 100.0;
+            assert!((progress["percentage"].as_f64().ok_or("percentage")? - expected).abs() < 1e-9);
+            observed_progress |= progress["bytes_read"]
+                .as_u64()
+                .is_some_and(|bytes| bytes > 0);
+        }
+        assert!(progress["elapsed_seconds"].as_f64().ok_or("elapsed")? < 20.0);
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+        observed_progress,
+        "large image should report progress before completion"
+    );
+    session.close().await
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rejected_status_collision_is_preserved_on_subsequent_launches() -> TestResult {
+    let session = Session::new().await?;
+    let image = session.image("collision.img")?;
+    let status = session.directory.path().join(".collision.status.jsonl");
+    fs::write(&status, "existing job status")?;
+    for _ in 0..2 {
+        let result = session.call("scan_volume", json!({"volume":image})).await?;
+        tool_error(&result, "text", "scan_failed")?;
+        assert_eq!(fs::read_to_string(&status)?, "existing job status");
+    }
+    let idle = session
+        .call("scan_status", json!({"format":"json"}))
+        .await?;
+    assert_eq!(structured(&idle)?["status"], "idle");
     session.close().await
 }

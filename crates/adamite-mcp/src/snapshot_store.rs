@@ -176,7 +176,7 @@ impl SnapshotStore {
         self.cache.load(path)
     }
 
-    fn volume(value: &str) -> Option<char> {
+    pub(crate) fn volume(value: &str) -> Option<char> {
         let mut chars = value.chars();
         match (chars.next(), chars.next(), chars.next()) {
             (Some(letter), None | Some(':'), None) if letter.is_ascii_alphabetic() => {

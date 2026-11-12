@@ -1,6 +1,6 @@
 use super::{CliSources, JobAdapter};
 use crate::cli::{BrowseArgs, Cli, Command, LimitArgs};
-use adamite_access::{JobError, JobStatus, ScanJob as AccessJob, ScanOptions};
+use adamite_access::{JobStatus, ScanJob as AccessJob, ScanOptions};
 use adamite_core::scan::{ScanPhase, ScanProgress};
 use adamite_io::{driver::DriverProgress, snapshot_dir::SnapshotDir};
 use adamite_tui::{Entry, JobState, Sources};
@@ -52,9 +52,9 @@ fn adapter_maps_progress_labels_and_child_messages() {
         JobState::Running { progress: None, .. }
     ));
     assert!(matches!(
-        JobAdapter::state(&job, JobStatus::Failed(JobError {
-            message: "child failed\ncaused by: denied".into(), exit_code: Some(4),
-        })),
+        JobAdapter::state(&job, JobStatus::Failed(adamite_access::ScanJobError::ChildFailed {
+            message: "child failed\ncaused by: denied".into(), exit_code: 4,
+        }.into())),
         JobState::Failed(message) if message == "child failed\ncaused by: denied"
     ));
     let status = job.poll();

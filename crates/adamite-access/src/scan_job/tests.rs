@@ -100,6 +100,7 @@ fn completed_elevated_job_loads_snapshot_on_a_worker_and_preserves_it() -> TestR
             ElevatedWorker {
                 requests,
                 responses,
+                launched: true,
             },
             ScanOptions::default(),
         ),
@@ -177,6 +178,7 @@ fn failures_keep_source_messages_and_child_exit_codes() -> TestResult {
                 ElevatedWorker {
                     requests,
                     responses,
+                    launched: true,
                 },
                 ScanOptions::default(),
             ),
@@ -229,6 +231,7 @@ fn disconnected_workers_fail_and_empty_elevated_polls_request_work() -> TestResu
     let mut elevated = ElevatedWorker {
         requests,
         responses,
+        launched: true,
     };
     assert!(matches!(elevated.poll()?, ElevatedState::Running(None)));
     assert!(matches!(elevated.poll()?, ElevatedState::Running(None)));
@@ -272,5 +275,59 @@ fn invalid_drive_letter_fails_without_creating_a_directory() -> TestResult {
         matches!(job.poll(), JobStatus::Failed(error) if error.message == "drive letter must be an ASCII letter")
     );
     assert!(!directory.path().exists());
+    Ok(())
+}
+
+#[test]
+fn launch_stays_pending_until_the_elevated_worker_acknowledges() -> TestResult {
+    let (outgoing, responses) = mpsc::channel();
+    let (requests, _incoming) = mpsc::sync_channel(1);
+    let mut job = ScanJob {
+        state: State::Elevated(
+            ElevatedWorker {
+                requests,
+                responses,
+                launched: false,
+            },
+            ScanOptions::default(),
+        ),
+        path: "C:".into(),
+        loading: false,
+    };
+    assert!(job.is_launching());
+    assert!(matches!(job.poll(), JobStatus::Running(None)));
+    assert!(job.is_launching());
+    outgoing.send(Ok(ElevatedState::Running(None)))?;
+    assert!(matches!(job.poll(), JobStatus::Running(None)));
+    assert!(!job.is_launching());
+    outgoing.send(Err(ScanJobError::ElevationDeclined.into()))?;
+    assert!(matches!(job.poll(), JobStatus::Failed(error) if error.is_elevation_declined()));
+    assert!(!job.is_launching());
+    Ok(())
+}
+
+#[test]
+fn scan_to_publishes_snapshot_and_closes_status_before_completion() -> TestResult {
+    let case = Case::new()?;
+    let saved = case.directory.path().join("published.adm");
+    let status = case.directory.path().join(".published.status.jsonl");
+    let mut job = ScanJob::scan_to(
+        case.image.clone(),
+        ScanOptions::default(),
+        saved.clone(),
+        status.clone(),
+    )?;
+    assert!(!job.is_launching());
+    let (output, published) = Case::finish(&mut job)?;
+    assert_eq!(published.as_deref(), Some(saved.as_path()));
+    assert_eq!(fs::read(&saved)?, output.to_bytes()?);
+    let lines = fs::read_to_string(&status)?;
+    let terminal: adamite_io::status::ScanStatus =
+        serde_json::from_str(lines.lines().last().ok_or("status outcome")?)?;
+    assert!(
+        matches!(terminal, adamite_io::status::ScanStatus::Done { saved: path, .. } if path == saved.to_string_lossy())
+    );
+    // Removing the completed status also checks handle closure on Windows.
+    fs::remove_file(status)?;
     Ok(())
 }

@@ -1,4 +1,4 @@
-//! Read-only MCP snapshot tools, discovery, selection and blocking load caching.
+//! MCP scan and snapshot tools, discovery, selection and blocking load caching.
 //!
 //! [`SnapshotStore`] refreshes discovery through [`adamite_access::SnapshotCatalog`].
 //! [`SnapshotCache`] shares decoded outputs and coordinates blocking loads without a runtime.
@@ -6,6 +6,7 @@
 mod error;
 mod parameters;
 mod response;
+mod scan;
 mod server;
 mod snapshot_cache;
 mod snapshot_store;

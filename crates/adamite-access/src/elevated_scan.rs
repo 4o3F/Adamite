@@ -89,6 +89,37 @@ impl ElevatedScan {
         })
     }
 
+    /// Uses explicit snapshot and status paths for a caller-managed scan job.
+    ///
+    /// The status path must not exist. Explicit snapshot destinations survive owner drop.
+    ///
+    /// # Errors
+    /// Returns path resolution, inspection or status collision errors.
+    pub fn with_status(
+        destination: &Path,
+        mode: PublishMode,
+        status: &Path,
+    ) -> Result<Self, ScanJobError> {
+        let absolute = |path: &Path| {
+            std::path::absolute(path).map_err(|source| ScanJobError::Io {
+                operation: "resolve scan path",
+                path: path.to_owned(),
+                source,
+            })
+        };
+        let snapshot = absolute(destination)?;
+        let status = absolute(status)?;
+        if Self::exists(&status)? {
+            return Err(ScanJobError::StatusExists { path: status });
+        }
+        Ok(Self {
+            snapshot,
+            status,
+            mode,
+            remove_snapshot: false,
+        })
+    }
+
     fn paths(destination: Option<&Path>, pid: u32, sequence: u64) -> (PathBuf, PathBuf) {
         let snapshot = destination.map_or_else(
             || std::env::temp_dir().join(format!("adamite-{pid}-{sequence}.adm")),
@@ -373,6 +404,25 @@ mod tests {
         F: FnMut() -> Result<Option<u32>, ScanJobError> + 'static,
     {
         ElevatedJob::new(scan, Box::new(TestProcess(poll)))
+    }
+
+    #[test]
+    fn dropping_a_live_job_does_not_poll_or_wait_for_the_child() -> Result<(), Box<dyn Error>> {
+        let directory = tempfile::tempdir()?;
+        let snapshot = directory.path().join("C.adm");
+        let status = directory.path().join(".C.status.jsonl");
+        let scan = ElevatedScan::with_status(&snapshot, PublishMode::Replace, &status)?;
+        fs::write(&snapshot, b"published snapshot")?;
+        let calls = Rc::new(Cell::new(0));
+        let child_calls = Rc::clone(&calls);
+        let job = job(scan, move || {
+            child_calls.set(child_calls.get() + 1);
+            Ok(None)
+        });
+        drop(job);
+        assert_eq!(calls.get(), 0);
+        assert!(snapshot.exists());
+        Ok(())
     }
 
     #[test]
