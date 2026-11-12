@@ -131,6 +131,8 @@ export function checkSteps(options: { packages: readonly FuzzPackage[]; fuzz: bo
         "-p",
         "adamite-access",
         "-p",
+        "adamite-mcp",
+        "-p",
         "adamite-io",
         "-p",
         "adamite-cli",

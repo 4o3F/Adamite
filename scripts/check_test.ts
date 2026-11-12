@@ -151,6 +151,8 @@ Deno.test("normal checks run once without feature flags and keep the no_std buil
         "-p",
         "adamite-access",
         "-p",
+        "adamite-mcp",
+        "-p",
         "adamite-io",
         "-p",
         "adamite-cli",

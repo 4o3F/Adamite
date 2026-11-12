@@ -103,6 +103,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "adamite-mcp"
+version = "0.1.0"
+dependencies = [
+ "adamite-access",
+ "adamite-core",
+ "adamite-fixtures",
+ "adamite-format",
+ "adamite-io",
+ "snafu",
+ "tempfile",
+]
+
+[[package]]
 name = "adamite-ntfs"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,21 @@
+[package]
+name = "adamite-mcp"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+adamite-access = { version = "0.1.0", path = "../adamite-access" }
+adamite-core = { version = "0.1.0", path = "../adamite-core" }
+adamite-format = { version = "0.1.0", path = "../adamite-format" }
+adamite-io = { version = "0.1.0", path = "../adamite-io" }
+snafu.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+adamite-fixtures = { version = "0.1.0", path = "../adamite-fixtures" }
+
+[lints]
+workspace = true
