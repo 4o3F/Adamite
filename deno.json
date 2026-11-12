@@ -7,7 +7,8 @@
     "fuzz-corpus": "deno run --frozen --allow-run=cargo,zstd --allow-read=tests/fixtures/ntfs,crates/adamite-ntfs/fuzz/fuzz_targets/typed_values/selectors.rs,crates/adamite-core/fuzz/corpus/persist --allow-write=crates/adamite-ntfs/fuzz/corpus,crates/adamite-core/fuzz/corpus scripts/fuzz_corpus.ts",
     "ci-lint": "deno run --frozen --allow-read=.github/workflows,.claude-plugin/marketplace.json,plugins/adamite/.claude-plugin/plugin.json,plugins/adamite/.mcp.json,plugins/adamite/skills/disk-usage/SKILL.md scripts/ci_lint.ts",
     "package": "deno run --frozen --allow-read=crates/adamite-cli/Cargo.toml,target/release/adamite,target/release/adamite.exe --allow-write=dist scripts/package.ts",
-    "release-check": "deno run --frozen --allow-read=crates/adamite-cli/Cargo.toml scripts/package.ts --release-check"
+    "release-check": "deno run --frozen --allow-read=crates/adamite-cli/Cargo.toml scripts/package.ts --release-check",
+    "release-notes": "deno run --frozen --allow-read=crates/adamite-cli/Cargo.toml,CHANGELOG.md --allow-write=target scripts/package.ts --release-notes"
   },
   "imports": {
     "@std/tar": "jsr:@std/tar@0.1.10",

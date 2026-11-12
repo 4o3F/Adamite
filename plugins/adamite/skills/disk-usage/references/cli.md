@@ -2,7 +2,7 @@
 
 Use these commands when Adamite MCP tools are absent. Install the `adamite` binary separately on PATH. Query an existing `.adm` file to avoid starting a scan while investigating usage. Replace `C.adm` with the selected snapshot's path and quote paths containing spaces.
 
-The command forms below were checked against `adamite <command> --help` from `cargo build -p adamite-cli --locked` (debug build, version 0.1.0).
+The command forms below were checked against `adamite <command> --help` from `cargo build -p adamite-cli --locked` (debug build, version 0.1.0-beta.1).
 
 ## Query commands
 

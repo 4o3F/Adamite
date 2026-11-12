@@ -1,6 +1,6 @@
 [package]
 name = "adamite-ntfs"
-version = "0.1.0"
+version = "0.1.0-beta.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -10,7 +10,7 @@ publish = false
 snafu.workspace = true
 
 [dev-dependencies]
-adamite-fixtures = { version = "0.1.0", path = "../adamite-fixtures" }
+adamite-fixtures = { version = "0.1.0-beta.1", path = "../adamite-fixtures" }
 proptest = { version = "1.12", default-features = false, features = ["std"] }
 serde_json.workspace = true
 

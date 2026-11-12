@@ -1,15 +1,15 @@
 [package]
 name = "adamite-access"
-version = "0.1.0"
+version = "0.1.0-beta.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
 
 [dependencies]
-adamite-core = { version = "0.1.0", path = "../adamite-core" }
-adamite-format = { version = "0.1.0", path = "../adamite-format" }
-adamite-io = { version = "0.1.0", path = "../adamite-io" }
+adamite-core = { version = "0.1.0-beta.1", path = "../adamite-core" }
+adamite-format = { version = "0.1.0-beta.1", path = "../adamite-format" }
+adamite-io = { version = "0.1.0-beta.1", path = "../adamite-io" }
 serde.workspace = true
 serde_json.workspace = true
 snafu.workspace = true
@@ -17,7 +17,7 @@ tracing.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
-adamite-fixtures = { version = "0.1.0", path = "../adamite-fixtures" }
+adamite-fixtures = { version = "0.1.0-beta.1", path = "../adamite-fixtures" }
 
 [lints]
 workspace = true

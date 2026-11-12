@@ -699,19 +699,29 @@ Deno.test("release checks CI before publishing its merged artifacts without rebu
     ghRelease && /^softprops\/action-gh-release@v\d+$/.test(ghRelease.uses ?? ""),
     "gh-release must be pinned to a major",
   );
-  equal(publish.steps, [
-    checkout,
-    setup,
-    { run: "deno task release-check ${{ github.ref_name }}" },
-    {
-      uses: `actions/download-artifact@${uploadMajor}`,
-      with: { pattern: "adamite-*", "merge-multiple": true, path: "dist/" },
-    },
-    {
-      uses: ghRelease.uses,
-      with: { files: "dist/*", fail_on_unmatched_files: true },
-    },
-  ], "checkout, identical Deno setup, tag validation, merged downloads and publication only");
+  equal(
+    publish.steps,
+    [
+      checkout,
+      setup,
+      { run: "deno task release-check ${{ github.ref_name }}" },
+      {
+        uses: `actions/download-artifact@${uploadMajor}`,
+        with: { pattern: "adamite-*", "merge-multiple": true, path: "dist/" },
+      },
+      { run: "deno task release-notes ${{ github.ref_name }}" },
+      {
+        uses: ghRelease.uses,
+        with: {
+          files: "dist/*",
+          fail_on_unmatched_files: true,
+          prerelease: "${{ contains(github.ref_name, '-') }}",
+          body_path: "target/RELEASE_NOTES.md",
+        },
+      },
+    ],
+    "checkout, Deno setup, tag validation, merged downloads, changelog notes and publication only",
+  );
   assertOneLineRuns(release, ".github/workflows/release.yml");
 });
 

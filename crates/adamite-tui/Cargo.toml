@@ -1,14 +1,14 @@
 [package]
 name = "adamite-tui"
-version = "0.1.0"
+version = "0.1.0-beta.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
 
 [dependencies]
-adamite-core = { version = "0.1.0", path = "../adamite-core" }
-adamite-format = { version = "0.1.0", path = "../adamite-format" }
+adamite-core = { version = "0.1.0-beta.1", path = "../adamite-core" }
+adamite-format = { version = "0.1.0-beta.1", path = "../adamite-format" }
 ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
 snafu.workspace = true
 tracing.workspace = true
@@ -16,8 +16,8 @@ unicode-width = "0.2.3"
 tui-input = { version = "0.15.5", default-features = false, features = ["crossterm"] }
 
 [dev-dependencies]
-adamite-fixtures = { version = "0.1.0", path = "../adamite-fixtures" }
-adamite-io = { version = "0.1.0", path = "../adamite-io" }
+adamite-fixtures = { version = "0.1.0-beta.1", path = "../adamite-fixtures" }
+adamite-io = { version = "0.1.0-beta.1", path = "../adamite-io" }
 
 [lints]
 workspace = true

@@ -1,13 +1,13 @@
 [package]
 name = "adamite-io"
-version = "0.1.0"
+version = "0.1.0-beta.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
 
 [dependencies]
-adamite-core = { version = "0.1.0", path = "../adamite-core" }
+adamite-core = { version = "0.1.0-beta.1", path = "../adamite-core" }
 nt-time = { version = "0.15", default-features = false, features = ["std"] }
 snafu.workspace = true
 tracing.workspace = true
@@ -22,7 +22,7 @@ windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Storage_Fil
 
 [dev-dependencies]
 tempfile = "3"
-adamite-fixtures = { version = "0.1.0", path = "../adamite-fixtures" }
+adamite-fixtures = { version = "0.1.0-beta.1", path = "../adamite-fixtures" }
 proptest = { version = "1.12", default-features = false, features = ["std"] }
 
 [lints]

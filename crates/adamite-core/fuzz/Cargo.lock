@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "adamite-core"
-version = "0.1.0"
+version = "0.1.0-beta.1"
 dependencies = [
  "adamite-ntfs",
  "crc32fast",
@@ -26,7 +26,7 @@ dependencies = [
 
 [[package]]
 name = "adamite-fixtures"
-version = "0.1.0"
+version = "0.1.0-beta.1"
 dependencies = [
  "adamite-ntfs",
  "ruzstd",
@@ -37,7 +37,7 @@ dependencies = [
 
 [[package]]
 name = "adamite-ntfs"
-version = "0.1.0"
+version = "0.1.0-beta.1"
 dependencies = [
  "snafu",
 ]

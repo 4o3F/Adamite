@@ -6,6 +6,8 @@ import {
   type PackageArtifact,
   packageRelease,
   readVersion,
+  releaseNotes,
+  writeReleaseNotes,
 } from "./package.ts";
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -200,6 +202,39 @@ Deno.test("command dispatch validates arguments and routes release checks and pa
       await Deno.readTextFile(`${root}/dist/adamite-${version}-x86_64-pc-windows-msvc.exe`),
       "abc",
       "command packages the binary",
+    );
+  });
+});
+
+Deno.test("release notes take exactly the version's changelog section", () => {
+  const changelog = "# Changelog\n\n## 1.2.3-rc.1\n\n- Added a thing.\n\n## 1.2.2\n\n- Older.\n";
+  equal(releaseNotes(changelog, "1.2.3-rc.1"), "- Added a thing.\n", "section body only");
+  equal(releaseNotes(changelog, "1.2.2"), "- Older.\n", "last section runs to the end");
+  let caught: unknown;
+  try {
+    releaseNotes(changelog, "1.2.3");
+  } catch (error) {
+    caught = error;
+  }
+  assert(caught instanceof Error && caught.message.includes('no "## 1.2.3" section'), "missing");
+  try {
+    releaseNotes("## 1.2.3-rc.1\n\n## 1.2.2\n- Older.\n", "1.2.3-rc.1");
+    caught = undefined;
+  } catch (error) {
+    caught = error;
+  }
+  assert(caught instanceof Error && caught.message.includes("is empty"), "empty section");
+});
+
+Deno.test("release-notes checks the tag and writes target/RELEASE_NOTES.md", async () => {
+  await withTestTree(async (root) => {
+    await Deno.writeTextFile(`${root}/CHANGELOG.md`, `## ${version}\n\n- Notes.\n`);
+    await rejects(() => writeReleaseNotes("v0.0.1", root), "release tag mismatch");
+    await main(["--release-notes", `v${version}`], root);
+    equal(
+      await Deno.readTextFile(`${root}/target/RELEASE_NOTES.md`),
+      "- Notes.\n",
+      "notes file",
     );
   });
 });

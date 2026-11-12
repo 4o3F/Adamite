@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "adamite-access"
-version = "0.1.0"
+version = "0.1.0-beta.1"
 dependencies = [
  "adamite-core",
  "adamite-fixtures",
@@ -19,7 +19,7 @@ dependencies = [
 
 [[package]]
 name = "adamite-bench"
-version = "0.1.0"
+version = "0.1.0-beta.1"
 dependencies = [
  "adamite-core",
  "adamite-fixtures",
@@ -34,7 +34,7 @@ dependencies = [
 
 [[package]]
 name = "adamite-cli"
-version = "0.1.0"
+version = "0.1.0-beta.1"
 dependencies = [
  "adamite-access",
  "adamite-core",
@@ -55,7 +55,7 @@ dependencies = [
 
 [[package]]
 name = "adamite-core"
-version = "0.1.0"
+version = "0.1.0-beta.1"
 dependencies = [
  "adamite-fixtures",
  "adamite-ntfs",
@@ -68,7 +68,7 @@ dependencies = [
 
 [[package]]
 name = "adamite-fixtures"
-version = "0.1.0"
+version = "0.1.0-beta.1"
 dependencies = [
  "adamite-ntfs",
  "ruzstd",
@@ -79,7 +79,7 @@ dependencies = [
 
 [[package]]
 name = "adamite-format"
-version = "0.1.0"
+version = "0.1.0-beta.1"
 dependencies = [
  "adamite-core",
  "nt-time",
@@ -88,7 +88,7 @@ dependencies = [
 
 [[package]]
 name = "adamite-io"
-version = "0.1.0"
+version = "0.1.0-beta.1"
 dependencies = [
  "adamite-core",
  "adamite-fixtures",
@@ -105,7 +105,7 @@ dependencies = [
 
 [[package]]
 name = "adamite-mcp"
-version = "0.1.0"
+version = "0.1.0-beta.1"
 dependencies = [
  "adamite-access",
  "adamite-core",
@@ -123,7 +123,7 @@ dependencies = [
 
 [[package]]
 name = "adamite-ntfs"
-version = "0.1.0"
+version = "0.1.0-beta.1"
 dependencies = [
  "adamite-fixtures",
  "proptest",
@@ -133,7 +133,7 @@ dependencies = [
 
 [[package]]
 name = "adamite-profile"
-version = "0.1.0"
+version = "0.1.0-beta.1"
 dependencies = [
  "serde_json",
  "snafu",
@@ -144,7 +144,7 @@ dependencies = [
 
 [[package]]
 name = "adamite-tui"
-version = "0.1.0"
+version = "0.1.0-beta.1"
 dependencies = [
  "adamite-core",
  "adamite-fixtures",

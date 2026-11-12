@@ -1,13 +1,13 @@
 [package]
 name = "adamite-format"
-version = "0.1.0"
+version = "0.1.0-beta.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
 
 [dependencies]
-adamite-core = { version = "0.1.0", path = "../adamite-core" }
+adamite-core = { version = "0.1.0-beta.1", path = "../adamite-core" }
 nt-time = { version = "0.15", default-features = false, features = ["std"] }
 time = { version = "0.3", features = ["formatting"] }
 

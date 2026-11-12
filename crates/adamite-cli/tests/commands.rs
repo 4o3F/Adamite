@@ -1252,7 +1252,7 @@ fn clap_usage_help_and_version() -> TestResult {
         }
         assert!(
             text.contains(if args.contains(&"--version") {
-                "adamite 0.1.0"
+                concat!("adamite ", env!("CARGO_PKG_VERSION"))
             } else {
                 "Usage:"
             }),

@@ -73,15 +73,40 @@ export async function checkReleaseTag(tag: string, root: string): Promise<void> 
   }
 }
 
+export function releaseNotes(changelog: string, version: string): string {
+  const heading = `## ${version}`;
+  const lines = changelog.split("\n");
+  const start = lines.findIndex((line) => line.trimEnd() === heading);
+  if (start < 0) throw new Error(`CHANGELOG.md has no "${heading}" section`);
+  const rest = lines.slice(start + 1);
+  const end = rest.findIndex((line) => line.startsWith("## "));
+  const body = (end < 0 ? rest : rest.slice(0, end)).join("\n").trim();
+  if (!body) throw new Error(`CHANGELOG.md section "${heading}" is empty`);
+  return `${body}\n`;
+}
+
+export async function writeReleaseNotes(tag: string, root: string): Promise<string> {
+  await checkReleaseTag(tag, root);
+  const notes = releaseNotes(await Deno.readTextFile(`${root}/CHANGELOG.md`), tag.slice(1));
+  await Deno.mkdir(`${root}/target`, { recursive: true });
+  const path = `${root}/target/RELEASE_NOTES.md`;
+  await Deno.writeTextFile(path, notes);
+  return path;
+}
+
 export async function main(args: readonly string[], root: string): Promise<void> {
   if (args.length === 2 && args[0] === "--release-check") {
     await checkReleaseTag(args[1], root);
     console.log(`Release tag matches: ${args[1]}`);
-  } else if (args.length === 1 && args[0] !== "--release-check") {
+  } else if (args.length === 2 && args[0] === "--release-notes") {
+    console.log(`Wrote ${await writeReleaseNotes(args[1], root)}`);
+  } else if (args.length === 1 && !args[0].startsWith("--release-")) {
     const artifact = await packageRelease(args[0], root);
     console.log(`Packaged ${artifact.path} and ${artifact.checksumPath}`);
   } else {
-    throw new Error("usage: deno task package <Linux|Windows> or deno task release-check <tag>");
+    throw new Error(
+      "usage: deno task package <Linux|Windows>, deno task release-check <tag> or deno task release-notes <tag>",
+    );
   }
 }
 

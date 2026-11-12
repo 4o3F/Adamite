@@ -1,6 +1,6 @@
 [package]
 name = "adamite-cli"
-version = "0.1.0"
+version = "0.1.0-beta.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -11,13 +11,13 @@ name = "adamite"
 path = "src/main.rs"
 
 [dependencies]
-adamite-access = { version = "0.1.0", path = "../adamite-access" }
-adamite-mcp = { version = "0.1.0", path = "../adamite-mcp" }
-adamite-profile = { version = "0.1.0", path = "../adamite-profile" }
-adamite-core = { version = "0.1.0", path = "../adamite-core" }
-adamite-format = { version = "0.1.0", path = "../adamite-format" }
-adamite-io = { version = "0.1.0", path = "../adamite-io" }
-adamite-tui = { version = "0.1.0", path = "../adamite-tui" }
+adamite-access = { version = "0.1.0-beta.1", path = "../adamite-access" }
+adamite-mcp = { version = "0.1.0-beta.1", path = "../adamite-mcp" }
+adamite-profile = { version = "0.1.0-beta.1", path = "../adamite-profile" }
+adamite-core = { version = "0.1.0-beta.1", path = "../adamite-core" }
+adamite-format = { version = "0.1.0-beta.1", path = "../adamite-format" }
+adamite-io = { version = "0.1.0-beta.1", path = "../adamite-io" }
+adamite-tui = { version = "0.1.0-beta.1", path = "../adamite-tui" }
 clap.workspace = true
 serde_json.workspace = true
 snafu.workspace = true
@@ -27,7 +27,7 @@ indicatif = { version = "0.18.6", default-features = false, features = ["unicode
 
 [dev-dependencies]
 tempfile = "3"
-adamite-fixtures = { version = "0.1.0", path = "../adamite-fixtures" }
+adamite-fixtures = { version = "0.1.0-beta.1", path = "../adamite-fixtures" }
 
 [lints]
 workspace = true
