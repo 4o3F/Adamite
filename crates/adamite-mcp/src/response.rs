@@ -1,6 +1,6 @@
 use crate::{McpError, SnapshotInfo, parameters::Format};
 use adamite_access::{DirectoryLookup, ReportError, report::Envelope};
-use adamite_core::snapshot::{NodeId, Snapshot};
+use adamite_core::snapshot::{NodeId, QueryError, Snapshot};
 use adamite_format::{Age, Escaped, ScanTime};
 use rmcp::model::{CallToolResult, ContentBlock};
 use serde::Serialize;
@@ -11,11 +11,15 @@ use std::{
     time::{Duration, SystemTime},
 };
 
+/// Maximum encoded MCP result size, including duplicated structured content.
+const OUTPUT_CAP: usize = 32_768;
+
 /// A complete response assembled before wire encoding; the item cap belongs here.
 #[derive(Debug)]
 pub(crate) struct Response {
     text: String,
     json: Value,
+    paging: Option<(usize, usize)>,
 }
 
 impl Response {
@@ -35,12 +39,15 @@ impl Response {
         let mut json = serde_json::to_value(report).map_err(Self::encoding_error)?;
         json["snapshot"]["path"] = json!(snapshot.source);
         Self::age(&mut json["snapshot"], snapshot.scanned_at, now, stale_after);
-        json["truncated"] = json!(false);
+        if json.get("truncated").is_none() {
+            json["truncated"] = json!(false);
+        }
         json["next_offset"] = Value::Null;
         Ok(Self {
             text: String::from_utf8(bytes)
                 .map_err(|error| Self::output_error(io::Error::other(error)))?,
             json,
+            paging: None,
         })
     }
 
@@ -106,39 +113,185 @@ impl Response {
                 "truncated": false,
                 "next_offset": null,
             }),
+            paging: None,
         })
     }
 
-    pub(crate) fn page(&mut self, offset: usize, count: usize, total: usize) {
-        let end = offset.saturating_add(count);
-        if end < total {
-            self.json["next_offset"] = json!(end);
-            self.text.push_str(&format!(
-                "showing {}–{end} of {total} · next offset={end}\n",
-                offset.saturating_add(1)
-            ));
-        }
+    pub(crate) fn page(&mut self, offset: usize, total: usize) {
+        self.paging = Some((offset, total));
     }
 
-    pub(crate) fn finish(self, format: Format) -> CallToolResult {
-        match format {
-            Format::Text => CallToolResult::success(vec![ContentBlock::text(self.text)]),
-            Format::Json => CallToolResult::structured(self.json),
+    pub(crate) fn finish(mut self, format: Format) -> CallToolResult {
+        let key = if self.json.get("rows").is_some() {
+            "rows"
+        } else {
+            "items"
+        };
+        let items = self.json[key].as_array().cloned().unwrap_or_default();
+        let mut count = items.len();
+        let mut fitting = 0;
+        let mut oversized = count.saturating_add(1);
+        // Every report renderer escapes embedded newlines and writes one line per item.
+        let mut lines: Vec<String> = self.text.lines().map(str::to_owned).collect();
+        let prefix = lines.len().saturating_sub(count);
+        loop {
+            let mut text = lines
+                .iter()
+                .take(prefix.saturating_add(count))
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                .join("\n");
+            text.push('\n');
+            if self.json["truncated"] == true {
+                text.push_str("truncated\n");
+            }
+            if let Some((offset, total)) = self.paging {
+                let end = offset.saturating_add(count);
+                self.json["next_offset"] = if end < total { json!(end) } else { Value::Null };
+                if end < total {
+                    text.push_str(&format!(
+                        "showing {}–{end} of {total} · next offset={end}\n",
+                        offset.saturating_add(1)
+                    ));
+                }
+            }
+            let result = match format {
+                Format::Text => CallToolResult::success(vec![ContentBlock::text(&text)]),
+                Format::Json => CallToolResult::structured(self.json.clone()),
+            };
+            // Include the MCP result wrapper and the duplicated structured JSON in the cap.
+            if serde_json::to_vec(&result).is_ok_and(|bytes| bytes.len() <= OUTPUT_CAP) {
+                if count.saturating_add(1) >= oversized {
+                    return result;
+                }
+                fitting = count;
+                count = fitting.saturating_add(oversized.saturating_sub(fitting) / 2);
+                self.json[key] = json!(&items[..count]);
+                continue;
+            }
+            self.json["truncated"] = json!(true);
+            if count > 1 {
+                oversized = count;
+                count = fitting
+                    .saturating_add(oversized.saturating_sub(fitting) / 2)
+                    .max(1);
+                self.json[key] = json!(&items[..count]);
+            } else {
+                // Preserve an oversized single item; shrink its strings at UTF-8 boundaries.
+                oversized = count.saturating_add(1);
+                let longest = Self::longest_string(&self.json);
+                Self::shorten_value(&mut self.json, longest);
+                let longest = lines
+                    .iter()
+                    .take(prefix.saturating_add(count))
+                    .map(String::len)
+                    .max()
+                    .unwrap_or(0);
+                for line in lines.iter_mut().take(prefix.saturating_add(count)) {
+                    if line.len() == longest {
+                        *line = Self::shorten(line, longest.div_ceil(2));
+                    }
+                }
+            }
         }
     }
 
     pub(crate) fn error(error: McpError, format: Format) -> CallToolResult {
-        let message = format!(
+        let mut message = format!(
             "error[{}]: {}\nnext: {}",
             error.code(),
             Self::one_line(&error.to_string()),
             Self::one_line(&error.next_step())
         );
-        match format {
-            Format::Text => CallToolResult::error(vec![ContentBlock::text(message)]),
-            Format::Json => {
-                CallToolResult::structured_error(json!({"schema": "adamite/1", "error": message}))
+        loop {
+            let result = match format {
+                Format::Text => CallToolResult::error(vec![ContentBlock::text(&message)]),
+                Format::Json => CallToolResult::structured_error(
+                    json!({"schema": "adamite/1", "error": message}),
+                ),
+            };
+            if serde_json::to_vec(&result).is_ok_and(|bytes| bytes.len() <= OUTPUT_CAP) {
+                return result;
             }
+            let longest = message.lines().map(str::len).max().unwrap_or(0);
+            message = message
+                .lines()
+                .map(|line| {
+                    if line.len() == longest {
+                        Self::shorten(line, longest.div_ceil(2))
+                    } else {
+                        line.to_owned()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+        }
+    }
+
+    fn shorten(value: &str, limit: usize) -> String {
+        if value.len() <= limit {
+            return value.to_owned();
+        }
+        let half = limit.saturating_sub('…'.len_utf8()) / 2;
+        let mut start = half;
+        while !value.is_char_boundary(start) {
+            start = start.saturating_sub(1);
+        }
+        let mut end = value.len().saturating_sub(half);
+        while !value.is_char_boundary(end) {
+            end = end.saturating_add(1);
+        }
+        format!("{}…{}", &value[..start], &value[end..])
+    }
+
+    fn longest_string(value: &Value) -> usize {
+        match value {
+            Value::String(text) => text.len(),
+            Value::Array(items) => items.iter().map(Self::longest_string).max().unwrap_or(0),
+            Value::Object(fields) => fields.values().map(Self::longest_string).max().unwrap_or(0),
+            _ => 0,
+        }
+    }
+
+    fn shorten_value(value: &mut Value, longest: usize) {
+        match value {
+            Value::String(text) if text.len() == longest => {
+                *text = Self::shorten(text, longest.div_ceil(2))
+            }
+            Value::Array(items) => items
+                .iter_mut()
+                .for_each(|item| Self::shorten_value(item, longest)),
+            Value::Object(fields) => fields
+                .values_mut()
+                .for_each(|field| Self::shorten_value(field, longest)),
+            _ => {}
+        }
+    }
+
+    pub(crate) fn range(name: &str, value: i64, maximum: usize) -> Result<usize, McpError> {
+        usize::try_from(value)
+            .ok()
+            .filter(|value| (1..=maximum).contains(value))
+            .ok_or_else(|| McpError::InvalidArgument {
+                message: format!("{name} {value} is outside the allowed range"),
+                allowed: format!("Pass {name} from 1 through {maximum}."),
+            })
+    }
+
+    pub(crate) fn query_error(error: QueryError) -> McpError {
+        let allowed = match &error {
+            QueryError::InvalidKind => {
+                "Pass kind: video, audio, image, archive, disk-image, document, code, executable, or other."
+            }
+            QueryError::InvalidGlob { .. } | QueryError::PatternTooLong { .. } => {
+                "Use a name glob of at most 256 bytes: * (any characters), ? (one character), [abc] (character class), {a,b} (alternatives), or a plain substring. Backslash escapes glob characters."
+            }
+            QueryError::InvalidArgument { reason } => reason,
+            _ => return McpError::io("", io::Error::other(error)),
+        };
+        McpError::InvalidArgument {
+            message: error.to_string(),
+            allowed: allowed.into(),
         }
     }
 
@@ -176,6 +329,16 @@ impl Response {
                     usize::MAX
                 ),
             },
+            ReportError::Query {
+                source: QueryError::NotADirectory { node },
+            } => McpError::NotADirectory {
+                path: snapshot
+                    .path(node)
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(|| format!("/#{}", node.raw())),
+            },
+            ReportError::Query { source } => Self::query_error(source),
             source => McpError::io("", io::Error::other(source)),
         }
     }

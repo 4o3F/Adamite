@@ -23,6 +23,7 @@ mod save;
 mod scan_job;
 mod scan_job_error;
 mod scan_options;
+mod selection;
 mod snapshot_catalog;
 mod source;
 mod status_file;
@@ -38,3 +39,5 @@ pub use scan_job_error::ScanJobError;
 pub use scan_options::{ReadRate, ScanOptions};
 pub use snapshot_catalog::SnapshotCatalog;
 pub use status_file::StatusFile;
+
+pub use selection::{AllocationShare, BreakdownBy, BreakdownStats};

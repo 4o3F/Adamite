@@ -1,7 +1,7 @@
 use super::Report;
 use crate::report::{
-    Envelope, ExtReport, InfoReport, KindReport, LsItem, LsReport, SavedReport, SearchReport,
-    TopReport, TreeReport,
+    Envelope, ExtReport, InfoReport, KindReport, LsItem, LsReport, NodeReport, SavedReport,
+    SearchReport, TopReport, TreeReport,
 };
 use adamite_format::{ByteSize, Escaped, ExtensionLabel, InfoFields};
 use std::io::{self, Write};
@@ -145,6 +145,16 @@ impl InfoReport<'_> {
 impl Report for TopReport<'_> {
     fn write_text(&self, stdout: &mut impl Write, raw_bytes: bool) -> io::Result<()> {
         Header(&self.envelope).write(stdout)?;
+        self.write_entries(stdout, raw_bytes)
+    }
+}
+
+impl TopReport<'_> {
+    /// Writes the size table without the source header or paging footer.
+    ///
+    /// # Errors
+    /// Returns any error from the supplied writer.
+    pub fn write_entries(&self, stdout: &mut impl Write, raw_bytes: bool) -> io::Result<()> {
         SizeTable {
             sizes: ["Size", "Alloc"],
             count: None,
@@ -166,6 +176,16 @@ impl Report for TopReport<'_> {
 impl Report for ExtReport<'_> {
     fn write_text(&self, stdout: &mut impl Write, raw_bytes: bool) -> io::Result<()> {
         Header(&self.envelope).write(stdout)?;
+        self.write_entries(stdout, raw_bytes)
+    }
+}
+
+impl ExtReport<'_> {
+    /// Writes the size table without the source header or paging footer.
+    ///
+    /// # Errors
+    /// Returns any error from the supplied writer.
+    pub fn write_entries(&self, stdout: &mut impl Write, raw_bytes: bool) -> io::Result<()> {
         SizeTable {
             sizes: ["Size", "Alloc"],
             count: Some("Count"),
@@ -187,6 +207,16 @@ impl Report for ExtReport<'_> {
 impl Report for KindReport<'_> {
     fn write_text(&self, stdout: &mut impl Write, raw_bytes: bool) -> io::Result<()> {
         Header(&self.envelope).write(stdout)?;
+        self.write_entries(stdout, raw_bytes)
+    }
+}
+
+impl KindReport<'_> {
+    /// Writes the size table without the source header or paging footer.
+    ///
+    /// # Errors
+    /// Returns any error from the supplied writer.
+    pub fn write_entries(&self, stdout: &mut impl Write, raw_bytes: bool) -> io::Result<()> {
         SizeTable {
             sizes: ["Size", "Alloc"],
             count: Some("Count"),
@@ -208,18 +238,7 @@ impl Report for KindReport<'_> {
 impl Report for SearchReport<'_> {
     fn write_text(&self, stdout: &mut impl Write, raw_bytes: bool) -> io::Result<()> {
         Header(&self.envelope).write(stdout)?;
-        SizeTable {
-            sizes: ["Total size", "Total alloc"],
-            count: Some("Files"),
-            name: "Path",
-            column: SizeColumn { raw_bytes },
-        }
-        .write(
-            stdout,
-            self.items
-                .iter()
-                .map(|item| SizeRow::node(&item.node, &item.path)),
-        )?;
+        self.write_entries(stdout, raw_bytes)?;
         if let Some((start, end)) = self.shown {
             write!(stdout, "showing {start}–{end} of {}", self.total_matches)?;
             if let Some(next) = self.next_offset {
@@ -231,6 +250,27 @@ impl Report for SearchReport<'_> {
         } else {
             writeln!(stdout, "showing 0 of {}", self.total_matches)
         }
+    }
+}
+
+impl SearchReport<'_> {
+    /// Writes the size table without the source header or paging footer.
+    ///
+    /// # Errors
+    /// Returns any error from the supplied writer.
+    pub fn write_entries(&self, stdout: &mut impl Write, raw_bytes: bool) -> io::Result<()> {
+        SizeTable {
+            sizes: ["Total size", "Total alloc"],
+            count: Some("Files"),
+            name: "Path",
+            column: SizeColumn { raw_bytes },
+        }
+        .write(
+            stdout,
+            self.items
+                .iter()
+                .map(|item| SizeRow::node(&item.node, &item.path)),
+        )
     }
 }
 
@@ -278,6 +318,16 @@ impl Report for TreeReport<'_> {
     fn write_text(&self, stdout: &mut impl Write, raw_bytes: bool) -> io::Result<()> {
         self.envelope
             .write_allocation_header(stdout, std::time::SystemTime::now())?;
+        self.write_entries(stdout, raw_bytes)
+    }
+}
+
+impl TreeReport<'_> {
+    /// Writes the tree columns and rows without the snapshot header.
+    ///
+    /// # Errors
+    /// Returns any error from the supplied writer.
+    pub fn write_entries(&self, stdout: &mut impl Write, raw_bytes: bool) -> io::Result<()> {
         let column = SizeColumn { raw_bytes };
         let width = column.width();
         writeln!(stdout, "{:>width$}  {:>6}  name", "alloc", "share")?;
@@ -296,6 +346,56 @@ impl Report for TreeReport<'_> {
             } else {
                 writeln!(stdout, "{}", Escaped(row.name))?;
             }
+        }
+        Ok(())
+    }
+}
+
+impl Report for NodeReport<'_> {
+    fn write_text(&self, stdout: &mut impl Write, raw_bytes: bool) -> io::Result<()> {
+        Header(&self.envelope).write(stdout)?;
+        self.write_details(stdout, raw_bytes)
+    }
+}
+
+impl NodeReport<'_> {
+    /// Writes node identity, sizes, flags, hard links and modification time.
+    ///
+    /// # Errors
+    /// Returns any error from the supplied writer.
+    pub fn write_details(&self, stdout: &mut impl Write, raw_bytes: bool) -> io::Result<()> {
+        let column = SizeColumn { raw_bytes };
+        writeln!(
+            stdout,
+            "name: {}\npath: {}\nkind: {}\nNodeId: {}\nflags: {}\nhard links: {}",
+            Escaped(self.node.name),
+            Escaped(&self.path),
+            self.node.kind,
+            self.node_id,
+            self.node.flags.join(", "),
+            self.hard_link_count
+        )?;
+        writeln!(
+            stdout,
+            "alloc: {}\nsize: {}",
+            column.value(self.node.alloc),
+            column.value(self.node.size)
+        )?;
+        if self.node.kind == "dir" {
+            writeln!(
+                stdout,
+                "total alloc: {}\ntotal size: {}\nfiles: {}",
+                column.value(self.node.total_alloc),
+                column.value(self.node.total_size),
+                self.node.file_count
+            )?;
+        }
+        if let Some(time) = &self.mtime_filetime {
+            writeln!(
+                stdout,
+                "modified: {} (FILETIME {time})",
+                self.modified_at.as_deref().unwrap_or("unknown")
+            )?;
         }
         Ok(())
     }

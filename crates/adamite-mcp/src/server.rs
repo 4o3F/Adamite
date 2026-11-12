@@ -1,9 +1,19 @@
 use crate::{
     McpError, SnapshotOptions, SnapshotStore,
-    parameters::{Format, ListDirParams, SnapshotParams},
+    parameters::{
+        BreakdownParams, Format, GroupBy, ListDirParams, NodeParams, SearchParams, SnapshotParams,
+        TopParams, TreeParams,
+    },
     response::Response,
 };
-use adamite_access::report::{InfoReport, LsReport};
+use adamite_access::{
+    AllocationShare, BreakdownBy, BreakdownStats, DirectoryLookup,
+    report::{
+        ExtReport, InfoReport, KindReport, LsReport, NodeReport, SearchReport, TopReport,
+        TreeReport,
+    },
+};
+use adamite_core::snapshot::{FileFilter, FileKind, NamePattern};
 use rmcp::{
     ServerHandler, ServiceExt,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
@@ -152,13 +162,7 @@ impl McpServer {
     #[tool(annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false))]
     async fn list_dir(&self, Parameters(params): Parameters<ListDirParams>) -> CallToolResult {
         self.query(params.format, move |store, stale_after| {
-            let limit = usize::try_from(params.limit)
-                .ok()
-                .filter(|limit| (1..=500).contains(limit))
-                .ok_or_else(|| McpError::InvalidArgument {
-                    message: format!("limit {} is outside the allowed range", params.limit),
-                    allowed: "Pass limit from 1 through 500.".into(),
-                })?;
+            let limit = Response::range("limit", params.limit, 500)?;
             let path = store.select(params.snapshot.as_deref())?;
             let output = store.load_path(&path)?;
             let mut report = LsReport::new(&path, &output, &params.path, params.offset, limit)
@@ -168,8 +172,154 @@ impl McpServer {
                 Response::report(&report, &report.envelope, stale_after, |writer| {
                     report.write_entries(writer, false)
                 })?;
-            response.page(report.offset, report.items.len(), report.total_children);
+            response.page(report.offset, report.total_children);
             Ok(response)
+        })
+        .await
+    }
+
+    /// Summarizes a directory within a row budget, collapsing smaller sibling groups.
+    #[tool(annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false))]
+    async fn get_tree(&self, Parameters(params): Parameters<TreeParams>) -> CallToolResult {
+        self.query(params.common.format, move |store, stale_after| {
+            let budget = Response::range("budget", params.budget, 400)?;
+            let share =
+                AllocationShare::from_percent(params.min_share_percent).ok_or_else(|| {
+                    McpError::InvalidArgument {
+                        message: "invalid min_share_percent".into(),
+                        allowed: "Pass a finite percentage from 0 through 100.".into(),
+                    }
+                })?;
+            let path = store.select(params.common.snapshot.as_deref())?;
+            let output = store.load_path(&path)?;
+            let mut report =
+                TreeReport::new(&path, &output, &params.path, budget, share.basis_points())
+                    .map_err(|error| Response::report_error(error, &output.snapshot))?;
+            report.envelope.command = "get_tree";
+            Response::report(&report, &report.envelope, stale_after, |writer| {
+                report.write_entries(writer, false)
+            })
+        })
+        .await
+    }
+
+    /// Lists the largest primary files, optionally filtered by directory, extensions or kind.
+    #[tool(annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false))]
+    async fn top_files(&self, Parameters(params): Parameters<TopParams>) -> CallToolResult {
+        self.query(params.common.format, move |store, stale_after| {
+            let n = Response::range("n", params.n, 100)?;
+            if params.ext.is_some() && params.kind.is_some() {
+                return Err(McpError::InvalidArgument {
+                    message: "ext and kind are mutually exclusive".into(),
+                    allowed: "Pass either ext or kind, or omit both.".into(),
+                });
+            }
+            let filter = match (params.ext, params.kind) {
+                (Some(ext), None) => {
+                    Some(FileFilter::extensions(ext).map_err(Response::query_error)?)
+                }
+                (None, Some(kind)) => Some(FileFilter::Kind(
+                    kind.parse::<FileKind>().map_err(Response::query_error)?,
+                )),
+                _ => None,
+            };
+            let path = store.select(params.common.snapshot.as_deref())?;
+            let output = store.load_path(&path)?;
+            let mut report = TopReport::select(
+                &path,
+                &output,
+                u32::try_from(n).map_err(|error| McpError::io("", io::Error::other(error)))?,
+                params.under.as_deref(),
+                filter.as_ref(),
+            )
+            .map_err(|error| Response::report_error(error, &output.snapshot))?;
+            report.envelope.command = "top_files";
+            Response::report(&report, &report.envelope, stale_after, |writer| {
+                report.write_entries(writer, false)
+            })
+        })
+        .await
+    }
+
+    /// Groups primary file allocation by extension or file category.
+    #[tool(annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false))]
+    async fn ext_breakdown(
+        &self,
+        Parameters(params): Parameters<BreakdownParams>,
+    ) -> CallToolResult {
+        self.query(params.common.format, move |store, stale_after| {
+            let n = Response::range("n", params.n, 200)? as u64;
+            let path = store.select(params.common.snapshot.as_deref())?;
+            let output = store.load_path(&path)?;
+            let by = match params.by {
+                GroupBy::Extension => BreakdownBy::Extension,
+                GroupBy::Kind => BreakdownBy::Kind,
+            };
+            match BreakdownStats::new(&output.snapshot, params.under.as_deref(), by)
+                .map_err(|error| Response::report_error(error, &output.snapshot))?
+            {
+                BreakdownStats::Extensions(stats) => {
+                    let mut report = ExtReport::from_stats(&path, &output, &stats, n);
+                    report.envelope.command = "ext_breakdown";
+                    Response::report(&report, &report.envelope, stale_after, |writer| {
+                        report.write_entries(writer, false)
+                    })
+                }
+                BreakdownStats::Kinds(stats) => {
+                    let mut report = KindReport::new(&path, &output, &stats, n);
+                    report.envelope.command = "ext_breakdown";
+                    Response::report(&report, &report.envelope, stale_after, |writer| {
+                        report.write_entries(writer, false)
+                    })
+                }
+            }
+        })
+        .await
+    }
+
+    /// Searches names beneath a directory and returns an offset-based page.
+    #[tool(annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false))]
+    async fn search(&self, Parameters(params): Parameters<SearchParams>) -> CallToolResult {
+        self.query(params.common.format, move |store, stale_after| {
+            let limit = Response::range("limit", params.limit, 500)?;
+            let pattern = NamePattern::glob(&params.pattern).map_err(Response::query_error)?;
+            let path = store.select(params.common.snapshot.as_deref())?;
+            let output = store.load_path(&path)?;
+            let root = output
+                .snapshot
+                .resolve_directory(params.under.as_deref().unwrap_or("/"))
+                .map_err(|error| Response::report_error(error, &output.snapshot))?;
+            let page = output
+                .snapshot
+                .search(root, &pattern, params.offset, limit)
+                .map_err(Response::query_error)?;
+            let report = SearchReport::new(&path, &output, &page, params.offset)
+                .map_err(|error| Response::report_error(error, &output.snapshot))?;
+            let mut response =
+                Response::report(&report, &report.envelope, stale_after, |writer| {
+                    report.write_entries(writer, false)
+                })?;
+            response.page(
+                params.offset,
+                usize::try_from(report.total_matches)
+                    .map_err(|error| McpError::io("", io::Error::other(error)))?,
+            );
+            Ok(response)
+        })
+        .await
+    }
+
+    /// Shows one node's identity, allocation, subtree totals, flags, hard links and timestamp.
+    #[tool(annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false))]
+    async fn node_info(&self, Parameters(params): Parameters<NodeParams>) -> CallToolResult {
+        self.query(params.common.format, move |store, stale_after| {
+            let path = store.select(params.common.snapshot.as_deref())?;
+            let output = store.load_path(&path)?;
+            let report = NodeReport::new(&path, &output, &params.path)
+                .map_err(|error| Response::report_error(error, &output.snapshot))?;
+            Response::report(&report, &report.envelope, stale_after, |writer| {
+                report.write_details(writer, false)
+            })
         })
         .await
     }

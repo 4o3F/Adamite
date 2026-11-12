@@ -3,7 +3,7 @@
 use crate::{DirectoryLookup, ReportError};
 use adamite_core::{
     scan::{ScanOutput, ScanStats},
-    snapshot::{ExtensionStat, KindStat, NodeId, SearchPage, Snapshot},
+    snapshot::{ExtensionStat, FileFilter, KindStat, NodeId, SearchPage, Snapshot},
 };
 use adamite_format::{ScanTime, VolumeSerial};
 use serde::{Serialize, Serializer, ser::SerializeMap};
@@ -190,6 +190,30 @@ impl<'a> TopReport<'a> {
                 .zip(0..n)
                 .map(|(id, _)| id),
         )
+    }
+
+    /// Uses the stored index without filters, otherwise ranks files beneath a directory.
+    ///
+    /// # Errors
+    /// Returns a directory lookup, query or report construction error.
+    pub fn select(
+        source: &'a Path,
+        output: &'a ScanOutput,
+        n: u32,
+        under: Option<&str>,
+        filter: Option<&FileFilter>,
+    ) -> Result<Self, ReportError> {
+        if under.is_none() && filter.is_none() {
+            return Self::new(source, output, n);
+        }
+        let root = output.snapshot.resolve_directory(under.unwrap_or("/"))?;
+        let n = usize::try_from(n).map_err(|_| ReportError::Usage {
+            message: "n exceeds the supported range",
+        })?;
+        let ids = output
+            .snapshot
+            .rank_files(root, filter.unwrap_or(&FileFilter::All), n)?;
+        Self::from_ids(source, output, ids)
     }
 
     /// Builds ranked rows from node identifiers in the supplied order.
@@ -648,6 +672,51 @@ impl<'a> TreeReport<'a> {
             envelope: Envelope::new("tree", source, output),
             rows,
             truncated: summary.truncated,
+        })
+    }
+}
+
+/// Metadata for one resolved file or directory, including named flags and hard links.
+#[derive(Debug, Serialize)]
+pub struct NodeReport<'a> {
+    /// Shared report metadata.
+    #[serde(flatten)]
+    pub envelope: Envelope<'a>,
+    /// Canonical volume-relative path.
+    pub path: String,
+    /// Snapshot-local node identifier.
+    pub node_id: u32,
+    /// On-disk hard-link count.
+    pub hard_link_count: u16,
+    /// Raw modification FILETIME when nonzero.
+    pub mtime_filetime: Option<String>,
+    /// UTC modification timestamp when representable.
+    pub modified_at: Option<String>,
+    /// Node name, kind, sizes, subtree totals and named flags.
+    #[serde(flatten)]
+    pub node: LsItem<'a>,
+}
+
+impl<'a> NodeReport<'a> {
+    /// Resolves a node and reads the metadata retained in the snapshot.
+    ///
+    /// # Errors
+    /// Returns a path lookup or missing metadata error.
+    pub fn new(source: &'a Path, output: &'a ScanOutput, path: &str) -> Result<Self, ReportError> {
+        let snapshot = &output.snapshot;
+        let id = snapshot.resolve_path(path)?;
+        let view = snapshot.node(id).ok_or(ReportError::InconsistentSnapshot {
+            reason: "missing node",
+        })?;
+        let time = (view.mtime() != 0).then_some(view.mtime());
+        Ok(Self {
+            envelope: Envelope::new("node_info", source, output),
+            path: LsItem::path(snapshot, id)?,
+            node_id: id.raw(),
+            hard_link_count: view.nlink(),
+            mtime_filetime: time.map(|time| time.to_string()),
+            modified_at: ScanTime(time).rfc3339(),
+            node: LsItem::new(snapshot, id)?,
         })
     }
 }

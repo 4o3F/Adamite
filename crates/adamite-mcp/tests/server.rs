@@ -2,7 +2,7 @@
 
 use adamite_core::scan::{ScanContext, ScanOutput};
 use adamite_fixtures::{
-    Fixture, VolumeImage,
+    Fixture, SyntheticConfig, SyntheticVolume, VolumeImage,
     builders::{AttrBuilder, BootSectorBuilder, FileNameBuilder, RecordBuilder},
 };
 use adamite_io::{driver::SyncDriver, limits::ScanLimits, reader::SliceReader};
@@ -130,7 +130,7 @@ fn tool_error(result: &CallToolResult, format: &str, code: &str) -> TestResult<S
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn handshake_tools_and_all_three_tools_in_both_formats() -> TestResult {
+async fn handshake_lists_eight_annotated_tools_and_baseline_reports() -> TestResult {
     let session = Session::new().await?;
     let info = session.client.peer_info().ok_or("server info")?;
     let identity = info.server_info.as_ref().ok_or("server identity")?;
@@ -156,7 +156,19 @@ async fn handshake_tools_and_all_three_tools_in_both_formats() -> TestResult {
     let tools = session.client.list_all_tools().await?;
     let mut names: Vec<_> = tools.iter().map(|tool| tool.name.as_ref()).collect();
     names.sort_unstable();
-    assert_eq!(names, ["list_dir", "snapshot_info", "snapshots"]);
+    assert_eq!(
+        names,
+        [
+            "ext_breakdown",
+            "get_tree",
+            "list_dir",
+            "node_info",
+            "search",
+            "snapshot_info",
+            "snapshots",
+            "top_files"
+        ]
+    );
     for tool in tools {
         let annotations = tool.annotations.ok_or("annotations")?;
         assert_eq!(annotations.read_only_hint, Some(true));
@@ -432,6 +444,772 @@ async fn ambiguous_paths_return_identifiers_that_can_be_used_for_retry() -> Test
                 error.contains(&format!("list_dir with path {path:?}")),
                 "{error}"
             );
+        }
+    }
+    session.close().await
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn remaining_queries_match_access_reports_in_text_and_json() -> TestResult {
+    use adamite_access::{
+        BreakdownBy, BreakdownStats,
+        report::{ExtReport, KindReport, NodeReport, TopReport, TreeReport},
+    };
+    use adamite_core::snapshot::{FileFilter, FileKind};
+
+    let session = Session::new().await?;
+    let path = session.directory.path().join("C.adm");
+    let output = &session.output;
+    let mut cases = vec![
+        (
+            "get_tree",
+            json!({}),
+            serde_json::to_value(TreeReport::new(&path, output, "/", 60, 50)?)?,
+        ),
+        (
+            "top_files",
+            json!({}),
+            serde_json::to_value(TopReport::new(&path, output, 20)?)?,
+        ),
+        (
+            "top_files",
+            json!({"under":"/bigdir", "ext":["", ".TXT"]}),
+            serde_json::to_value(TopReport::select(
+                &path,
+                output,
+                20,
+                Some("/bigdir"),
+                Some(&FileFilter::extensions(["", ".TXT"])?),
+            )?)?,
+        ),
+        (
+            "top_files",
+            json!({"kind":"document"}),
+            serde_json::to_value(TopReport::select(
+                &path,
+                output,
+                20,
+                None,
+                Some(&FileFilter::Kind(FileKind::Document)),
+            )?)?,
+        ),
+        (
+            "node_info",
+            json!({"path":"/bigdir/f000"}),
+            serde_json::to_value(NodeReport::new(&path, output, "/bigdir/f000")?)?,
+        ),
+        (
+            "node_info",
+            json!({"path":"/bigdir"}),
+            serde_json::to_value(NodeReport::new(&path, output, "/bigdir")?)?,
+        ),
+        (
+            "ext_breakdown",
+            json!({}),
+            serde_json::to_value(ExtReport::new(&path, output, 20))?,
+        ),
+    ];
+    for (by, grouping) in [
+        ("extension", BreakdownBy::Extension),
+        ("kind", BreakdownBy::Kind),
+    ] {
+        let stats = BreakdownStats::new(&output.snapshot, Some("/bigdir"), grouping)?;
+        let expected = match stats {
+            BreakdownStats::Extensions(stats) => {
+                serde_json::to_value(ExtReport::from_stats(&path, output, &stats, 20))?
+            }
+            BreakdownStats::Kinds(stats) => {
+                serde_json::to_value(KindReport::new(&path, output, &stats, 20))?
+            }
+        };
+        cases.push((
+            "ext_breakdown",
+            json!({"under":"/bigdir", "by":by}),
+            expected,
+        ));
+    }
+    for (name, args, expected) in cases {
+        let expected: Value = serde_json::from_str(&expected.to_string())?;
+        for format in ["text", "json"] {
+            let mut args = args.clone();
+            args["format"] = json!(format);
+            let result = session.call(name, args).await?;
+            assert!(
+                !result.is_error.unwrap_or(false),
+                "{name}: {}",
+                text(&result)
+            );
+            if format == "json" {
+                let actual = structured(&result)?;
+                assert_eq!(actual["command"], name);
+                for key in [
+                    "items",
+                    "rows",
+                    "path",
+                    "name",
+                    "node_id",
+                    "flags",
+                    "hard_link_count",
+                    "mtime_filetime",
+                    "modified_at",
+                    "total_size",
+                    "total_alloc",
+                    "size",
+                    "alloc",
+                    "kind",
+                ] {
+                    assert_eq!(actual.get(key), expected.get(key), "{name} {key}");
+                }
+                assert!(actual["next_offset"].is_null());
+            } else {
+                assert!(text(&result).contains(" · serial "));
+                assert!(text(&result).contains("sizes: on-disk allocation\n"));
+                if name == "node_info" {
+                    assert!(text(&result).contains("NodeId:"));
+                    assert!(text(&result).contains("hard links:"));
+                }
+            }
+        }
+    }
+    session.close().await
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn search_paging_reaches_null_and_offsets_past_end_are_empty() -> TestResult {
+    let session = Session::new().await?;
+    let mut offset = 0;
+    let mut paths = Vec::new();
+    loop {
+        let args = json!({"pattern":"f*", "under":"/bigdir", "offset":offset, "limit":67, "format":"json"});
+        let result = session.call("search", args.clone()).await?;
+        let page = structured(&result)?;
+        assert_eq!(page["total_matches"], 200);
+        let items = page["items"].as_array().ok_or("items")?;
+        assert!(!items.is_empty());
+        paths.extend(
+            items
+                .iter()
+                .map(|item| item["path"].as_str().expect("path").to_owned()),
+        );
+        let mut args = args;
+        args["format"] = json!("text");
+        let plain = session.call("search", args).await?;
+        if let Some(next) = page["next_offset"].as_u64() {
+            assert!(next > offset);
+            assert!(text(&plain).contains(&format!("next offset={next}")));
+            offset = next;
+        } else {
+            assert!(!text(&plain).contains("next offset="));
+            break;
+        }
+    }
+    paths.sort_unstable();
+    paths.dedup();
+    assert_eq!(paths.len(), 200);
+    for pattern in ["f*", "F0", "no-match-at-all"] {
+        let result = session
+            .call(
+                "search",
+                json!({"pattern":pattern,"under":"/bigdir","offset":500,"format":"json"}),
+            )
+            .await?;
+        let page = structured(&result)?;
+        assert_eq!(page["items"], json!([]));
+        assert!(page["next_offset"].is_null());
+    }
+    session.close().await
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn invalid_query_arguments_and_directory_scopes_have_actionable_errors() -> TestResult {
+    let session = Session::new().await?;
+    let cases = [
+        ("get_tree", json!({"budget":0}), "1 through 400"),
+        ("get_tree", json!({"budget":401}), "1 through 400"),
+        (
+            "get_tree",
+            json!({"min_share_percent":-0.1}),
+            "0 through 100",
+        ),
+        (
+            "get_tree",
+            json!({"min_share_percent":100.1}),
+            "0 through 100",
+        ),
+        ("top_files", json!({"n":0}), "1 through 100"),
+        ("top_files", json!({"n":101}), "1 through 100"),
+        (
+            "top_files",
+            json!({"ext":[], "kind":"code"}),
+            "either ext or kind",
+        ),
+        ("top_files", json!({"kind":"unknown"}), "disk-image"),
+        ("ext_breakdown", json!({"n":201}), "1 through 200"),
+        ("ext_breakdown", json!({"n":0}), "1 through 200"),
+        ("search", json!({"pattern":"["}), "[abc]"),
+        ("search", json!({"pattern":"a".repeat(257)}), "256 bytes"),
+        ("search", json!({"pattern":"*", "limit":0}), "1 through 500"),
+        (
+            "search",
+            json!({"pattern":"*", "limit":501}),
+            "1 through 500",
+        ),
+    ];
+    for format in ["text", "json"] {
+        for (name, args, hint) in &cases {
+            let mut args = args.clone();
+            args["format"] = json!(format);
+            let result = session.call(name, args).await?;
+            assert!(
+                tool_error(&result, format, "invalid_argument")?.contains(hint),
+                "{name}"
+            );
+        }
+        for (name, mut args) in [
+            ("get_tree", json!({"path":"/bigdir/f000"})),
+            ("top_files", json!({"under":"/bigdir/f000"})),
+            ("ext_breakdown", json!({"under":"/bigdir/f000"})),
+            ("search", json!({"pattern":"*", "under":"/bigdir/f000"})),
+        ] {
+            args["format"] = json!(format);
+            let result = session.call(name, args).await?;
+            assert!(tool_error(&result, format, "not_a_directory")?.contains("node_info"));
+        }
+        let result = session
+            .call(
+                "node_info",
+                json!({"path":"/BIGDIR/not-found/child", "format":format}),
+            )
+            .await?;
+        assert!(
+            tool_error(&result, format, "path_not_found")?
+                .contains("list_dir with path \"/bigdir\"")
+        );
+        let result = session
+            .call(
+                "get_tree",
+                json!({"snapshot":"source.img", "format":format}),
+            )
+            .await?;
+        assert!(tool_error(&result, format, "unsupported_source")?.contains("adamite scan"));
+    }
+    session.close().await
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn corrupt_snapshots_retry_and_rewritten_snapshots_reload_without_restart() -> TestResult {
+    let session = Session::new().await?;
+    let path = session.directory.path().join("C.adm");
+    let result = session
+        .call("snapshot_info", json!({"format":"json"}))
+        .await?;
+    assert_eq!(
+        structured(&result)?["snapshot"]["scanned_at"],
+        "1970-01-01T00:00:00Z"
+    );
+    for format in ["text", "json"] {
+        fs::write(&path, &session.output.to_bytes()?[..32])?;
+        let result = session.call("get_tree", json!({"format":format})).await?;
+        assert!(tool_error(&result, format, "corrupt_snapshot")?.contains("--force"));
+        fs::write(&path, session.output.to_bytes()?)?;
+        let result = session.call("get_tree", json!({"format":format})).await?;
+        assert!(!result.is_error.unwrap_or(false));
+    }
+    let fixture = Fixture::load(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/ntfs/basic-4k.json"),
+    )?;
+    let output = SyncDriver::with_limits(
+        ScanLimits::default(),
+        ScanContext {
+            scanned_at_filetime: Some(116_444_736_100_000_000),
+            label: Some("replacement has a different length".into()),
+            ..ScanContext::default()
+        },
+    )?
+    .run(&mut SliceReader::new(fixture.image()))?;
+    fs::write(&path, output.to_bytes()?)?;
+    let result = session
+        .call("snapshot_info", json!({"format":"json"}))
+        .await?;
+    assert_eq!(
+        structured(&result)?["snapshot"]["scanned_at"],
+        "1970-01-01T00:00:10Z"
+    );
+    session.close().await
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn unreadable_snapshot_returns_permission_denied_and_can_be_retried() -> TestResult {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let session = Session::new().await?;
+        let path = session.directory.path().join("C.adm");
+        let permissions = fs::metadata(&path)?.permissions();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o000))?;
+        let enforced = matches!(fs::read(&path), Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied);
+        let mut results = Vec::new();
+        if enforced {
+            for format in ["text", "json"] {
+                results.push((
+                    format,
+                    session.call("get_tree", json!({"format":format})).await?,
+                ));
+            }
+        }
+        fs::set_permissions(&path, permissions)?;
+        for (format, result) in results {
+            assert!(tool_error(&result, format, "permission_denied")?.contains("Check access"));
+        }
+        assert!(
+            !session
+                .call("get_tree", json!({}))
+                .await?
+                .is_error
+                .unwrap_or(false)
+        );
+        session.close().await?;
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn wide_tree_budget_and_output_cap_preserve_whole_items_and_paging() -> TestResult {
+    let session = Session::new().await?;
+    let mut config = SyntheticConfig::reference(702)?;
+    config.directory_percent = 0;
+    config.name_units = 128;
+    let mut image = Cursor::new(Vec::new());
+    SyntheticVolume::new(config)?.write(&mut image)?;
+    let output = SyncDriver::with_limits(ScanLimits::default(), ScanContext::default())?
+        .run(&mut SliceReader::new(image.get_ref()))?;
+    fs::write(session.directory.path().join("C.adm"), output.to_bytes()?)?;
+    for budget in [1, 2, 7, 60, 400] {
+        let result = session
+            .call(
+                "get_tree",
+                json!({"budget":budget,"min_share_percent":0,"format":"json"}),
+            )
+            .await?;
+        let tree = structured(&result)?;
+        let rows = tree["rows"].as_array().ok_or("rows")?;
+        assert!(!rows.is_empty());
+        assert!(rows.len() <= budget);
+        assert_eq!(rows[0]["path"], "/");
+        assert_eq!(tree["truncated"], true);
+        assert!(serde_json::to_vec(&result)?.len() <= 32768);
+    }
+    let result = session
+        .call("get_tree", json!({"budget":7,"min_share_percent":0}))
+        .await?;
+    assert!(
+        text(&result).contains("alloc   share  name"),
+        "{}",
+        text(&result)
+    );
+    assert!(text(&result).contains(" more ("));
+    for name in ["list_dir", "search"] {
+        for format in ["text", "json"] {
+            let mut offset = 0;
+            let mut seen = Vec::new();
+            loop {
+                let result = session
+                    .call(
+                        name,
+                        json!({"format":format,"limit":500,"pattern":"*","offset":offset}),
+                    )
+                    .await?;
+                assert!(!result.is_error.unwrap_or(false));
+                assert!(serde_json::to_vec(&result)?.len() <= 32768);
+                if format == "text" {
+                    assert!(text(&result).contains("truncated"));
+                    assert!(text(&result).contains("next offset="));
+                    let lines: Vec<_> = text(&result).lines().collect();
+                    for line in &lines[2..lines.len() - 2] {
+                        let name = line.split_whitespace().last().ok_or("name")?;
+                        assert!(
+                            name.trim_start_matches('/').len() == 128
+                                || line.contains("<NTFS metadata>"),
+                            "partial item: {name}"
+                        );
+                    }
+                    break;
+                }
+                let page = structured(&result)?;
+                let items = page["items"].as_array().ok_or("items")?;
+                assert!(!items.is_empty());
+                assert!(items.iter().all(|item| item["name"].as_str().is_some()));
+                seen.extend(
+                    items
+                        .iter()
+                        .map(|item| item["name"].as_str().expect("name").to_owned()),
+                );
+                if offset == 0 {
+                    assert_eq!(page["truncated"], true);
+                    assert!(items.len() < 500);
+                }
+                if let Some(next) = page["next_offset"].as_u64() {
+                    assert_eq!(next as usize, offset as usize + items.len());
+                    offset = next;
+                } else {
+                    break;
+                }
+            }
+            if format == "json" {
+                let count = seen.len();
+                seen.sort_unstable();
+                seen.dedup();
+                assert_eq!(seen.len(), count);
+                let expected = if name == "list_dir" {
+                    output
+                        .snapshot
+                        .children(adamite_core::snapshot::NodeId::ROOT)
+                        .ok_or("children")?
+                        .len()
+                } else {
+                    usize::try_from(
+                        output
+                            .snapshot
+                            .search(
+                                adamite_core::snapshot::NodeId::ROOT,
+                                &adamite_core::snapshot::NamePattern::glob("*")?,
+                                0,
+                                0,
+                            )?
+                            .total_matches(),
+                    )?
+                };
+                assert_eq!(count, expected);
+            }
+        }
+    }
+    session.close().await
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn deep_tree_and_a_single_oversized_unicode_path_keep_valid_items() -> TestResult {
+    use adamite_core::snapshot::NodeId;
+
+    let session = Session::new().await?;
+    let mut config = SyntheticConfig::reference(202)?;
+    config.directory_percent = 100;
+    let volume = SyntheticVolume::new(config)?;
+    let mut image = Cursor::new(Vec::new());
+    volume.write(&mut image)?;
+    let layout = VolumeImage::new(
+        BootSectorBuilder {
+            mft: 256,
+            ..BootSectorBuilder::default()
+        },
+        volume.len_bytes(),
+    )?;
+    let mut parent = 5;
+    let mut deepest = String::new();
+    for index in 0..200u32 {
+        // SyntheticConfig::reference inserts one free MFT slot per four ordinary records.
+        let record_number = 32 + index + index / 4;
+        let name = format!(
+            "{index:03}-{}{}",
+            "目录".repeat(62),
+            if index == 199 { ".txt" } else { "" }
+        );
+        deepest.push('/');
+        deepest.push_str(&name);
+        let filename = AttrBuilder::resident(
+            0x30,
+            FileNameBuilder {
+                parent: (7u64 << 48) | parent,
+                name: name.encode_utf16().collect(),
+                ..FileNameBuilder::default()
+            }
+            .build(),
+        )
+        .build();
+        let last = index == 199;
+        let mut attributes = vec![filename];
+        if last {
+            attributes.push(AttrBuilder::resident(0x80, vec![1; 64]).build());
+        }
+        let record = RecordBuilder {
+            record_number,
+            flags: if last { 1 } else { 3 },
+            attributes,
+            ..RecordBuilder::default()
+        };
+        layout.write_record(&mut image, u64::from(record_number), &record.build())?;
+        parent = u64::from(record_number);
+    }
+    assert!(deepest.len() > 32768);
+    let output = SyncDriver::with_limits(ScanLimits::default(), ScanContext::default())?
+        .run(&mut SliceReader::new(image.get_ref()))?;
+    assert!(output.snapshot.resolve_path(&deepest)? != NodeId::ROOT);
+    fs::write(session.directory.path().join("C.adm"), output.to_bytes()?)?;
+    for format in ["text", "json"] {
+        let result = session
+            .call(
+                "get_tree",
+                json!({"budget":12,"min_share_percent":0,"format":format}),
+            )
+            .await?;
+        assert!(!result.is_error.unwrap_or(false));
+        if format == "json" {
+            let tree = structured(&result)?;
+            let rows = tree["rows"].as_array().ok_or("rows")?;
+            assert!(rows.len() <= 12);
+            assert!(
+                rows.iter()
+                    .any(|row| row["depth"].as_u64().is_some_and(|depth| depth > 2))
+            );
+            assert_eq!(tree["truncated"], true);
+            if rows.len() == 12 {
+                assert!(rows.iter().any(|row| row["kind"] == "collapsed"));
+            }
+        } else {
+            assert!(text(&result).contains(" more ("));
+            assert!(text(&result).contains("  000-"));
+        }
+        for (name, args) in [
+            ("node_info", json!({"path":deepest,"format":format})),
+            ("top_files", json!({"n":1,"ext":["txt"],"format":format})),
+            (
+                "search",
+                json!({"pattern":"199-*","limit":1,"format":format}),
+            ),
+        ] {
+            let result = session.call(name, args).await?;
+            assert!(
+                !result.is_error.unwrap_or(false),
+                "{name}: {}",
+                text(&result)
+            );
+            assert!(serde_json::to_vec(&result)?.len() <= 32768);
+            assert!(
+                text(&result).contains('…'),
+                "{name}: path should be shortened"
+            );
+            if format == "json" {
+                let report = structured(&result)?;
+                assert_eq!(report["truncated"], true);
+                let path = if name == "node_info" {
+                    report["path"].as_str().ok_or("node path")?
+                } else {
+                    assert_eq!(report["items"].as_array().ok_or("items")?.len(), 1);
+                    report["items"][0]["path"].as_str().ok_or("item path")?
+                };
+                assert!(path.starts_with("/000-"));
+                assert!(path.ends_with("目录.txt"));
+                assert!(path.contains('…'));
+                assert!(report["next_offset"].is_null());
+            }
+        }
+    }
+    session.close().await
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn catalog_breakdown_info_and_error_responses_share_the_output_cap() -> TestResult {
+    let session = Session::new().await?;
+    let mut config = SyntheticConfig::reference(202)?;
+    config.directory_percent = 0;
+    let volume = SyntheticVolume::new(config)?;
+    let mut image = Cursor::new(Vec::new());
+    volume.write(&mut image)?;
+    let layout = VolumeImage::new(
+        BootSectorBuilder {
+            mft: 256,
+            ..BootSectorBuilder::default()
+        },
+        volume.len_bytes(),
+    )?;
+    let mut extensions = Vec::new();
+    for index in 0..200u32 {
+        let record_number = 32 + index + index / 4;
+        let extension = format!("{index:03}{}", "扩展".repeat(60));
+        let filename = AttrBuilder::resident(
+            0x30,
+            FileNameBuilder {
+                parent: (7u64 << 48) | 5,
+                name: format!("f.{extension}").encode_utf16().collect(),
+                ..FileNameBuilder::default()
+            }
+            .build(),
+        )
+        .build();
+        let record = RecordBuilder {
+            record_number,
+            attributes: vec![filename, AttrBuilder::resident(0x80, vec![1; 64]).build()],
+            ..RecordBuilder::default()
+        };
+        layout.write_record(&mut image, u64::from(record_number), &record.build())?;
+        extensions.push(extension);
+    }
+    let output = SyncDriver::with_limits(ScanLimits::default(), ScanContext::default())?
+        .run(&mut SliceReader::new(image.get_ref()))?;
+    let path = session.directory.path().join("C.adm");
+    fs::write(&path, output.to_bytes()?)?;
+    for format in ["text", "json"] {
+        let result = session
+            .call("ext_breakdown", json!({"n":200,"format":format}))
+            .await?;
+        assert!(!result.is_error.unwrap_or(false));
+        assert!(serde_json::to_vec(&result)?.len() <= 32768);
+        if format == "json" {
+            let report = structured(&result)?;
+            assert_eq!(report["truncated"], true);
+            let items = report["items"].as_array().ok_or("items")?;
+            assert!(!items.is_empty());
+            assert!(items.len() < 200);
+            for item in items {
+                let extension = item["extension"].as_str().ok_or("extension")?;
+                assert!(
+                    extension.is_empty() || extensions.iter().any(|expected| expected == extension)
+                );
+            }
+        } else {
+            assert!(text(&result).contains("truncated"));
+            for line in text(&result)
+                .lines()
+                .skip(2)
+                .filter(|line| *line != "truncated")
+            {
+                let extension = line.split_whitespace().last().ok_or("extension")?;
+                assert!(
+                    extension == "(none)"
+                        || extensions.iter().any(|expected| expected == extension)
+                );
+            }
+        }
+        let result = session
+            .call(
+                "node_info",
+                json!({"path":format!("/{}", "missing".repeat(10_000)),"format":format}),
+            )
+            .await?;
+        tool_error(&result, format, "path_not_found")?;
+        assert!(serde_json::to_vec(&result)?.len() <= 32768);
+    }
+    let fixture = Fixture::load(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/ntfs/basic-4k.json"),
+    )?;
+    let output = SyncDriver::with_limits(
+        ScanLimits::default(),
+        ScanContext {
+            label: Some("label-目录".repeat(10_000)),
+            ..ScanContext::default()
+        },
+    )?
+    .run(&mut SliceReader::new(fixture.image()))?;
+    fs::write(&path, output.to_bytes()?)?;
+    for format in ["text", "json"] {
+        let result = session
+            .call("snapshot_info", json!({"format":format}))
+            .await?;
+        assert!(!result.is_error.unwrap_or(false));
+        assert!(serde_json::to_vec(&result)?.len() <= 32768);
+        if format == "json" {
+            assert_eq!(structured(&result)?["truncated"], true);
+        } else {
+            assert!(text(&result).contains("truncated"));
+        }
+    }
+    for index in 0..150 {
+        fs::write(
+            session
+                .directory
+                .path()
+                .join(format!("{index:03}{}.adm", "x".repeat(128))),
+            [],
+        )?;
+    }
+    for format in ["text", "json"] {
+        let result = session.call("snapshots", json!({"format":format})).await?;
+        assert!(!result.is_error.unwrap_or(false));
+        assert!(serde_json::to_vec(&result)?.len() <= 32768);
+        if format == "json" {
+            let catalog = structured(&result)?;
+            assert_eq!(catalog["truncated"], true);
+            let items = catalog["items"].as_array().ok_or("items")?;
+            assert!(!items.is_empty());
+            assert!(items.len() < 151);
+            assert!(items.iter().all(|item| {
+                item["path"]
+                    .as_str()
+                    .is_some_and(|path| path.ends_with(".adm"))
+            }));
+        } else {
+            assert!(text(&result).contains("truncated"));
+        }
+    }
+    session.close().await
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn node_metadata_preserves_named_flags_hard_links_and_recorded_timestamps() -> TestResult {
+    let session = Session::new().await?;
+    for (path, flag) in [
+        ("/sparse.bin", "sparse"),
+        ("/compressed/c.txt", "compressed"),
+        ("/hidden.txt", "hidden"),
+        ("/hl/orig.txt", ""),
+        ("/bigdir", "directory"),
+    ] {
+        let result = session
+            .call("node_info", json!({"path":path,"format":"json"}))
+            .await?;
+        let node = structured(&result)?;
+        let id = session.output.snapshot.resolve_path(path)?;
+        let view = session.output.snapshot.node(id).ok_or("node")?;
+        assert_eq!(node["node_id"], id.raw());
+        assert_eq!(node["hard_link_count"], view.nlink());
+        assert_eq!(node["size"], view.size());
+        assert_eq!(node["alloc"], view.alloc());
+        assert_eq!(
+            node["flags"],
+            json!(view.flags().names().collect::<Vec<_>>())
+        );
+        if !flag.is_empty() {
+            assert!(
+                node["flags"]
+                    .as_array()
+                    .ok_or("flags")?
+                    .contains(&json!(flag))
+            );
+        }
+        if view.mtime() != 0 {
+            assert_eq!(node["mtime_filetime"], view.mtime().to_string());
+        }
+        if path == "/hl/orig.txt" {
+            assert!(
+                node["hard_link_count"]
+                    .as_u64()
+                    .is_some_and(|count| count > 1)
+            );
+        }
+        if view.is_dir() {
+            assert_eq!(node["total_size"], view.total_size());
+            assert_eq!(node["total_alloc"], view.total_alloc());
+        }
+    }
+    for format in ["text", "json"] {
+        let result = session
+            .call(
+                "get_tree",
+                json!({"path":"/d00","budget":8,"min_share_percent":0,"format":format}),
+            )
+            .await?;
+        assert!(!result.is_error.unwrap_or(false));
+        if format == "json" {
+            let tree = structured(&result)?;
+            let rows = tree["rows"].as_array().ok_or("rows")?;
+            assert!(rows.len() <= 8);
+            assert!(rows.iter().any(|row| row["kind"] == "collapsed"));
+            assert!(
+                rows.iter()
+                    .any(|row| row["depth"].as_u64().is_some_and(|depth| depth > 2))
+            );
+        } else {
+            assert!(text(&result).contains(" more ("));
+            assert!(text(&result).contains("      d03"));
         }
     }
     session.close().await

@@ -1,6 +1,6 @@
 use crate::{cli::TopArgs, error::CliError, render::Renderer, source::SourceExt};
+use adamite_access::Source;
 use adamite_access::report::TopReport;
-use adamite_access::{DirectoryLookup, Source};
 use adamite_core::snapshot::FileFilter;
 use std::io::Write;
 
@@ -10,23 +10,18 @@ impl Top {
     pub(crate) fn run(&self, stdout: &mut impl Write) -> Result<(), CliError> {
         let args = &self.0;
         let output = Source::open(&args.source.source)?.load(&args.source.limits)?;
-        let report = if args.under.is_none() && args.ext.is_empty() && args.kind.is_none() {
-            TopReport::new(&args.source.source, &output, args.n)?
-        } else {
-            let under = output
-                .snapshot
-                .resolve_directory(args.under.as_deref().unwrap_or("/"))?;
-            let filter = match args.kind {
-                Some(kind) => FileFilter::Kind(kind),
-                None if !args.ext.is_empty() => FileFilter::extensions(&args.ext)?,
-                None => FileFilter::All,
-            };
-            let n = usize::try_from(args.n).map_err(|_| CliError::Usage {
-                message: "--n exceeds the supported range",
-            })?;
-            let ids = output.snapshot.rank_files(under, &filter, n)?;
-            TopReport::from_ids(&args.source.source, &output, ids)?
+        let filter = match args.kind {
+            Some(kind) => Some(FileFilter::Kind(kind)),
+            None if !args.ext.is_empty() => Some(FileFilter::extensions(&args.ext)?),
+            None => None,
         };
+        let report = TopReport::select(
+            &args.source.source,
+            &output,
+            args.n,
+            args.under.as_deref(),
+            filter.as_ref(),
+        )?;
         Renderer::from(&args.source).write(&report, stdout)
     }
 }

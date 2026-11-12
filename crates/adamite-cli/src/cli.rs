@@ -255,41 +255,15 @@ impl TypedValueParser for ShareParser {
                 )
                 .with_cmd(command)
             })?;
-        if !percent.is_finite() || !(0.0..=100.0).contains(&percent) {
-            return Err(clap::Error::raw(
-                clap::error::ErrorKind::ValueValidation,
-                "--min-share must be a finite percentage from 0 to 100",
-            )
-            .with_cmd(command));
-        }
-        Self::basis_points(percent).ok_or_else(|| {
-            clap::Error::raw(
-                clap::error::ErrorKind::ValueValidation,
-                "--min-share cannot be represented in basis points",
-            )
-            .with_cmd(command)
-        })
-    }
-}
-
-impl ShareParser {
-    fn basis_points(percent: f64) -> Option<u32> {
-        if percent == 0.0 {
-            return Some(0);
-        }
-        // Truncate decimal places so values such as 0.29 do not lose a basis point
-        // through binary floating-point multiplication.
-        let decimal = percent.to_string();
-        let (whole, fraction) = decimal.split_once('.').unwrap_or((&decimal, ""));
-        let mut basis_points = whole.parse::<u32>().ok()?;
-        let mut digits = fraction.bytes();
-        for _ in 0..2 {
-            let digit = digits.next().unwrap_or(b'0').checked_sub(b'0')?;
-            basis_points = basis_points
-                .checked_mul(10)?
-                .checked_add(u32::from(digit))?;
-        }
-        Some(basis_points)
+        adamite_access::AllocationShare::from_percent(percent)
+            .map(adamite_access::AllocationShare::basis_points)
+            .ok_or_else(|| {
+                clap::Error::raw(
+                    clap::error::ErrorKind::ValueValidation,
+                    "--min-share must be a finite percentage from 0 to 100",
+                )
+                .with_cmd(command)
+            })
     }
 }
 

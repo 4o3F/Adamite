@@ -5,7 +5,7 @@ use crate::{
     source::SourceExt,
 };
 use adamite_access::report::{ExtReport, KindReport};
-use adamite_access::{DirectoryLookup, Source};
+use adamite_access::{BreakdownBy, BreakdownStats, Source};
 use std::io::Write;
 
 pub(crate) struct Ext(pub(crate) ExtArgs);
@@ -15,21 +15,16 @@ impl Ext {
         let args = &self.0;
         let output = Source::open(&args.source.source)?.load(&args.source.limits)?;
         let renderer = Renderer::from(&args.source);
-        if matches!(args.by, GroupBy::Extension) && args.under.is_none() {
-            let report = ExtReport::new(&args.source.source, &output, args.n);
-            return renderer.write(&report, stdout);
-        }
-        let under = output
-            .snapshot
-            .resolve_directory(args.under.as_deref().unwrap_or("/"))?;
-        match args.by {
-            GroupBy::Extension => {
-                let stats = output.snapshot.extension_stats_under(under)?;
+        let by = match args.by {
+            GroupBy::Extension => BreakdownBy::Extension,
+            GroupBy::Kind => BreakdownBy::Kind,
+        };
+        match BreakdownStats::new(&output.snapshot, args.under.as_deref(), by)? {
+            BreakdownStats::Extensions(stats) => {
                 let report = ExtReport::from_stats(&args.source.source, &output, &stats, args.n);
                 renderer.write(&report, stdout)
             }
-            GroupBy::Kind => {
-                let stats = output.snapshot.kind_stats(under)?;
+            BreakdownStats::Kinds(stats) => {
                 let report = KindReport::new(&args.source.source, &output, &stats, args.n);
                 renderer.write(&report, stdout)
             }
