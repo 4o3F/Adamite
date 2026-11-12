@@ -1,4 +1,4 @@
-use adamite_access::{ReportError, ScanJobError, SourceError};
+use adamite_access::{JobError, ReportError, ScanJobError, SourceError};
 use adamite_core::snapshot::{NodeId, PersistError, QueryError, SnapshotError};
 use adamite_io::error::VolumeError;
 use adamite_tui::TuiError;
@@ -166,14 +166,7 @@ impl CliError {
 
     /// The error and its `caused by:` chain, as printed after `error: `.
     pub(crate) fn message(&self) -> String {
-        let mut message = self.to_string();
-        let mut source = self.source();
-        while let Some(cause) = source {
-            message.push_str("\ncaused by: ");
-            message.push_str(&cause.to_string());
-            source = cause.source();
-        }
-        message
+        JobError::from_error(self, None).message
     }
 }
 

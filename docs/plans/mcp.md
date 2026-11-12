@@ -189,7 +189,7 @@ Each task ends with one reviewed commit, `deno task check` green and CI green. E
 
 - [x] M1a — `Snapshot::resolve_path` in core; the CLI uses it (D3).
 - [x] M1b — Extract `adamite-access` with sources, reports and text rendering (D2).
-- [ ] M1c — Move publishing, the elevated scan, scan jobs and the snapshot catalog into `adamite-access`; `CliSources` adapts them (D2).
+- [x] M1c — Move publishing, the elevated scan, scan jobs and the snapshot catalog into `adamite-access`; `CliSources` adapts them (D2).
 - [ ] M2 — `Snapshot::summarize`, the tree report and `adamite tree` (D3, D4).
 - [ ] M4a — `adamite-mcp` discovery, selection and cache, without rmcp (D6).
 - [ ] M4b — The rmcp server, the `adamite mcp` subcommand, `snapshots`, `snapshot_info` and `list_dir`, with the handshake test (D1, D5, D7, D8).
