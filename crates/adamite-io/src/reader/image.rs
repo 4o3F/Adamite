@@ -1,7 +1,11 @@
 use super::{VolumeReader, scan_clock::ScanClock};
 use crate::error::VolumeError;
 use adamite_core::scan::ScanContext;
-use std::{fs::File, io, path::Path};
+use std::{
+    fs::File,
+    io::{self, Seek, SeekFrom},
+    path::Path,
+};
 
 #[cfg(unix)]
 use std::os::unix::fs::FileExt;
@@ -16,23 +20,24 @@ pub struct ImageReader {
 }
 
 impl ImageReader {
-    /// Opens an uncompressed volume image and reads its length from the opened handle.
+    /// Opens an uncompressed volume image or block device and reads its length from the opened handle.
+    ///
+    /// The length comes from seeking to the end, which also reports the size of Unix block devices such as `/dev/sda1`, whose metadata length is zero. Reads are positional, so the handle's cursor position does not matter.
     ///
     /// # Errors
     ///
-    /// Returns [`VolumeError::Open`] if opening fails, or [`VolumeError::Query`] with operation `"image length"` if querying the handle's metadata fails.
+    /// Returns [`VolumeError::Open`] if opening fails, or [`VolumeError::Query`] with operation `"image length"` if seeking to the end of the handle fails.
     pub fn open(path: &Path) -> Result<Self, VolumeError> {
-        let file = File::open(path).map_err(|source| VolumeError::Open {
+        let mut file = File::open(path).map_err(|source| VolumeError::Open {
             path: path.to_owned(),
             source,
         })?;
         let len = file
-            .metadata()
+            .seek(SeekFrom::End(0))
             .map_err(|source| VolumeError::Query {
                 operation: "image length",
                 source,
-            })?
-            .len();
+            })?;
         Ok(Self { file, len })
     }
 

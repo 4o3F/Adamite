@@ -66,7 +66,7 @@ SOURCE is classified in this order:
 
 1. Exactly an ASCII letter and `:`, such as `C:` or `c:`, selects a Windows raw drive. Other platforms return exit code 2. `C:\` and longer arguments are file paths.
 2. A file with the eight-byte `.adm` magic (`ADAMITE\0`), or an `.adm` extension ignoring ASCII case, selects a snapshot. Decoding failures return exit code 3 without attempting an image scan.
-3. Any other file selects an image, starting at NTFS volume byte zero. Decompress images first; extract the volume from partitioned disk or VHD/VHDX containers before scanning.
+3. Any other file selects an image, starting at NTFS volume byte zero. On Linux and macOS this includes a partition block device such as `/dev/sda1`, which needs read access to the device (root or the `disk` group). Decompress images first; extract the volume from partitioned disk or VHD/VHDX containers before scanning.
 
 Command-line image and supported drive scans show progress on standard error when it is a terminal, including `browse SOURCE` before the browser opens. Home jobs display progress inside the TUI. MFT streaming shows processed and planned records, percentage, binary bytes read, average logical read rate since scan start and ETA. Boot, discovery and later processing phases show a spinner with the phase label. Indicatif limits redraw frequency, and the display clears on success or failure before results or errors print. When standard error is piped or redirected, scans print the single line `scanning <source>…`.
 

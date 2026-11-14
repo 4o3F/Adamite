@@ -39,7 +39,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 }
 ```
 
-Sources start at volume byte zero. Decompress fixture images before opening them; partitioned disks and VHD/VHDX containers require extraction of the volume image first. `ImageReader` caches the opened file's length, retries interrupted reads and completes partial reads; truncation after opening returns `ShortRead`.
+Sources start at volume byte zero. Decompress fixture images before opening them; partitioned disks and VHD/VHDX containers require extraction of the volume image first. `ImageReader` caches the opened handle's length by seeking to its end, so it also opens Unix block devices such as `/dev/sda1`, whose metadata length is zero. It retries interrupted reads and completes partial reads; truncation after opening returns `ShortRead`.
 
 `ScanLimits::default()` selects Balanced: 256 MiB/s, one outstanding request, 1 MiB chunks and a worker ceiling of one. Background selects 64 MiB/s with 1 MiB chunks; Max disables pacing and uses 4 MiB chunks. Every positive `threads` ceiling is accepted; the synchronous driver uses one thread. Future parallel work must honour that ceiling. `ScanLimits::config(context)` produces core configuration and validates the chunk and outstanding-request bounds through core. `SyncDriver::new(ScanConfig)` keeps the uncapped configuration API. The driver validates configuration at construction and starts a fresh scanner on each `run`. Increasing `max_outstanding` batches logical requests; native reads remain synchronous with depth 1. The driver reuses its response buffer within a run. The caller supplies optional `ScanContext` before constructing the driver. `ImageReader::context()` supplies the current FILETIME scan timestamp, with `label` and `free_bytes` set to `None`; it returns `VolumeError::Overflow` if the clock cannot be converted. On Windows, `RawVolumeReader::context()` also supplies the volume label and free bytes.
 
@@ -112,7 +112,13 @@ cargo test -p adamite-io --test raw_volume -- --ignored
 
 CI runs these ignored tests only on Windows, after the normal workspace tests. For command-line image and raw-volume scans, use [`adamite-cli`](../adamite-cli/README.md).
 
-Parallel parsing, buffer pools, native I/O depth above 1 and Linux block-device access remain future work. Adamite enforces its resource limits without operating-system priority APIs.
+On Linux, an ignored test checks a block device's length against sysfs; it needs read access to the device:
+
+```text
+ADAMITE_BLOCK_DEVICE=/dev/loop0 cargo test -p adamite-io --test image_reader -- --ignored
+```
+
+Parallel parsing, buffer pools, native I/O depth above 1 and Linux block-device enumeration remain future work. Adamite enforces its resource limits without operating-system priority APIs.
 
 ## Snapshot files
 
